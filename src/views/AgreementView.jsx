@@ -325,9 +325,11 @@ export default function AgreementView({
             <p className="text-sm text-slate-400">
               {performs
                 ? 'Waiting for them to report payment.'
-                : latestPayment?.type === 'payment.disputed'
-                  ? 'They reported not receiving payment. Report it again once resolved.'
-                  : 'You can report payment once it has been sent.'}
+                : latestPayment?.type === 'payment.reported'
+                  ? 'Waiting for them to confirm they received it.'
+                  : latestPayment?.type === 'payment.disputed'
+                    ? 'They reported not receiving payment. Report it again once resolved.'
+                    : 'You can report payment once it has been sent.'}
             </p>
           )}
 

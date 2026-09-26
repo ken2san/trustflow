@@ -231,21 +231,35 @@ export async function signOutEarner() {
 //     for its built-in mailer — see the Auth docs' rate limits page — and
 //     Supabase does not return a remaining count or a reset time for it, so
 //     the honest message is "this clears on its own", not a number.
+/**
+ * Shared with SignInView's own REQUEST_ERRORS map, which hits the same GoTrue
+ * code through a different call (signInWithOtp rather than updateUser). One
+ * string, so a future wording change cannot land in one flow and not the
+ * other the way this one did on its first pass.
+ */
+export const RATE_LIMIT_MESSAGE = 'Too many codes sent. Try again in about an hour.'
+
 export function describeAuthError(error) {
   if (!error) return null
   const code = error.code ?? ''
   const message = String(error.message ?? '')
 
-  if (code === 'over_email_send_rate_limit' || /email rate limit exceeded/i.test(message)) {
-    return 'Too many codes sent. Try again in about an hour.'
-  }
-
+  // Checked first and by message shape, not by code: auth-js defines
+  // over_request_rate_limit (this short per-caller cooldown, which embeds its
+  // own countdown) and over_email_send_rate_limit (the hourly cap below) as
+  // two distinct codes, but matching the specific "after N seconds" text
+  // here — rather than trusting that distinction never blurs across GoTrue
+  // versions — means this branch can never misfire as the hourly message.
   const cooldown = message.match(/after (\d+) seconds?/i)
   if (cooldown) {
     const seconds = Number(cooldown[1])
     return seconds > 0
       ? `Please wait ${seconds} second${seconds === 1 ? '' : 's'} and try again.`
       : 'That cooldown has already passed — try again now.'
+  }
+
+  if (code === 'over_email_send_rate_limit' || /email rate limit exceeded/i.test(message)) {
+    return RATE_LIMIT_MESSAGE
   }
 
   return null // caller falls back to its own default message
@@ -255,7 +269,10 @@ export async function signInWithGoogle() {
   if (!supabase) return { error: NOT_CONFIGURED }
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin },
+    // The full URL, not just the origin: someone who clicks this while
+    // viewing an invite link (?token=...) must land back on that same link,
+    // not on the bare homepage with the token gone.
+    options: { redirectTo: window.location.href },
   })
   return { error: error ?? null }
 }

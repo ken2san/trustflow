@@ -14,12 +14,13 @@
 
 import React from 'react';
 import { Mail, ArrowLeft, Loader2, AlertTriangle } from 'lucide-react';
+import { RATE_LIMIT_MESSAGE } from '../lib/earnerAuth.js';
 
 const REQUEST_ERRORS = {
   unknown_email:
     'No account was found for that address, or a code could not be sent to it. '
     + 'Check the spelling and try again.',
-  rate_limited: 'Too many codes sent. Try again in about an hour.',
+  rate_limited: RATE_LIMIT_MESSAGE,
   invalid_email: 'That does not look like an email address.',
   not_configured: 'Sign-in is unavailable — this build has no Supabase connection.',
   error: 'The code could not be sent. Try again in a moment.',
