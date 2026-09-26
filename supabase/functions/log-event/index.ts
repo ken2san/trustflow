@@ -70,6 +70,18 @@ const ALLOWED_TYPES = new Set([
   'contract.completed',
   'dispute.opened',
   'rating.submitted',
+  // What a party SAYS about payment, made for a rail TrustFlow does not
+  // control — bank transfer, cash, anything outside Stripe. Deliberately the
+  // same shape as performance.*: a claim, not a processor fact. These three
+  // leaf names are the only payment.* types a party may ever write. Every
+  // other payment.* name (intent_created, captured, refunded — see the
+  // comment above ALLOWED_TYPES) stays absent from this set on purpose: those
+  // are Stripe-verified facts written by capture-payment / cancel-payment
+  // with the service role, and must never be confused with a party's
+  // unverified say-so.
+  'payment.reported',
+  'payment.acknowledged',
+  'payment.disputed',
 ])
 
 // Written by the server as part of another operation, never on a party's say-so.
@@ -107,6 +119,11 @@ const ROLE_REQUIRED: Record<string, 'performer' | 'receiver'> = {
   'performance.asserted': 'performer',
   'performance.accepted': 'receiver',
   'performance.rejected': 'receiver',
+  // Payment flows the other way: whoever receives the work is the one paying
+  // for it, and whoever performs is the one being paid.
+  'payment.reported':     'receiver',
+  'payment.acknowledged': 'performer',
+  'payment.disputed':     'performer',
 }
 
 const MAX_PAYLOAD_BYTES = 16 * 1024

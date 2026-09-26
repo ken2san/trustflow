@@ -68,6 +68,12 @@ const PAYLOAD_ALLOWLIST: Record<string, string[]> = {
   'dod.consent_recorded':  ['counterparty_name', 'counterparty_email', 'dod_items'],
   'dispute.opened':        ['reason'],
   'rating.submitted':      ['rating'],
+  // A party's claim about payment sent/received/disputed outside TrustFlow —
+  // see log-event's ALLOWED_TYPES comment. 'note' is the only field either
+  // side writes: method, reference, whatever they choose to say.
+  'payment.reported':      ['note'],
+  'payment.acknowledged':  ['note'],
+  'payment.disputed':      ['note'],
 }
 
 function filterPayload(type: string, payload: unknown): Record<string, unknown> {

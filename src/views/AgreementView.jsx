@@ -36,6 +36,11 @@ const RECORD_LABELS = {
   'work.submitted':        'Marked delivered',
   'work.approved':         'Accepted',
   'work.rejected':         'Correction requested',
+  // A party's claim about payment made outside TrustFlow. See the payment
+  // section below — this is not a Stripe-verified fact.
+  'payment.reported':      'Reported payment sent',
+  'payment.acknowledged':  'Confirmed payment received',
+  'payment.disputed':      'Reported payment as not received',
 };
 
 function formatWhen(iso) {
@@ -70,12 +75,18 @@ function Record({ events }) {
 
 export default function AgreementView({
   contract, events, viewerRole, busy, error,
-  onAssertDelivery, onAccept, onRequestCorrection, onExport, exportKind, onBack,
+  onAssertDelivery, onAccept, onRequestCorrection,
+  onReportPayment, onAcknowledgePayment, onDisputePayment,
+  onExport, exportKind, onBack,
 }) {
   const [correcting, setCorrecting] = React.useState(false);
   const [reason, setReason] = React.useState('');
   const [exporting, setExporting] = React.useState(false);
   const [exportError, setExportError] = React.useState(null);
+  const [reportingPayment, setReportingPayment] = React.useState(false);
+  const [payingNote, setPayingNote] = React.useState('');
+  const [disputingPayment, setDisputingPayment] = React.useState(false);
+  const [disputeNote, setDisputeNote] = React.useState('');
 
   if (!contract) {
     return (
@@ -105,6 +116,22 @@ export default function AgreementView({
     : !performs && (state === 'TERMS_ACCEPTED' || state === 'IN_PROGRESS')
       ? 'Waiting for them to deliver.'
       : null;
+
+  // Payment is not part of the protocol state — it moves outside TrustFlow on
+  // whatever rail the parties use, so there is no derive_contract_state()
+  // projection to read. It is derived here, client-side, from the plain event
+  // list: whichever of payment.reported / payment.acknowledged / .disputed
+  // came last. The receiver pays (performs is the earner/performer side);
+  // the performer is the one confirming or disputing receipt.
+  const paymentEvents = (events ?? []).filter(e =>
+    e.type === 'payment.reported' || e.type === 'payment.acknowledged' || e.type === 'payment.disputed');
+  const latestPayment = paymentEvents[paymentEvents.length - 1] ?? null;
+  const paymentEligible = onReportPayment
+    && !['DRAFTING', 'AWAITING_ACCEPTANCE', 'CANCELLED'].includes(state);
+  const canReportPayment = paymentEligible && !performs
+    && (!latestPayment || latestPayment.type === 'payment.disputed');
+  const canRespondToPayment = paymentEligible && performs && latestPayment?.type === 'payment.reported';
+  const paymentConfirmed = latestPayment?.type === 'payment.acknowledged';
 
   return (
     <div className="max-w-2xl mx-auto py-10 space-y-8 animate-fade-in-up">
@@ -238,6 +265,141 @@ export default function AgreementView({
           </p>
         )}
       </section>
+
+      {/* Payment moves outside TrustFlow, on whatever rail the parties use.
+          This section lets each side record their own claim about it — sent,
+          received, or disputed — in the same spirit as the performance
+          assertions above: a statement, not a verified fact. Kept separate
+          from the one-action section above it, which is about performance. */}
+      {paymentEligible && (
+        <section className="rounded-[24px] border border-white/10 bg-[#0f172a]/60 px-6 py-6 space-y-4">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">Payment</h2>
+
+          {paymentConfirmed && (
+            <p className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+              <CheckCircle2 className="w-4 h-4" /> Payment confirmed received
+            </p>
+          )}
+
+          {!paymentConfirmed && !canReportPayment && !canRespondToPayment && (
+            <p className="text-sm text-slate-400">
+              {performs
+                ? 'Waiting for them to report payment.'
+                : latestPayment?.type === 'payment.disputed'
+                  ? 'They reported not receiving payment. Report it again once resolved.'
+                  : 'You can report payment once it has been sent.'}
+            </p>
+          )}
+
+          {canReportPayment && !reportingPayment && (
+            <>
+              <p className="text-sm text-slate-300">
+                This is agreed to move outside TrustFlow. Record here that you sent it, so both
+                sides have a timestamped statement of it.
+              </p>
+              <button
+                onClick={() => setReportingPayment(true)}
+                disabled={busy}
+                className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all disabled:opacity-40"
+              >
+                Report payment sent
+              </button>
+            </>
+          )}
+
+          {canReportPayment && reportingPayment && (
+            <>
+              <label htmlFor="payment-note" className="block text-sm text-slate-300">
+                How was it sent? (method, reference — optional)
+              </label>
+              <textarea
+                id="payment-note"
+                value={payingNote}
+                onChange={e => setPayingNote(e.target.value)}
+                rows={2}
+                autoFocus
+                placeholder="e.g. bank transfer, ref #12345"
+                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+              />
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={async () => { await onReportPayment(payingNote.trim()); setReportingPayment(false); setPayingNote(''); }}
+                  disabled={busy}
+                  className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all disabled:opacity-40"
+                >
+                  {busy ? 'Recording…' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => { setReportingPayment(false); setPayingNote(''); }}
+                  className="px-6 py-3 text-slate-500 hover:text-slate-300 font-bold text-sm transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                This records that you stated payment was sent, with the server's time. It is not
+                proof that money moved — TrustFlow cannot see outside itself.
+              </p>
+            </>
+          )}
+
+          {canRespondToPayment && !disputingPayment && (
+            <>
+              <p className="text-sm text-slate-300">
+                They reported sending payment. Once you have checked:
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={onAcknowledgePayment}
+                  disabled={busy}
+                  className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-emerald-400 hover:text-white transition-all disabled:opacity-40"
+                >
+                  Confirm received
+                </button>
+                <button
+                  onClick={() => setDisputingPayment(true)}
+                  disabled={busy}
+                  className="px-6 py-3 rounded-2xl border border-white/10 text-slate-300 font-bold text-sm hover:bg-white/5 hover:text-white transition-all disabled:opacity-40"
+                >
+                  Not received
+                </button>
+              </div>
+            </>
+          )}
+
+          {canRespondToPayment && disputingPayment && (
+            <>
+              <label htmlFor="payment-dispute-note" className="block text-sm text-slate-300">
+                What's wrong? (optional)
+              </label>
+              <textarea
+                id="payment-dispute-note"
+                value={disputeNote}
+                onChange={e => setDisputeNote(e.target.value)}
+                rows={2}
+                autoFocus
+                placeholder="e.g. nothing received, or wrong amount"
+                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+              />
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={async () => { await onDisputePayment(disputeNote.trim()); setDisputingPayment(false); setDisputeNote(''); }}
+                  disabled={busy}
+                  className="px-6 py-3 rounded-2xl bg-amber-500 text-[#020617] font-black text-sm hover:bg-amber-400 transition-all disabled:opacity-40"
+                >
+                  {busy ? 'Recording…' : 'Report as not received'}
+                </button>
+                <button
+                  onClick={() => { setDisputingPayment(false); setDisputeNote(''); }}
+                  className="px-6 py-3 text-slate-500 hover:text-slate-300 font-bold text-sm transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       <section className="space-y-3">
         <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">Record</h2>

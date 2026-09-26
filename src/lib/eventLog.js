@@ -36,6 +36,14 @@ export const EVENT_TYPES = {
   PERFORMANCE_ASSERTED: 'performance.asserted',  // earner asserts they performed
   PERFORMANCE_ACCEPTED: 'performance.accepted',  // hirer confirms that assertion
   PERFORMANCE_REJECTED: 'performance.rejected',  // hirer disputes that assertion
+  // What a party SAYS about payment sent by a rail TrustFlow does not
+  // control (bank transfer, cash, anything outside Stripe) — a claim, not a
+  // processor fact, same shape as performance.* above. Distinct from the
+  // Stripe-only payment.* lifecycle further down, which no party may ever
+  // write.
+  PAYMENT_REPORTED:      'payment.reported',     // payer says they sent it
+  PAYMENT_ACKNOWLEDGED:  'payment.acknowledged',  // payee confirms receipt
+  PAYMENT_DISPUTED:      'payment.disputed',      // payee says it wasn't received
   MILESTONE_APPROVED:   'milestone.approved',    // milestone payment released
   PAYMENT_RELEASED:     'payment.released',      // full payment released
   DISPUTE_OPENED:       'dispute.opened',        // dispute raised by either party

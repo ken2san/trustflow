@@ -27,6 +27,10 @@ const TYPE_LABELS = {
   'dod.consent_recorded': 'Terms accepted',
   'dispute.opened':       'Dispute opened',
   'rating.submitted':     'Rating submitted',
+  // A party's claim about payment made outside TrustFlow, not a verified fact.
+  'payment.reported':     'Payment reported sent',
+  'payment.acknowledged': 'Payment confirmed received',
+  'payment.disputed':     'Payment reported as not received',
 };
 
 // Human names for the agreed terms. The snapshot's own key names are a wire

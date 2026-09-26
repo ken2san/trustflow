@@ -870,7 +870,7 @@ const App = () => {
           actorLabel: byCreator
             ? 'by you'
             : `by ${String(ev.actor_id ?? '').replace(/^guest:/, '') || 'the other party'}`,
-          reason: ev.payload?.reason ?? null,
+          reason: ev.payload?.reason ?? ev.payload?.note ?? null,
           _performerIsCreator: performerIsCreator,
         };
       });
@@ -918,7 +918,7 @@ const App = () => {
         type: ev.type,
         created_at: ev.created_at,
         actorLabel: ev.actor.role === 'guest_hirer' ? 'by you' : `by ${ev.actor.label}`,
-        reason: ev.payload?.reason ?? null,
+        reason: ev.payload?.reason ?? ev.payload?.note ?? null,
       })),
       role: evidence.contract.viewer_role ?? 'receiver',
     });
@@ -1438,6 +1438,11 @@ const App = () => {
             onAccept={() => recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ACCEPTED)}
             onRequestCorrection={(reason) =>
               recordAgreementEvent(EVENT_TYPES.PERFORMANCE_REJECTED, { reason })}
+            onReportPayment={(note) =>
+              recordAgreementEvent(EVENT_TYPES.PAYMENT_REPORTED, { note })}
+            onAcknowledgePayment={() => recordAgreementEvent(EVENT_TYPES.PAYMENT_ACKNOWLEDGED)}
+            onDisputePayment={(note) =>
+              recordAgreementEvent(EVENT_TYPES.PAYMENT_DISPUTED, { note })}
             onExport={agreement?.source === 'owner' ? exportAgreementRecord
               : agreement?.source === 'guest' ? exportGuestRecord : undefined}
             exportKind={agreement?.source === 'guest' ? 'server_verified' : 'verifiable'}
