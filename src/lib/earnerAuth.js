@@ -216,6 +216,44 @@ export async function signOutEarner() {
 // Requires the Google provider to be configured in the Supabase dashboard
 // (Authentication → Providers → Google, with a Google Cloud OAuth client) —
 // this call does nothing useful until that exists.
+// ── Turning a raw Auth error into something that says what to do ───────────
+//
+// updateUser({ email }) (the first-time claim, in the BYOC form) does not go
+// through requestSignInCode above, so it never got the reason mapping that
+// gives — it showed error.message verbatim. That is fine for most errors, but
+// wrong for the two rate limits GoTrue raises on sending mail, because both
+// read as permanent to someone who does not already know otherwise:
+//   - the short per-request cooldown embeds its own countdown in the message
+//     ("For security purposes, you can only request this after 0 seconds"),
+//     which is often already zero by the time it is read, and looks broken
+//     rather than "already fine, try again".
+//   - the hourly cap ("email rate limit exceeded") is the platform's default
+//     for its built-in mailer — see the Auth docs' rate limits page — and
+//     Supabase does not return a remaining count or a reset time for it, so
+//     the honest message is "this clears on its own", not a number.
+export function describeAuthError(error) {
+  if (!error) return null
+  const code = error.code ?? ''
+  const message = String(error.message ?? '')
+
+  if (code === 'over_email_send_rate_limit' || /email rate limit exceeded/i.test(message)) {
+    return "Too many codes have been sent recently. This is Supabase's own hourly cap on "
+      + 'its built-in mailer, not something broken here — it clears on its own, typically '
+      + 'within an hour. There is no way to see the exact time left; waiting is the only fix '
+      + 'unless a custom mail sender is configured.'
+  }
+
+  const cooldown = message.match(/after (\d+) seconds?/i)
+  if (cooldown) {
+    const seconds = Number(cooldown[1])
+    return seconds > 0
+      ? `Please wait ${seconds} second${seconds === 1 ? '' : 's'} and try again.`
+      : 'That cooldown has already passed — try again now.'
+  }
+
+  return null // caller falls back to its own default message
+}
+
 export async function signInWithGoogle() {
   if (!supabase) return { error: NOT_CONFIGURED }
   const { error } = await supabase.auth.signInWithOAuth({

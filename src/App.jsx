@@ -83,6 +83,7 @@ import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner, signInWithGoogle,
+  describeAuthError,
 } from './lib/earnerAuth.js';
 import { supabase, isSupabaseEnabled } from './lib/supabase.js';
 
@@ -1086,13 +1087,13 @@ const App = () => {
       }
       const { error } = await requestEarnerVerification((byocForm.earnerEmail || '').trim());
       if (error) {
-        setOtpError(error.message ?? 'Could not send the code.');
+        setOtpError(describeAuthError(error) ?? error.message ?? 'Could not send the code.');
         setOtpStage('idle');
         return;
       }
       setOtpStage('code');
     } catch (err) {
-      setOtpError(String(err?.message ?? err));
+      setOtpError(describeAuthError(err) ?? String(err?.message ?? err));
       setOtpStage('idle');
     }
   }, [byocForm, persistContractAndLink]);
