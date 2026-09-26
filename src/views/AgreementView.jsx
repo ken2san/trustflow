@@ -83,6 +83,8 @@ export default function AgreementView({
   const [reason, setReason] = React.useState('');
   const [exporting, setExporting] = React.useState(false);
   const [exportError, setExportError] = React.useState(null);
+  const [assertingDelivery, setAssertingDelivery] = React.useState(false);
+  const [deliveryNote, setDeliveryNote] = React.useState('');
   const [reportingPayment, setReportingPayment] = React.useState(false);
   const [payingNote, setPayingNote] = React.useState('');
   const [disputingPayment, setDisputingPayment] = React.useState(false);
@@ -176,22 +178,60 @@ export default function AgreementView({
         )}
         {waitingText && <p className="text-sm text-slate-400">{waitingText}</p>}
 
-        {canAssert && (
+        {canAssert && !assertingDelivery && (
           <>
             <p className="text-sm text-slate-300">
               When you have finished the agreed work, record it here.
             </p>
             <button
-              onClick={onAssertDelivery}
+              onClick={() => setAssertingDelivery(true)}
               disabled={busy}
               className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all disabled:opacity-40 flex items-center gap-2"
             >
-              {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Recording…</> : <><Send className="w-4 h-4" /> Mark as delivered</>}
+              <Send className="w-4 h-4" /> Mark as delivered
             </button>
             <p className="text-[11px] text-slate-600 leading-relaxed">
               {/* "your identity" claimed more than the record holds: what is bound
                   is the credential that acted, which TrustFlow has never tied to a
                   legal person. */}
+              This records that you stated the work was delivered, with the server's time
+              and the credential you acted with. It does not state that the work is
+              correct — that is for the other party to answer.
+            </p>
+          </>
+        )}
+
+        {canAssert && assertingDelivery && (
+          <>
+            <label htmlFor="delivery-note" className="block text-sm text-slate-300">
+              What did you send? (file name, a checksum — optional, but it is the only
+              thing that ties this record to a specific file)
+            </label>
+            <textarea
+              id="delivery-note"
+              value={deliveryNote}
+              onChange={e => setDeliveryNote(e.target.value)}
+              rows={2}
+              autoFocus
+              placeholder="e.g. koseki_translation.pdf, sha256 a1b2c3…"
+              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+            />
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={async () => { await onAssertDelivery(deliveryNote.trim()); setAssertingDelivery(false); setDeliveryNote(''); }}
+                disabled={busy}
+                className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all disabled:opacity-40 flex items-center gap-2"
+              >
+                {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Recording…</> : <><Send className="w-4 h-4" /> Confirm</>}
+              </button>
+              <button
+                onClick={() => { setAssertingDelivery(false); setDeliveryNote(''); }}
+                className="px-6 py-3 text-slate-500 hover:text-slate-300 font-bold text-sm transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-relaxed">
               This records that you stated the work was delivered, with the server's time
               and the credential you acted with. It does not state that the work is
               correct — that is for the other party to answer.
@@ -298,7 +338,15 @@ export default function AgreementView({
                 sides have a timestamped statement of it.
               </p>
               <button
-                onClick={() => setReportingPayment(true)}
+                onClick={() => {
+                  // Seeded, not just hinted: leaving the note untouched still
+                  // records the agreed amount, rather than an empty string
+                  // that must be manually re-entered to mean anything.
+                  setPayingNote(contract.amount_jpy
+                    ? `¥${Number(contract.amount_jpy).toLocaleString()} sent via `
+                    : '');
+                  setReportingPayment(true);
+                }}
                 disabled={busy}
                 className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all disabled:opacity-40"
               >

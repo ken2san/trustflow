@@ -1434,7 +1434,7 @@ const App = () => {
             viewerRole={agreement?.role}
             busy={agreementBusy}
             error={agreementError}
-            onAssertDelivery={() => recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ASSERTED)}
+            onAssertDelivery={(note) => recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ASSERTED, { note })}
             onAccept={() => recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ACCEPTED)}
             onRequestCorrection={(reason) =>
               recordAgreementEvent(EVENT_TYPES.PERFORMANCE_REJECTED, { reason })}
