@@ -200,19 +200,16 @@ export default function ContractsHomeView({
         </div>
       )}
 
+      {/* No button here: the header above already offers "New contract" and is
+          always on screen, so a second one in this empty state was the same
+          action twice with nothing between them. */}
       {!loading && !error && !hasAny && authStatus !== 'expired' && (
         <div className="rounded-[28px] border border-white/5 bg-white/[0.02] px-6 py-12 text-center space-y-3">
           <p className="text-white font-bold">No contracts yet.</p>
           <p className="text-sm text-slate-500 max-w-sm mx-auto">
-            Already working with someone? Set up the agreement here and send them an invite —
+            Already working with someone? Use "New contract" above and send them an invite —
             what you both agreed to gets recorded from day one.
           </p>
-          <button
-            onClick={onNewContract}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all mt-2"
-          >
-            <Plus className="w-4 h-4" /> New contract
-          </button>
           {authStatus === 'anonymous' && onSignIn && (
             <p className="text-xs text-slate-600 pt-2">
               Already set one up on another device?{' '}
