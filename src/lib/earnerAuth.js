@@ -237,10 +237,7 @@ export function describeAuthError(error) {
   const message = String(error.message ?? '')
 
   if (code === 'over_email_send_rate_limit' || /email rate limit exceeded/i.test(message)) {
-    return "Too many codes have been sent recently. This is Supabase's own hourly cap on "
-      + 'its built-in mailer, not something broken here — it clears on its own, typically '
-      + 'within an hour. There is no way to see the exact time left; waiting is the only fix '
-      + 'unless a custom mail sender is configured.'
+    return 'Too many codes sent. Try again in about an hour.'
   }
 
   const cooldown = message.match(/after (\d+) seconds?/i)

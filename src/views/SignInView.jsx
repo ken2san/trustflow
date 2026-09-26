@@ -19,9 +19,7 @@ const REQUEST_ERRORS = {
   unknown_email:
     'No account was found for that address, or a code could not be sent to it. '
     + 'Check the spelling and try again.',
-  rate_limited:
-    "Too many codes have been sent recently. This is Supabase's own hourly cap on its "
-    + 'built-in mailer, not a permanent block — it clears on its own, typically within an hour.',
+  rate_limited: 'Too many codes sent. Try again in about an hour.',
   invalid_email: 'That does not look like an email address.',
   not_configured: 'Sign-in is unavailable — this build has no Supabase connection.',
   error: 'The code could not be sent. Try again in a moment.',
