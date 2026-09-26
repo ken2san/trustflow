@@ -1279,6 +1279,12 @@ const App = () => {
                   <p className="text-xs text-slate-400">We sent a 6-digit code to {byocForm.earnerEmail}. Entering it links this browser to a permanent account, so your contracts stay reachable.</p>
                   <input type="text" inputMode="numeric" maxLength={6} value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="000000" className="w-full bg-slate-900 border border-white/10 rounded-2xl px-5 py-4 text-white text-center text-2xl font-mono tracking-[0.4em] outline-none focus:border-indigo-500/50" />
                   <button onClick={handleVerifyEarnerCode} disabled={otpCode.trim().length < 6} className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black text-sm transition-all">Confirm &amp; create contract</button>
+                  <button
+                    onClick={() => { setOtpStage('idle'); setOtpCode(''); setOtpError(null); }}
+                    className="w-full py-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                  >
+                    Use a different email
+                  </button>
                 </div>
               )}
               {otpError && (
