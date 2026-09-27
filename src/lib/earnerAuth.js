@@ -53,10 +53,23 @@ export async function verifyEarnerOtp(email, token) {
 /**
  * Whether the current session belongs to a verified (permanent) Earner.
  * Anything else — anonymous, signed out, unconfigured — is false.
+ *
+ * Forces a token refresh rather than reading the cached session, and this is
+ * load-bearing, not caution for its own sake. verified_earner_only_insert
+ * checks auth.jwt() ->> 'is_anonymous' — a claim baked into the access token
+ * when it was minted — not a live lookup on auth.users. A token minted while
+ * still anonymous keeps that claim until something re-mints it; getUser()
+ * alone reports the live, correct row and would say "verified" while the
+ * stale token in hand still fails the insert. Reproduced 2026-09-27: a
+ * contract created hours after the email was claimed, in a session whose
+ * held token predated it, hit `new row violates row-level security policy
+ * "verified_earner_only_insert"` immediately after this function said true.
+ * refreshSession() re-mints from the current server-side state, so the token
+ * this function just confirmed is also the one the next write will use.
  */
 export async function isEarnerVerified() {
   if (!supabase) return false
-  const { data, error } = await supabase.auth.getUser()
+  const { data, error } = await supabase.auth.refreshSession()
   if (error || !data?.user) return false
   return data.user.is_anonymous === false
 }

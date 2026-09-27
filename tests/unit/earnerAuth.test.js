@@ -5,6 +5,7 @@ const auth = {
   signInWithOtp: vi.fn(),
   verifyOtp: vi.fn(),
   getUser: vi.fn(),
+  refreshSession: vi.fn(),
   signOut: vi.fn(),
 }
 vi.mock('../../src/lib/supabase.js', () => ({ supabase: { auth } }))
@@ -19,7 +20,7 @@ globalThis.localStorage = {
 
 const {
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
-  rememberEarnerEmail, recallEarnerEmail,
+  rememberEarnerEmail, recallEarnerEmail, isEarnerVerified,
 } = await import('../../src/lib/earnerAuth.js')
 
 beforeEach(() => {
@@ -100,6 +101,34 @@ describe('verifySignInCode', () => {
     auth.verifyOtp.mockResolvedValue({ data: null, error: { status: 403, message: 'Invalid token' } })
     await verifySignInCode('typo@example.com', '000000')
     expect(recallEarnerEmail()).toBeNull()
+  })
+})
+
+// ── Verified means the held token is current, not just the row ─────────────
+
+describe('isEarnerVerified', () => {
+  it('forces a token refresh rather than trusting the cached session', async () => {
+    // getUser() would report the live, correct row even with a stale token
+    // in hand — the point of this function is that the token used for the
+    // very next write has to be current too, which only refreshSession()
+    // guarantees. Asserting it was called, not getUser, is the point of
+    // this test: reproduced 2026-09-27, a contract insert failed
+    // verified_earner_only_insert (which reads the JWT claim) moments after
+    // this function had said "verified" from a stale but live-correct read.
+    auth.refreshSession.mockResolvedValue({ data: { user: { is_anonymous: false } }, error: null })
+    expect(await isEarnerVerified()).toBe(true)
+    expect(auth.refreshSession).toHaveBeenCalled()
+    expect(auth.getUser).not.toHaveBeenCalled()
+  })
+
+  it('is false when the refreshed session is still anonymous', async () => {
+    auth.refreshSession.mockResolvedValue({ data: { user: { is_anonymous: true } }, error: null })
+    expect(await isEarnerVerified()).toBe(false)
+  })
+
+  it('is false when there is no session to refresh', async () => {
+    auth.refreshSession.mockResolvedValue({ data: { user: null }, error: { message: 'no session' } })
+    expect(await isEarnerVerified()).toBe(false)
   })
 })
 
