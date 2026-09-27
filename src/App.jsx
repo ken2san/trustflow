@@ -1482,6 +1482,7 @@ const App = () => {
             onExport={agreement?.source === 'owner' ? exportAgreementRecord
               : agreement?.source === 'guest' ? exportGuestRecord : undefined}
             exportKind={agreement?.source === 'guest' ? 'server_verified' : 'verifiable'}
+            onCopyInvite={agreement?.source === 'owner' ? copyInviteLink : undefined}
             onBack={() => { setAgreement(null); setView(auth.status === 'signed_in' ? 'home' : 'invite-accepted'); }}
           />
         )}

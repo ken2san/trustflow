@@ -20,7 +20,7 @@
 // not rule that the objection is justified.
 
 import React from 'react';
-import { ArrowLeft, CheckCircle2, Send, Loader2, AlertTriangle, Download } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Send, Loader2, AlertTriangle, Download, Copy } from 'lucide-react';
 
 /** Human wording for the attested event types, from the reader's side. */
 const RECORD_LABELS = {
@@ -77,7 +77,7 @@ export default function AgreementView({
   contract, events, viewerRole, busy, error,
   onAssertDelivery, onAccept, onRequestCorrection,
   onReportPayment, onAcknowledgePayment, onDisputePayment,
-  onExport, exportKind, onBack,
+  onExport, exportKind, onCopyInvite, onBack,
 }) {
   const [correcting, setCorrecting] = React.useState(false);
   const [reason, setReason] = React.useState('');
@@ -101,6 +101,12 @@ export default function AgreementView({
   const state = contract.state;
   const performs = viewerRole === 'performer';
   const dod = Array.isArray(contract.dod) ? contract.dod : [];
+  // Same condition ContractsHomeView uses for its own "Copy invite link" —
+  // the invite exists and nobody has used it yet. Repeated here because this
+  // was the one place the link could never be reached again after the
+  // creation dialog closed: opening the contract from the list showed
+  // everything about it except the one thing that still needed sending.
+  const canReshare = Boolean(contract.invite_token) && !contract.invite_token_used_at && onCopyInvite;
 
   // Exactly one action is ever offered, and only to the side whose turn it is.
   // The other side is told what is being waited on rather than given a button
@@ -151,6 +157,14 @@ export default function AgreementView({
           {contract.amount_jpy ? <> · ¥{Number(contract.amount_jpy).toLocaleString()}</> : null}
           {contract.deadline ? <> · due {contract.deadline}</> : null}
         </p>
+        {canReshare && (
+          <button
+            onClick={() => onCopyInvite(contract)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl border border-white/10 text-slate-300 font-bold text-xs hover:bg-white/5 hover:text-white transition-all mt-1"
+          >
+            <Copy className="w-3.5 h-3.5" /> Copy invite link
+          </button>
+        )}
       </header>
 
       {/* What was agreed. Always visible — it is the agreement. */}
