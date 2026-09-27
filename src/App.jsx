@@ -1107,6 +1107,12 @@ const App = () => {
         setOtpStage('idle');
         return;
       }
+      // A stale code left over from an earlier request looks like a valid
+      // current one otherwise — reproduced 2026-09-27: re-requesting after
+      // correcting a typo left the previous code sitting in the box, which
+      // then failed as expired rather than looking like what it was, an old
+      // answer to a question that had moved on.
+      setOtpCode('');
       setOtpStage('code');
     } catch (err) {
       setOtpError(describeAuthError(err) ?? String(err?.message ?? err));
@@ -1293,7 +1299,7 @@ const App = () => {
               {otpStage === 'code' && (
                 <div className="bg-slate-800/60 border border-indigo-500/30 rounded-2xl px-5 py-4 space-y-3">
                   <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Confirm your email</p>
-                  <p className="text-xs text-slate-400">We sent a 6-digit code to {byocForm.earnerEmail}. Entering it links this browser to a permanent account, so your contracts stay reachable.</p>
+                  <p className="text-xs text-slate-400">We sent a code to {byocForm.earnerEmail}. Entering it links this browser to a permanent account, so your contracts stay reachable.</p>
                   {/* Not hardcoded to 6: Supabase's OTP length is a project
                       setting (6-10 digits), and this project's is currently
                       8. maxLength was silently truncating every code typed
