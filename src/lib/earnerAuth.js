@@ -228,19 +228,6 @@ export async function signOutEarner() {
   await supabase.auth.signOut({ scope: 'local' })
 }
 
-// ── Google, as an alternative to the email code ─────────────────────────────
-//
-// A Google-authenticated session is never anonymous, so it satisfies
-// verified_earner_only_insert the same way a claimed email does — nothing
-// server-side treats one differently from the other. This is a full-page
-// redirect (Supabase's hosted OAuth flow), not a popup: the browser leaves and
-// comes back to `redirectTo`, so there is no promise to await here beyond the
-// redirect itself starting. getAuthState() on the next mount is what reports
-// the resulting session, exactly as it already does after any other sign-in.
-//
-// Requires the Google provider to be configured in the Supabase dashboard
-// (Authentication → Providers → Google, with a Google Cloud OAuth client) —
-// this call does nothing useful until that exists.
 // ── Turning a raw Auth error into something that says what to do ───────────
 //
 // updateUser({ email }) (the first-time claim, in the BYOC form) does not go
@@ -295,16 +282,4 @@ export function describeAuthError(error) {
   }
 
   return null // caller falls back to its own default message
-}
-
-export async function signInWithGoogle() {
-  if (!supabase) return { error: NOT_CONFIGURED }
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    // The full URL, not just the origin: someone who clicks this while
-    // viewing an invite link (?token=...) must land back on that same link,
-    // not on the bare homepage with the token gone.
-    options: { redirectTo: window.location.href },
-  })
-  return { error: error ?? null }
 }

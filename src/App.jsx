@@ -82,7 +82,7 @@ import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite,
 import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
-  requestSignInCode, verifySignInCode, getAuthState, signOutEarner, signInWithGoogle,
+  requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
   describeAuthError,
 } from './lib/earnerAuth.js';
 import { supabase, isSupabaseEnabled } from './lib/supabase.js';
@@ -1496,7 +1496,6 @@ const App = () => {
               if (result.user) await handleSignedIn();
               return result;
             }}
-            onGoogleSignIn={signInWithGoogle}
             onBack={() => setView('home')}
           />
         )}
