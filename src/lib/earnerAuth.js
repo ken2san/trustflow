@@ -275,6 +275,13 @@ export function describeAuthError(error) {
     return RATE_LIMIT_MESSAGE
   }
 
+  // Same code requestSignInCode already maps to 'invalid_email' — this path
+  // just never had its own copy of that message. Reproduced 2026-09-27: a
+  // typo in "Your email" surfaced GoTrue's raw validation text instead.
+  if (code === 'email_address_invalid') {
+    return 'That does not look like an email address.'
+  }
+
   return null // caller falls back to its own default message
 }
 
