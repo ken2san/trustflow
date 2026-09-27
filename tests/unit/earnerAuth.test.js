@@ -130,6 +130,14 @@ describe('isEarnerVerified', () => {
     auth.refreshSession.mockResolvedValue({ data: { user: null }, error: { message: 'no session' } })
     expect(await isEarnerVerified()).toBe(false)
   })
+
+  it('is false, not a crash, when refreshSession throws', async () => {
+    // Reproduced 2026-09-27: a session left over from a deleted account makes
+    // refreshSession() throw "Auth session missing!" outright rather than
+    // resolving with an error field.
+    auth.refreshSession.mockRejectedValue(new Error('Auth session missing!'))
+    expect(await isEarnerVerified()).toBe(false)
+  })
 })
 
 // ── Which of the three states this browser is in ────────────────────────────

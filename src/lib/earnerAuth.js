@@ -69,9 +69,21 @@ export async function verifyEarnerOtp(email, token) {
  */
 export async function isEarnerVerified() {
   if (!supabase) return false
-  const { data, error } = await supabase.auth.refreshSession()
-  if (error || !data?.user) return false
-  return data.user.is_anonymous === false
+  try {
+    // refreshSession() throws outright — rather than resolving with an
+    // { error } — when the stored session's refresh token no longer names
+    // anyone, which is exactly what a session left over from a deleted
+    // account looks like (reproduced 2026-09-27: deleting a test user from
+    // the dashboard while its browser still held that session surfaced
+    // "Auth session missing!" as a raw, uncaught error). Not verified and
+    // nothing to verify are the same answer here: false, so the caller falls
+    // through to requesting a fresh claim instead of crashing.
+    const { data, error } = await supabase.auth.refreshSession()
+    if (error || !data?.user) return false
+    return data.user.is_anonymous === false
+  } catch {
+    return false
+  }
 }
 
 // ── Returning from a fresh browser ──────────────────────────────────────────
