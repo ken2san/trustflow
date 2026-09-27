@@ -155,12 +155,11 @@ export default function SignInView({
             inputMode="numeric"
             autoComplete="one-time-code"
             value={code}
-            // Not hardcoded to 6: Supabase's OTP length is a project setting
-            // (6-10 digits). Truncating here would silently make a longer
-            // code impossible to submit.
-            onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
+            // This project's OTP length is 8 (a project setting, kept as-is
+            // rather than changed back to Supabase's 6-digit default).
+            onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
             onKeyDown={e => { if (e.key === 'Enter' && code.trim() && !busy) submitCode(); }}
-            placeholder="123456"
+            placeholder="12345678"
             autoFocus
             aria-label="Sign-in code"
             className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-4 text-white text-2xl font-mono tracking-[0.4em] text-center outline-none transition-all placeholder:text-slate-700"

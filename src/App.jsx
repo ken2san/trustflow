@@ -1298,8 +1298,11 @@ const App = () => {
                       setting (6-10 digits), and this project's is currently
                       8. maxLength was silently truncating every code typed
                       or pasted here, making verification impossible. */}
-                  <input type="text" inputMode="numeric" maxLength={10} value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="000000" className="w-full bg-slate-900 border border-white/10 rounded-2xl px-5 py-4 text-white text-center text-2xl font-mono tracking-[0.4em] outline-none focus:border-indigo-500/50" />
-                  <button onClick={handleVerifyEarnerCode} disabled={otpCode.trim().length < 6} className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black text-sm transition-all">Confirm &amp; create contract</button>
+                  {/* This project's OTP length is 8 (a project setting, kept
+                      as-is rather than changed back to Supabase's 6-digit
+                      default). */}
+                  <input type="text" inputMode="numeric" maxLength={8} value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="00000000" className="w-full bg-slate-900 border border-white/10 rounded-2xl px-5 py-4 text-white text-center text-2xl font-mono tracking-[0.4em] outline-none focus:border-indigo-500/50" />
+                  <button onClick={handleVerifyEarnerCode} disabled={otpCode.trim().length < 8} className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black text-sm transition-all">Confirm &amp; create contract</button>
                   <button
                     onClick={() => { setOtpStage('idle'); setOtpCode(''); setOtpError(null); }}
                     className="w-full py-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
