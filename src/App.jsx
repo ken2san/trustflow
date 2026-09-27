@@ -1294,7 +1294,11 @@ const App = () => {
                 <div className="bg-slate-800/60 border border-indigo-500/30 rounded-2xl px-5 py-4 space-y-3">
                   <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Confirm your email</p>
                   <p className="text-xs text-slate-400">We sent a 6-digit code to {byocForm.earnerEmail}. Entering it links this browser to a permanent account, so your contracts stay reachable.</p>
-                  <input type="text" inputMode="numeric" maxLength={6} value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="000000" className="w-full bg-slate-900 border border-white/10 rounded-2xl px-5 py-4 text-white text-center text-2xl font-mono tracking-[0.4em] outline-none focus:border-indigo-500/50" />
+                  {/* Not hardcoded to 6: Supabase's OTP length is a project
+                      setting (6-10 digits), and this project's is currently
+                      8. maxLength was silently truncating every code typed
+                      or pasted here, making verification impossible. */}
+                  <input type="text" inputMode="numeric" maxLength={10} value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="000000" className="w-full bg-slate-900 border border-white/10 rounded-2xl px-5 py-4 text-white text-center text-2xl font-mono tracking-[0.4em] outline-none focus:border-indigo-500/50" />
                   <button onClick={handleVerifyEarnerCode} disabled={otpCode.trim().length < 6} className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black text-sm transition-all">Confirm &amp; create contract</button>
                   <button
                     onClick={() => { setOtpStage('idle'); setOtpCode(''); setOtpError(null); }}
