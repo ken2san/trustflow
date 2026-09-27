@@ -78,7 +78,7 @@ import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { ensureActorIdentity } from './lib/identity.js';
-import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence } from './lib/contracts.js';
+import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract } from './lib/contracts.js';
 import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
@@ -1020,6 +1020,22 @@ const App = () => {
     }
   }, [addToast]);
 
+  /**
+   * Remove a contract that was created but never sent or never accepted —
+   * e.g. closing "New contract" without copying the link, or a test draft.
+   * The server enforces the actual boundary (owner_delete_unaccepted_draft);
+   * this only refreshes the list once it agrees to the delete.
+   */
+  const handleDeleteDraft = useCallback(async (contract) => {
+    const { deleted, error } = await deleteDraftContract(contract.id);
+    if (!deleted) {
+      addToast('Could not delete', error?.message ?? 'Try again in a moment.', 'error');
+      return;
+    }
+    addToast('Draft deleted', 'It never had an accepting party.', 'success');
+    await refreshContracts();
+  }, [addToast, refreshContracts]);
+
   const handleBYOCSubmit = useCallback(() => {
     const item = {
       id: byocContractId || ('byoc-' + Date.now()),
@@ -1479,6 +1495,7 @@ const App = () => {
             onNewContract={handleBYOCStart}
             onOpenContract={openContractFromHome}
             onCopyInvite={copyInviteLink}
+            onDeleteDraft={handleDeleteDraft}
             authStatus={auth.status}
             authEmail={auth.email}
             onSignIn={() => setView('signin')}

@@ -230,3 +230,29 @@ export async function acceptInvite(inviteToken, hirerEmail, counterpartyName) {
   }
   return { accepted: data, reason: null }
 }
+
+/**
+ * Remove a contract that was created but never accepted — a draft nobody has
+ * responded to yet, such as one left over from closing "New contract" without
+ * copying the invite link.
+ *
+ * Safe to expose as a plain delete: `owner_delete_unaccepted_draft` is what
+ * actually enforces this, restricted to the caller's own contracts still at
+ * AWAITING_ACCEPTANCE with an unused invite token. A contract in that state
+ * has zero rows in `events` — the acceptance event is the first thing ever
+ * written for a contract — so this never touches anything that is evidence of
+ * a real transaction. Deleting anything else fails silently (RLS rows out of
+ * scope simply do not match; `count` on the response is how a caller tells a
+ * refused delete from one that already had nothing to remove).
+ */
+export async function deleteDraftContract(contractId) {
+  if (!supabase) return { deleted: false, error: NOT_CONFIGURED }
+
+  const { error, count } = await supabase
+    .from('contracts')
+    .delete({ count: 'exact' })
+    .eq('id', contractId)
+
+  if (error) return { deleted: false, error }
+  return { deleted: (count ?? 0) > 0, error: null }
+}

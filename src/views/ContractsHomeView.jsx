@@ -12,7 +12,7 @@
 // own progression and is untouched for now.
 
 import React from 'react';
-import { Plus, Copy, ChevronDown, ChevronRight, Loader2, RefreshCw, AlertTriangle, LogIn } from 'lucide-react';
+import { Plus, Copy, ChevronDown, ChevronRight, Loader2, RefreshCw, AlertTriangle, LogIn, Trash2 } from 'lucide-react';
 import {
   groupContracts, nextActionFor, statusLabel, formatAmount, formatDeadline,
 } from '../lib/contractStatus.js';
@@ -36,10 +36,12 @@ function Counterparty({ contract }) {
 }
 
 /** The expanded row: the one contract most in need of attention. */
-function LeadContractCard({ contract, onOpen, onCopyInvite }) {
+function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
   const action = nextActionFor(contract);
   const deadline = formatDeadline(contract);
   const canReshare = Boolean(contract.invite_token) && !contract.invite_token_used_at;
+  const canDelete = canReshare && Boolean(onDeleteDraft);
+  const [confirming, setConfirming] = React.useState(false);
 
   return (
     <div className="rounded-[28px] border border-white/10 bg-[#0f172a]/60 p-6 sm:p-7 space-y-5 shadow-xl backdrop-blur-xl">
@@ -81,29 +83,88 @@ function LeadContractCard({ contract, onOpen, onCopyInvite }) {
             <Copy className="w-3.5 h-3.5" /> Copy invite link
           </button>
         )}
+        {canDelete && !confirming && (
+          <button
+            onClick={() => setConfirming(true)}
+            className="px-5 py-2.5 rounded-2xl border border-white/10 text-slate-500 font-bold text-sm hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/20 transition-all flex items-center gap-2"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete draft
+          </button>
+        )}
+        {canDelete && confirming && (
+          <div className="flex items-center gap-3 px-1">
+            <span className="text-xs text-slate-500">Delete this draft?</span>
+            <button
+              onClick={() => { setConfirming(false); onDeleteDraft(contract); }}
+              className="text-xs font-black uppercase tracking-widest text-rose-400 hover:text-rose-300"
+            >
+              Yes
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              className="text-xs font-bold uppercase tracking-widest text-slate-500 hover:text-slate-300"
+            >
+              No
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 /** A single compact line. Everything that isn't the lead contract. */
-function ContractRow({ contract, onOpen }) {
+function ContractRow({ contract, onOpen, onDeleteDraft }) {
   const action = nextActionFor(contract);
   const deadline = formatDeadline(contract);
+  // Same condition as the lead card's reshare button: an invite that exists
+  // and has never been consumed means nobody has accepted yet, so this row
+  // is the exact shape of leftover draft onDeleteDraft is safe to remove.
+  const canDelete = Boolean(contract.invite_token) && !contract.invite_token_used_at && onDeleteDraft;
+  const [confirming, setConfirming] = React.useState(false);
 
   return (
-    <button
-      onClick={() => onOpen(contract)}
-      className="w-full text-left rounded-2xl border border-white/5 bg-white/[0.02] px-5 py-4 hover:bg-white/[0.05] hover:border-white/10 transition-all group"
-    >
+    <div className="w-full rounded-2xl border border-white/5 bg-white/[0.02] px-5 py-4 hover:bg-white/[0.05] hover:border-white/10 transition-all group">
       <div className="flex items-center gap-3">
-        <StatusDot owner={action.owner} />
-        <span className="font-bold text-white text-sm truncate">
-          {contract.project_name || 'Untitled agreement'}
-        </span>
-        <ChevronRight className="w-4 h-4 text-slate-600 ml-auto shrink-0 group-hover:text-slate-400 transition-colors" />
+        <button onClick={() => onOpen(contract)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+          <StatusDot owner={action.owner} />
+          <span className="font-bold text-white text-sm truncate">
+            {contract.project_name || 'Untitled agreement'}
+          </span>
+        </button>
+        {canDelete && confirming ? (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => { setConfirming(false); onDeleteDraft(contract); }}
+              className="text-[10px] font-black uppercase tracking-widest text-rose-400 hover:text-rose-300"
+            >
+              Delete?
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              className="text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-300"
+            >
+              No
+            </button>
+          </div>
+        ) : (
+          <>
+            {canDelete && (
+              <button
+                onClick={() => setConfirming(true)}
+                title="Delete this draft"
+                className="p-1.5 text-slate-600 hover:text-rose-400 transition-colors shrink-0 opacity-0 group-hover:opacity-100"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button onClick={() => onOpen(contract)} className="shrink-0">
+              <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-slate-400 transition-colors" />
+            </button>
+          </>
+        )}
       </div>
-      <div className="pl-5 mt-1 flex flex-wrap gap-x-2 text-xs text-slate-500">
+      <button onClick={() => onOpen(contract)} className="pl-5 mt-1 flex flex-wrap gap-x-2 text-xs text-slate-500 text-left w-full">
         {/* The state the server holds, then what it means for you. Both come
             from contracts.state; neither is derived from the flow screen's
             local step counter. */}
@@ -115,8 +176,8 @@ function ContractRow({ contract, onOpen }) {
         {deadline && <><span className="text-slate-700">·</span><span>due {deadline}</span></>}
         <span className="text-slate-700">·</span>
         <span className={action.owner === 'you' ? 'text-amber-400/80' : 'text-slate-500'}>{action.label}</span>
-      </div>
-    </button>
+      </button>
+    </div>
   );
 }
 
@@ -134,7 +195,7 @@ function Section({ title, count, children }) {
 
 export default function ContractsHomeView({
   contracts, loading, error, onOpenContract, onNewContract, onCopyInvite, onRetry,
-  authStatus = 'anonymous', authEmail = null, onSignIn,
+  authStatus = 'anonymous', authEmail = null, onSignIn, onDeleteDraft,
 }) {
   const [showCompleted, setShowCompleted] = React.useState(false);
   const { needsYou, inProgress, completed } = React.useMemo(
@@ -225,16 +286,16 @@ export default function ContractsHomeView({
         <>
           {lead && (
             <Section title="Needs you" count={needsYou.length}>
-              <LeadContractCard contract={lead} onOpen={onOpenContract} onCopyInvite={onCopyInvite} />
+              <LeadContractCard contract={lead} onOpen={onOpenContract} onCopyInvite={onCopyInvite} onDeleteDraft={onDeleteDraft} />
               {restNeedsYou.map(c => (
-                <ContractRow key={c.id} contract={c} onOpen={onOpenContract} />
+                <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onDeleteDraft={onDeleteDraft} />
               ))}
             </Section>
           )}
 
           <Section title="In progress" count={inProgress.length}>
             <div className="space-y-2">
-              {inProgress.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} />)}
+              {inProgress.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onDeleteDraft={onDeleteDraft} />)}
             </div>
           </Section>
 
@@ -249,7 +310,7 @@ export default function ContractsHomeView({
               </button>
               {showCompleted && (
                 <div className="space-y-2">
-                  {completed.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} />)}
+                  {completed.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onDeleteDraft={onDeleteDraft} />)}
                 </div>
               )}
             </section>
