@@ -114,13 +114,17 @@ function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
 }
 
 /** A single compact line. Everything that isn't the lead contract. */
-function ContractRow({ contract, onOpen, onDeleteDraft }) {
+function ContractRow({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
   const action = nextActionFor(contract);
   const deadline = formatDeadline(contract);
-  // Same condition as the lead card's reshare button: an invite that exists
-  // and has never been consumed means nobody has accepted yet, so this row
-  // is the exact shape of leftover draft onDeleteDraft is safe to remove.
-  const canDelete = Boolean(contract.invite_token) && !contract.invite_token_used_at && onDeleteDraft;
+  // An invite that exists and has never been consumed: nobody has accepted
+  // yet, so there's still a link worth resending and still a draft worth
+  // being able to remove. The lead card had "Copy invite link" for this same
+  // condition; this compact row — where most awaiting-acceptance contracts
+  // actually land, since "needs you" is for your own turn, not the client's —
+  // never had it at all.
+  const canReshare = Boolean(contract.invite_token) && !contract.invite_token_used_at;
+  const canDelete = canReshare && onDeleteDraft;
   const [confirming, setConfirming] = React.useState(false);
 
   return (
@@ -149,6 +153,15 @@ function ContractRow({ contract, onOpen, onDeleteDraft }) {
           </div>
         ) : (
           <>
+            {canReshare && onCopyInvite && (
+              <button
+                onClick={() => onCopyInvite(contract)}
+                title="Copy invite link"
+                className="p-1.5 text-slate-600 hover:text-indigo-400 transition-colors shrink-0 opacity-0 group-hover:opacity-100"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            )}
             {canDelete && (
               <button
                 onClick={() => setConfirming(true)}
@@ -288,14 +301,14 @@ export default function ContractsHomeView({
             <Section title="Needs you" count={needsYou.length}>
               <LeadContractCard contract={lead} onOpen={onOpenContract} onCopyInvite={onCopyInvite} onDeleteDraft={onDeleteDraft} />
               {restNeedsYou.map(c => (
-                <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onDeleteDraft={onDeleteDraft} />
+                <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onCopyInvite={onCopyInvite} onDeleteDraft={onDeleteDraft} />
               ))}
             </Section>
           )}
 
           <Section title="In progress" count={inProgress.length}>
             <div className="space-y-2">
-              {inProgress.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onDeleteDraft={onDeleteDraft} />)}
+              {inProgress.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onCopyInvite={onCopyInvite} onDeleteDraft={onDeleteDraft} />)}
             </div>
           </Section>
 
@@ -310,7 +323,7 @@ export default function ContractsHomeView({
               </button>
               {showCompleted && (
                 <div className="space-y-2">
-                  {completed.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onDeleteDraft={onDeleteDraft} />)}
+                  {completed.map(c => <ContractRow key={c.id} contract={c} onOpen={onOpenContract} onCopyInvite={onCopyInvite} onDeleteDraft={onDeleteDraft} />)}
                 </div>
               )}
             </section>
