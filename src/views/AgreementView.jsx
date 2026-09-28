@@ -107,6 +107,15 @@ export default function AgreementView({
   // creation dialog closed: opening the contract from the list showed
   // everything about it except the one thing that still needed sending.
   const canReshare = Boolean(contract.invite_token) && !contract.invite_token_used_at && onCopyInvite;
+  // The address the invite was addressed to and the address whoever accepted
+  // it actually claimed are recorded separately on purpose (Decisions.md,
+  // "What TrustFlow actually knows about the guest") — acceptance never
+  // requires them to match. Until now that divergence sat in the row with
+  // nothing surfacing it anywhere the owner would see it. onCopyInvite is
+  // only ever passed for the owner's own view, so it doubles as "am I the
+  // owner" here rather than adding a prop just for this.
+  const emailMismatch = Boolean(onCopyInvite) && contract.invited_hirer_email && contract.hirer_email
+    && contract.invited_hirer_email.trim().toLowerCase() !== contract.hirer_email.trim().toLowerCase();
 
   // Exactly one action is ever offered, and only to the side whose turn it is.
   // The other side is told what is being waited on rather than given a button
@@ -164,6 +173,14 @@ export default function AgreementView({
           >
             <Copy className="w-3.5 h-3.5" /> Copy invite link
           </button>
+        )}
+        {emailMismatch && (
+          <p className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-2xl px-4 py-3 mt-1">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            You invited <span className="font-bold">{contract.invited_hirer_email}</span>, but the
+            person who accepted claimed <span className="font-bold">{contract.hirer_email}</span>.
+            Neither address is verified — worth checking this is who you expect.
+          </p>
         )}
       </header>
 
