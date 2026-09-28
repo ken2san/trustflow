@@ -510,6 +510,18 @@ decision is not reversed — it is what should be implemented when payment is
 wired — and `SETTLED` being unreachable is a direct consequence of it being
 unbuilt.
 
+**A marker for whenever this is picked back up (2026-09-27):** every security
+posture built so far — the email mismatch surfaced rather than blocked,
+identity succession left disclosable rather than preventable, payment left as
+an unverified party assertion — shares one shape: *record, don't gatekeep*,
+because TrustFlow has neither the authority nor the information to gatekeep
+honestly. That shape is only correct as long as nothing is actually held.
+Wiring Stripe Connect is the one place it must be abandoned on purpose: real
+escrow means blocking and holding in the moment, not attesting after the fact.
+Treat that as a genuinely different category of engineering from everything
+built so far, not an extension of it — the day this is built is the day the
+"record, don't block" posture gets its one deliberate exception.
+
 **Decision**: All contract payments flow through Stripe Connect. TrustFlow never holds funds. The platform account holds payments and transfers to Earner's Connected Account on DoD confirmation.
 
 **Context**: Internal payment token ("deposit PTS and exchange for cash") would require 資金移動業 or 前払式支払手段 registration under Japanese payment law. Stripe is already a licensed 資金移動業 operator.
