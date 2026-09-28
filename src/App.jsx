@@ -396,7 +396,18 @@ const App = () => {
         // Don't restore view when an invite token is present in the URL
         const hasInviteParams = new URLSearchParams(window.location.search).has('token')
           || new URLSearchParams(window.location.search).has('invite');
-        if (typeof snapshot.view === 'string' && !hasInviteParams) setView(snapshot.view);
+        // Nor 'agreement': that view renders whatever `agreement` state holds
+        // (the fetched contract + events), which this snapshot never carries
+        // and nothing here re-fetches. Restoring the view alone left
+        // AgreementView showing "Loading the agreement…" forever — reproduced
+        // live 2026-09-28, on a fresh actor whose local snapshot fallback (not
+        // scoped by actor_id — see loadRuntimeSnapshot) still had 'agreement'
+        // saved from an unrelated earlier session on the same browser.
+        const dataBackedViews = new Set(['agreement', 'guest-evidence']);
+        if (typeof snapshot.view === 'string' && !hasInviteParams
+          && !dataBackedViews.has(snapshot.view)) {
+          setView(snapshot.view);
+        }
         if (typeof snapshot.step === 'number') setStep(snapshot.step);
         if (snapshot.selectedItem) setSelectedItem(snapshot.selectedItem);
         if (snapshot.uiProfile) setUIProfile(snapshot.uiProfile);
