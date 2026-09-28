@@ -15,6 +15,68 @@ _Last updated: 2026-09-29_
 
 ## Open Questions — recorded, deliberately not acted on
 
+### [2026-09-27] — What trust means here, and what "Client email" is for
+
+**Status**: a design conversation, not a decision to implement anything. Two
+concrete things came out of it and are recorded below; nothing else should be
+built from this entry without a separate, later decision.
+
+**The core reframe**: if payment management is abandoned entirely (money
+already moves outside TrustFlow — see the Stripe Connect entry below), what is
+left is exactly one thing: a tamper-evident record of what a pseudonymous
+identifier — an email address, nothing more — has agreed to and done in the
+past, independent of the real person's name, age, or relationship to anyone.
+That is not a missing feature; per Roadmap.md's own mission statement, it is
+the whole point. The email address is the unit trust accumulates on, which is
+also why a party has a live incentive to keep reusing the same one rather than
+treating each transaction as truly disposable — the disposable *account
+overhead* (no password, no signup) and the non-disposable *identity underneath
+it* are deliberately different things.
+
+**Identity succession — possible to record, impossible to detect.** The same
+identifier can end up controlled by a different real person over time (the
+inbox is sold, handed off, or compromised) — structurally the same problem as
+a game account being sold, a business's 屋号 changing hands, or a verified
+X/YouTube account changing who is actually posting. Two honest conclusions,
+not to be conflated:
+
+- A **voluntary, disclosed** succession is cheap to support if ever wanted: one
+  new party-writable event (e.g. `identity.succeeded`), the outgoing holder
+  attesting "as of time T, this identifier passes to someone else." Same
+  shape as every other event in this system.
+- A **silent** takeover cannot be detected from here, and no system anywhere
+  reliably solves this (verified social accounts get sold and hijacked
+  constantly). The honest response is not detection — it's not pretending the
+  problem is solved, and making honest disclosure the easy path rather than
+  building surveillance to catch the dishonest one.
+
+**Abuse potential, assessed and currently low.** Could this be used to lend a
+false air of legitimacy to a bad-faith recruitment (the pattern known in Japan
+as 闇バイト)? The core mechanism is actually poorly suited to it — an
+append-only, tamper-evident record is close to the opposite of what that kind
+of coordination wants, which is deniability. The more realistic risk is the
+platform's trust *signal* being used as a legitimacy prop for a pitch whose
+real instructions live elsewhere, off-platform entirely — but that is a
+generic risk shared by every reputation system (Upwork, LinkedIn, a bank's
+"verified" badge included), not something content moderation would catch, and
+not something the current BYOC-only, single-operator, no-stranger-discovery
+shape of the product actually exposes yet. Worth real design attention only if
+this ever opens to strangers finding each other.
+
+**"Client email" (`invited_hirer_email`) stays required, not made optional.**
+It was tempting to make it optional — nothing in the app uses it for delivery,
+the link is copy-pasted through whatever channel regardless. But the field
+earns its place a different way: asking for it up front is the natural first
+step before starting real work anyway, and asking for it *deliberately* — a
+human choosing to hand over the identifier that is about to become their
+signature — is a stronger moment than a stranger picking whatever address
+occurs to them at acceptance time with no prior commitment. Required stays
+required. Revisit this if a real workflow shows up where the sender genuinely
+cannot know who will open the link (e.g. a QR code posted somewhere, forwarded
+through an unknown chain) — that shape does not exist yet.
+
+---
+
 ### [2026-09-29] — An agreement cannot be called off, and CANCELLED is unreachable
 
 **Status**: partly decided on 2026-09-25, and **not implemented**.
