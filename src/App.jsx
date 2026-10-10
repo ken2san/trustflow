@@ -175,6 +175,12 @@ import ProjectDetailView from './views/ProjectDetailView';
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
 
+// Today as an <input type="date"> writes it: a calendar date in the viewer's
+// own timezone. toISOString() would be a day early for anyone ahead of UTC —
+// including Tokyo, where this is being used — and would let "today" be
+// rejected as past.
+const todayLocalISO = () => new Date().toLocaleDateString('en-CA');
+
 // --- Main App Component ---
 
 const App = () => {
@@ -1149,6 +1155,12 @@ const App = () => {
   const handleSendMessage = () => { if (!inputText.trim()) return; setMessages([...messages, { id: Date.now(), sender: 'me', text: inputText, time: 'Now', type: 'text' }]); setInputText(''); setTimeout(() => { setMessages(prev => [...prev, { id: Date.now()+1, sender: 'ai', text: 'Context updated. Evidence logged.', time: 'Now', type: 'text' }]); }, 1000); };
   useEffect(() => { if (isChatOpen && chatEndRef.current) { chatEndRef.current.scrollIntoView({ behavior: "smooth" }); } }, [messages, isChatOpen]);
 
+  // The deadline is optional, so an empty one is not an error — only a date
+  // that has already passed is. Both values are YYYY-MM-DD, which compares
+  // correctly as a string.
+  const earliestDeadline = todayLocalISO();
+  const deadlineIsPast = Boolean(byocForm.deadline) && byocForm.deadline < earliestDeadline;
+
   // Marketplace and Command Center are no longer in the primary navigation.
   // They are not deleted, and the palette is where they remain reachable —
   // deliberately, so removing them from the main path does not mean losing the
@@ -1267,44 +1279,47 @@ const App = () => {
             </div>
             {/* Scrollable body */}
             <div className="overflow-y-auto px-10 py-6 space-y-4 flex-1">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="sm:col-span-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Who is doing the work?</label>
-                  <div className="flex gap-3">
-                    {[
-                      { value: 'creator', label: 'Me' },
-                      { value: 'counterparty', label: 'The other person' },
-                    ].map(option => {
-                      const selected = (byocForm.performedBy ?? 'creator') === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => { setByocForm(f => ({ ...f, performedBy: option.value })); setInviteLink(null); }}
-                          className={`flex-1 py-3 rounded-2xl font-bold text-sm border transition-all ${
-                            selected
-                              ? 'bg-white text-[#020617] border-white'
-                              : 'bg-slate-800 text-slate-400 border-white/10 hover:text-white hover:border-white/20'
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[11px] text-slate-600 mt-2">
-                    Whoever does the work is the one who marks it delivered. The other person accepts
-                    it or asks for a correction.
-                  </p>
+              <div>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Who is doing the work?</label>
+                <div className="flex gap-3">
+                  {[
+                    { value: 'creator', label: 'Me' },
+                    { value: 'counterparty', label: 'The other person' },
+                  ].map(option => {
+                    const selected = (byocForm.performedBy ?? 'creator') === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => { setByocForm(f => ({ ...f, performedBy: option.value })); setInviteLink(null); }}
+                        className={`flex-1 py-3 rounded-2xl font-bold text-sm border transition-all ${
+                          selected
+                            ? 'bg-white text-[#020617] border-white'
+                            : 'bg-slate-800 text-slate-400 border-white/10 hover:text-white hover:border-white/20'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                 </div>
-                <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Your name</label><input type="text" value={byocForm.earnerName ?? ''} onChange={e => { setByocForm(f => ({ ...f, earnerName: e.target.value })); setInviteLink(null); }} placeholder="Shown to your client" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
-                <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Your email</label><input type="email" value={byocForm.earnerEmail ?? ''} onChange={e => { setByocForm(f => ({ ...f, earnerEmail: e.target.value })); setInviteLink(null); }} placeholder="We send you a code to confirm it" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
+                <p className="text-[11px] text-slate-600 mt-2">
+                  Whoever does the work is the one who marks it delivered. The other person accepts
+                  it or asks for a correction.
+                </p>
               </div>
+              <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Your name</label><input type="text" value={byocForm.earnerName ?? ''} onChange={e => { setByocForm(f => ({ ...f, earnerName: e.target.value })); setInviteLink(null); }} placeholder="Shown to your client" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
+              <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Your email</label><input type="email" value={byocForm.earnerEmail ?? ''} onChange={e => { setByocForm(f => ({ ...f, earnerEmail: e.target.value })); setInviteLink(null); }} placeholder="We send you a code to confirm it" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Client email</label><input type="email" value={byocForm.clientEmail ?? ''} onChange={e => { setByocForm(f => ({ ...f, clientEmail: e.target.value })); setInviteLink(null); }} placeholder="Where this invite is addressed" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Project name</label><input type="text" value={byocForm.description} onChange={e => { setByocForm(f => ({ ...f, description: e.target.value })); setInviteLink(null); }} placeholder="e.g., Mobile app redesign — 3 screens" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Amount (¥ JPY)</label><input type="number" min="0" value={byocForm.amount} onChange={e => { setByocForm(f => ({ ...f, amount: e.target.value })); setInviteLink(null); }} placeholder="e.g., 300000" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
-                <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Deadline</label><input type="date" value={byocForm.deadline ?? ''} onChange={e => { setByocForm(f => ({ ...f, deadline: e.target.value })); setInviteLink(null); }} className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
+                {/* min only constrains the picker; a date can still be typed
+                    straight into the field, so the value is checked as well and
+                    Send Invite is blocked on it. A deadline that has already
+                    passed would be frozen into the agreement at acceptance and
+                    is not something to find out about afterwards. */}
+                <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Deadline</label><input type="date" min={earliestDeadline} value={byocForm.deadline ?? ''} onChange={e => { setByocForm(f => ({ ...f, deadline: e.target.value })); setInviteLink(null); }} className={`w-full bg-slate-800 border rounded-2xl px-5 py-4 text-white outline-none transition-all ${deadlineIsPast ? 'border-amber-500/60 focus:border-amber-500' : 'border-white/10 focus:border-indigo-500/50'}`} />{deadlineIsPast && <p className="text-[11px] text-amber-400 mt-2">That date has already passed. Pick today or later.</p>}</div>
               </div>
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">What counts as complete <span className="normal-case font-normal text-slate-600">(one item per line)</span></label><textarea value={byocForm.dod} onChange={e => { setByocForm(f => ({ ...f, dod: e.target.value })); setInviteLink(null); }} placeholder={"Definitive Figma Library\nDark Mode Tokens\nAtomic Design Compliance"} className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all resize-none min-h-[90px] font-mono text-sm" /></div>
               {otpStage === 'code' && (
@@ -1360,6 +1375,7 @@ const App = () => {
                   || !(byocForm.earnerName ?? '').trim()
                   || !(byocForm.earnerEmail ?? '').trim()
                   || !(byocForm.clientEmail ?? '').trim()
+                  || deadlineIsPast
                 }
                 className="flex-1 py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black transition-all text-sm"
               >
