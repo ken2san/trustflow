@@ -1430,14 +1430,33 @@ const App = () => {
         </div>
         <div onClick={() => setIsCommandOpen(true)} className="hidden md:flex flex-1 max-w-md mx-6 items-center gap-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 px-4 py-2.5 rounded-xl cursor-pointer transition-all group"><Search className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" /><span className="text-sm text-slate-500 group-hover:text-slate-300 transition-colors">Type a command...</span><div className="ml-auto flex gap-1"><span className="text-[10px] font-mono text-slate-600 bg-white/5 px-1.5 py-0.5 rounded border border-white/5">⌘K</span></div></div>
         <div className="flex gap-4 items-center">
+          {/* Whose contracts these are, shown rather than hidden in a tooltip.
+              The address was only ever in `title`, so it took a hover to find
+              and did not exist at all on touch — and the whole control was
+              `hidden sm:flex`, which left a phone with no way to sign out
+              either. In a product about who agreed to what, the account you
+              are acting as should never need looking up, and it is easy to
+              lose track of while holding two of them. The address is the part
+              that must survive a narrow screen, so the word "Sign out" is what
+              gives way, not the identity. */}
           {auth.status === 'signed_in' ? (
-            <button
-              onClick={handleSignOut}
-              title={auth.email ? `Signed in as ${auth.email}` : 'Sign out'}
-              className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 hover:bg-white/5 transition-all text-xs font-bold text-slate-400 hover:text-white"
-            >
-              <LogOut className="w-3.5 h-3.5" /> Sign out
-            </button>
+            <div className="flex items-center gap-1 pl-3.5 pr-1 py-1 rounded-full border border-white/10">
+              <span
+                className="text-xs font-bold text-slate-300 max-w-[120px] sm:max-w-[220px] truncate"
+                title={auth.email ?? undefined}
+              >
+                {auth.email ?? 'Signed in'}
+              </span>
+              <button
+                onClick={handleSignOut}
+                title="Sign out"
+                aria-label="Sign out"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full hover:bg-white/5 transition-all text-xs font-bold text-slate-500 hover:text-white"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Sign out</span>
+              </button>
+            </div>
           ) : (
             <button
               onClick={() => setView('signin')}
