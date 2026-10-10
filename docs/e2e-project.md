@@ -188,23 +188,22 @@ parity (29). Pushing here needs the explicit `--db-url` form; a bare
 `supabase db push` means production, deliberately.
 
 The database password for this project is in **1Password, `Private` /
-`Supabase_Kenji`**, in the field labelled `password DB:turst flow e2e` —
-alongside production's, which is `password DB:trust flow` in the same item.
-(The `turst` is a typo in the label; it is reproduced here because the label
-is the lookup key and a doc that silently corrects it would not find the
-field.) Supabase does not show a database password again after creation, and
-the session that built this project in September did not keep it, so the only
-way back in on 2026-10-10 was a reset.
+`Supabase_Kenji`**, in the field `trust flow e2e password DB` — alongside
+production's, `trust flow password DB`, in the same item. Supabase does not
+show a database password again after creation, and the session that built this
+project in September did not keep it, so the only way back in on 2026-10-10
+was a reset.
 
-Read it without putting it on a command line or in a shell history. Note the
-accessor: `op read` rejects a secret reference whose field label contains a
-colon (`invalid character in secret reference: ':'`), so the `op://…` form
-cannot address these fields and `op item get --fields` is used instead. If the
-labels are ever renamed to drop the colon, `op read` becomes available and
-this command should be simplified to it.
+Keep a colon out of those labels. `op read` rejects a secret reference whose
+field label contains one — `invalid character in secret reference: ':'` — so
+the `op://…` form cannot address the field at all, and only the clumsier
+`op item get --fields label=…` can. Spaces are fine here, but they would break
+an `op run --env-file` reference, which cannot be quoted.
+
+Read it without putting it on a command line or in a shell history:
 
 ```
-PW=$(op item get "Supabase_Kenji" --fields label="password DB:turst flow e2e" --reveal)
+PW=$(op read "op://Private/Supabase_Kenji/trust flow e2e password DB")
 ENC=$(printf '%s' "$PW" | python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
 supabase db push --dry-run --db-url "postgresql://postgres:$ENC@db.yqjtawffpesplqyurlpj.supabase.co:5432/postgres"
 unset PW ENC
