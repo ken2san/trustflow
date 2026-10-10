@@ -97,13 +97,25 @@ anything working.
   - **This project's OTP length is 8 digits**, not Supabase's 6-digit default —
     a project setting, deliberately kept rather than reverted (see Lessons).
     Both OTP inputs (`SignInView`, the BYOC email-claim box) now match it.
-  - **Custom SMTP is live**, via Resend, using the already-verified domain
-    `kenji.com.hk` (`noreply@kenji.com.hk`, `smtp.resend.com:587`). This
-    replaces the platform default mailer's ~2/hour cap, which had been hit
-    repeatedly through ordinary testing. Delivery confirmed; first message
-    landed in spam and was marked not-spam, which should improve going forward.
-    Auth email templates (subject/body for the OTP emails) were rewritten to
-    name TrustFlow and show the code plainly.
+  - **Custom SMTP is live on both projects**, via Resend over
+    `smtp.resend.com:587`. This replaces the platform default mailer's ~2/hour
+    cap, which had been hit repeatedly through ordinary testing; enabling it
+    shows up in `auth_logs` as `GOTRUE_RATE_LIMIT_EMAIL_SENT ... from 2/1h to
+    30`, which is how to check whether a project has it without opening the
+    dashboard. Auth email templates were rewritten to name TrustFlow and show
+    the code plainly — Supabase's stock Magic Link template carries only
+    `{{ .ConfirmationURL }}`, so without `{{ .Token }}` in the body there is no
+    code to type and the screen asking for one cannot be satisfied.
+  - **The sending domain is `loveharu.ca`** as of 2026-10-10, moved from
+    `kenji.com.hk` when that became the operator's main Google Workspace
+    address. Production sends as `noreply@loveharu.ca`, the E2E project as
+    `noreply-e2e@loveharu.ca`, under **two separate Resend API keys** so that
+    exhausting or revoking one cannot stop the other — the projects were split
+    precisely so test activity could not reach production, and one shared
+    credential would have re-coupled them. Nothing in the repository depends on
+    the domain: the only reader of `EMAIL_FROM` is `send-acceptance-email`,
+    which is deleted. A new sending domain starts with no reputation, so expect
+    the first messages in spam, as happened on the previous domain.
   - **Google sign-in was added, then removed the same session.** It was never
     finished (the OAuth provider was never configured in the Supabase
     dashboard), and on reflection was judged a poor fit for the product's own

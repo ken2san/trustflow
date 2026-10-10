@@ -172,3 +172,45 @@ identity to prove an unverified Earner cannot persist a contract, so that one te
 could not run while the provider was off. Enabled on 2026-09-26 through the
 dashboard (Authentication → Sign In / Providers), which is the only route — doing it
 from a session would need the account-level access token.
+
+## Where this project still differs from production
+
+The two databases are built from the same migrations, but a Supabase project is
+more than its schema, and the parts that live only in the dashboard drift
+silently. Each of these cost real confusion during the 2026-10-10 manual run,
+so they are written down rather than rediscovered.
+
+**One migration behind.** `20260929000200_delete_unaccepted_drafts` is applied to
+production and not here (production 29, this project 28), so neither the
+`owner_delete_unaccepted_draft` policy nor the `delete` grant on `contracts`
+exists. Deleting a draft therefore removes nothing. It now says so — the client
+asks for an exact count and reports a refused delete — but the drafts cannot be
+cleared here until this is pushed. Pushing it needs the explicit `--db-url`
+form; a bare `supabase db push` means production.
+
+**Auth email templates are configured per project.** Supabase's stock Magic Link
+template contains only `{{ .ConfirmationURL }}`. An app that asks for a typed
+code cannot be satisfied by it: the mail arrives with a link and no code, which
+reads as a broken sign-in rather than a missing template. Production's templates
+were rewritten on 2026-09-27; this project's were not, and that was found the
+hard way on 2026-10-10. Any template here needs `{{ .Token }}` in the body.
+
+**OTP length is a project setting too.** This product uses 8 digits rather than
+Supabase's default 6, and the inputs are fixed at 8 — a 6-digit code cannot even
+be submitted. A project restored or rebuilt from migrations comes back at 6.
+
+**Custom SMTP** is configured here as of 2026-10-10, sending as
+`noreply-e2e@loveharu.ca` under its own Resend API key, deliberately distinct
+from production's `noreply@loveharu.ca`. Separate keys keep the boundary this
+whole document exists to defend: one credential shared between the projects
+would mean test activity could stop production's auth mail. The different
+sender also makes it obvious from the inbox which backend a browser is driving.
+Whether a project has custom SMTP at all is visible without the dashboard —
+`auth_logs` records `GOTRUE_RATE_LIMIT_EMAIL_SENT ... from 2/1h to 30` when it
+is enabled.
+
+The general lesson: **migrations reproduce the schema, not the project.** Auth
+providers, email templates, OTP length, SMTP and rate limits are dashboard
+state, outside source control and outside `supabase db push`. Anonymous
+sign-ins were the same kind of gap in 2026-09-26. When a flow behaves
+differently here, suspect this list before suspecting the code.

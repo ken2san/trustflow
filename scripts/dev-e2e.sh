@@ -11,11 +11,12 @@
 # trustflow-e2e was built for exactly this and already has anonymous
 # sign-ins on, all migrations applied, and its own credentials in .env.e2e.
 #
-# Note: trustflow-e2e does not have Custom SMTP configured (production does,
-# as of 2026-09-27) — it's still on Supabase's default mailer. This is rarely
-# a problem in practice: accepting an invite needs no OTP at all (the guest
-# side just claims an email, no verification round trip), so the only email
-# this flow sends is the operator's own "Your email" confirmation, once.
+# trustflow-e2e has its own Custom SMTP as of 2026-10-10, sending as
+# noreply-e2e@loveharu.ca under a Resend key separate from production's, so a
+# key exhausted or revoked here cannot stop production's auth mail. The sender
+# differs from production's noreply@loveharu.ca on purpose: when both projects
+# look identical in the browser, the address a code arrives from is the
+# quickest way to tell which backend you are actually driving.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
