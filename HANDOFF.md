@@ -100,9 +100,11 @@ anything working.
   - **Custom SMTP is live on both projects**, via Resend over
     `smtp.resend.com:587`. This replaces the platform default mailer's ~2/hour
     cap, which had been hit repeatedly through ordinary testing; enabling it
-    shows up in `auth_logs` as `GOTRUE_RATE_LIMIT_EMAIL_SENT ... from 2/1h to
-    30`, which is how to check whether a project has it without opening the
-    dashboard. Auth email templates were rewritten to name TrustFlow and show
+    raises the email limiter, which `auth_logs` records as
+    `GOTRUE_RATE_LIMIT_EMAIL_SENT ... from 2/1h to 30`. Treat that line as a
+    hint and not a verdict — editing the limit by hand in Auth → Rate Limits
+    logs exactly the same thing, so it says the cap is gone, not that SMTP is
+    configured. Auth email templates were rewritten to name TrustFlow and show
     the code plainly — Supabase's stock Magic Link template carries only
     `{{ .ConfirmationURL }}`, so without `{{ .Token }}` in the body there is no
     code to type and the screen asking for one cannot be satisfied.

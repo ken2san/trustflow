@@ -205,9 +205,14 @@ from production's `noreply@loveharu.ca`. Separate keys keep the boundary this
 whole document exists to defend: one credential shared between the projects
 would mean test activity could stop production's auth mail. The different
 sender also makes it obvious from the inbox which backend a browser is driving.
-Whether a project has custom SMTP at all is visible without the dashboard —
-`auth_logs` records `GOTRUE_RATE_LIMIT_EMAIL_SENT ... from 2/1h to 30` when it
-is enabled.
+Enabling it raises the email limiter, which `auth_logs` records as
+`GOTRUE_RATE_LIMIT_EMAIL_SENT ... from 2/1h to 30`. That is a hint, not proof:
+raising the limit by hand in Auth → Rate Limits logs the same line. What does
+settle it is a delivered message — an auth email that arrives after the change,
+with no mailer error in `auth_logs`, means the credentials and the sender
+domain were both accepted by Resend. A sender on a domain Resend has not
+verified is rejected outright, so a one-character slip in the address fails
+every send rather than degrading quietly.
 
 The general lesson: **migrations reproduce the schema, not the project.** Auth
 providers, email templates, OTP length, SMTP and rate limits are dashboard
