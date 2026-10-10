@@ -184,6 +184,46 @@ anything working.
 
 ## Open Decisions
 
+- **A counterparty who loses their browser is locked out permanently, and
+  nothing recovers them.** Found in the 2026-10-10 dogfood. The guest's
+  `guest_access_token` lives only in that browser's localStorage
+  (`src/lib/guestSession.js`), the invite token is single-use and consumed,
+  `send-acceptance-email` is deleted, and no URL re-opens the guest view — so
+  clearing site data, switching device or using a private window ends their
+  participation. They cannot confirm delivery or report payment, and the
+  owner's side waits forever. The chain itself is unharmed; what is lost is a
+  cache.
+
+  **Do not "fix" this by recognising a hirer by email.** That was proposed and
+  rejected on review. `hirer_email` is typed by the guest at acceptance and
+  explicitly unverified (`_claimed_identity_verified: false`), so granting
+  write access to whoever controls that mailbox moves authorisation from a
+  secret the earner delivered to an attribute the counterparty self-declared,
+  and creates writers who never held the invite: a typo'd address, a shared
+  `info@` mailbox, a recycled address, or anyone the guest chose to name. The
+  read side's `party_read_contract_events` is not precedent — reading history
+  and signing a new assertion into a court-oriented record are different
+  privileges.
+
+  The recommended shape is **owner-initiated reissue**: the earner, already
+  authenticated, mints a fresh `guest_access_token` for their own contract and
+  re-shares the link the same way the invite went out. It adds no new
+  principal, keeps authority anchored to the earner's out-of-band channel,
+  gives the system its first way to revoke a leaked token, and can be recorded
+  as an event so the chain shows the credential was reissued. Not implemented:
+  it needs a service-role Edge Function or RPC, because 20260923000000 revoked
+  client updates to server-owned columns on `contracts`.
+
+- **`hirer_email` is compared case-sensitively, and is stored as typed.**
+  `validate-invite-token` only trims it; GoTrue lowercases the JWT email claim.
+  So a guest who typed `Bob@Corp.com` does not match
+  `party_read_contract_events`' `=` comparison (20260924000002). Latent today
+  because guests read through their token rather than an account, but it
+  cannot be repaired by normalising the stored value: `hirer_email` is inside
+  the hashed agreement snapshot and the log is append-only. Any fix has to
+  decide whether code compares case-insensitively while the RLS policy does
+  not.
+
 - **What to do with production's test data.** Unchanged: 1272 contracts / 2310
   events belong to the QA Earner, boundary against new writes holds, deletion
   still undecided. See `Decisions.md`.
