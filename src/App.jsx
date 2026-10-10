@@ -1343,6 +1343,39 @@ const App = () => {
                   </button>
                 </div>
               )}
+              {/* The last moment any of this can be corrected.
+                  Every field below is copied into the agreement snapshot and
+                  covered by agreement_hash when the counterparty accepts, and
+                  freeze_accepted_terms refuses to change them after that — so
+                  a wrong value here is not a typo, it is a permanent record of
+                  a deal nobody made. The fields are shown as the other side
+                  reads them rather than as labelled inputs, because that is
+                  what makes a wrong one obvious: on 2026-10-10 a dogfood run
+                  put the project name into "Your name", and the record it
+                  produced said the counterparty had dealt with a company named
+                  after the project. Nothing in the form could have caught that
+                  — the value was well-formed, just wrong — but seeing the two
+                  side by side would have. */}
+              {!inviteLink && (byocForm.earnerName ?? '').trim() && (byocForm.description ?? '').trim() && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-4 space-y-1.5">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Your client will see</p>
+                  <p className="text-sm text-slate-300">
+                    <span className="text-white font-bold">{byocForm.description.trim()}</span>
+                    {' — offered by '}
+                    <span className="text-white font-bold">{byocForm.earnerName.trim()}</span>
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {byocForm.amount ? `¥${Number(byocForm.amount).toLocaleString('en-US')}` : 'No amount'}
+                    {' · '}
+                    {byocForm.deadline ? `due ${byocForm.deadline}` : 'no deadline'}
+                    {' · '}
+                    {byocForm.performedBy === 'counterparty' ? 'they do the work' : 'you do the work'}
+                  </p>
+                  <p className="text-[11px] text-slate-600 pt-1">
+                    These terms are locked once they accept. Check them now.
+                  </p>
+                </div>
+              )}
               {otpError && (
                 <p className="text-xs text-rose-400 font-bold px-1">{otpError}</p>
               )}
