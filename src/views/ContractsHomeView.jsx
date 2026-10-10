@@ -137,12 +137,18 @@ function ContractRow({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
           </span>
         </button>
         {canDelete && confirming ? (
+          /* The question is a label and the answers are the buttons, the same
+             way the lead card asks it. This row used to use "Delete?" itself
+             as the confirming button with only "No" beside it, which reads as
+             a prompt whose single answer is No — so the row sat in this state
+             and nothing was ever deleted. */
           <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Delete?</span>
             <button
               onClick={() => { setConfirming(false); onDeleteDraft(contract); }}
               className="text-[10px] font-black uppercase tracking-widest text-rose-400 hover:text-rose-300"
             >
-              Delete?
+              Yes
             </button>
             <button
               onClick={() => setConfirming(false)}
