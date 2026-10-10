@@ -199,6 +199,17 @@ hard way on 2026-10-10. Any template here needs `{{ .Token }}` in the body.
 Supabase's default 6, and the inputs are fixed at 8 — a 6-digit code cannot even
 be submitted. A project restored or rebuilt from migrations comes back at 6.
 
+**Edge Functions do not follow a migration push.** They were deployed here once
+on 2026-09-26 and then stood still while production moved on. `50e8147` added
+the `payment.*` types the same day, thirteen hours later, so this project spent
+two weeks rejecting `payment.reported` with `type_not_allowed` — a 400 the
+client renders as "That could not be recorded", which reads as a transient
+failure and is not one. Brought to parity on 2026-10-10 (`log-event` and
+`guest-contract-events`, both v2); `validate-invite-token` had not changed.
+When a function or anything under `_shared/` changes, it needs deploying twice,
+and `git log --since=<the E2E deploy time> -- supabase/functions/` is what shows
+whether it is owed.
+
 **Custom SMTP** is configured here as of 2026-10-10, sending as
 `noreply-e2e@loveharu.ca` under its own Resend API key, deliberately distinct
 from production's `noreply@loveharu.ca`. Separate keys keep the boundary this
@@ -216,6 +227,7 @@ every send rather than degrading quietly.
 
 The general lesson: **migrations reproduce the schema, not the project.** Auth
 providers, email templates, OTP length, SMTP and rate limits are dashboard
-state, outside source control and outside `supabase db push`. Anonymous
+state, outside source control and outside `supabase db push`; Edge Functions
+are in source control but are not carried by it either. Anonymous
 sign-ins were the same kind of gap in 2026-09-26. When a flow behaves
 differently here, suspect this list before suspecting the code.
