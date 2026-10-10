@@ -55,6 +55,38 @@ describe('requestSignInCode', () => {
       .toEqual({ ok: false, reason: 'unknown_email' })
   })
 
+  // The signed-out screen names the remembered address and offers to bring its
+  // work back. Once the backend has refused to sign in to that address, the
+  // offer must stop — otherwise a browser whose account was deleted keeps being
+  // told, on every reload, that its records are safe.
+  it('forgets the remembered address once the backend refuses it', async () => {
+    rememberEarnerEmail('me@example.com')
+    auth.signInWithOtp.mockResolvedValue({ error: { code: 'otp_disabled' } })
+
+    await requestSignInCode('me@example.com')
+
+    expect(recallEarnerEmail()).toBeNull()
+  })
+
+  it('keeps the remembered address when it was a different one that failed', async () => {
+    // A typo in the sign-in box must not erase a good memory.
+    rememberEarnerEmail('me@example.com')
+    auth.signInWithOtp.mockResolvedValue({ error: { code: 'otp_disabled' } })
+
+    await requestSignInCode('me@exmaple.com')
+
+    expect(recallEarnerEmail()).toBe('me@example.com')
+  })
+
+  it('keeps the remembered address when sending was merely rate limited', async () => {
+    rememberEarnerEmail('me@example.com')
+    auth.signInWithOtp.mockResolvedValue({ error: { code: 'over_email_send_rate_limit' } })
+
+    await requestSignInCode('me@example.com')
+
+    expect(recallEarnerEmail()).toBe('me@example.com')
+  })
+
   it('distinguishes a send rate limit from a rejected address', async () => {
     auth.signInWithOtp.mockResolvedValue({ error: { code: 'over_email_send_rate_limit' } })
     expect((await requestSignInCode('me@example.com')).reason).toBe('rate_limited')

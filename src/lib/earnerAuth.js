@@ -146,7 +146,20 @@ export async function requestSignInCode(email) {
   if (!error) return { ok: true, reason: null }
 
   const code = error.code ?? ''
-  if (code === 'otp_disabled') return { ok: false, reason: 'unknown_email' }
+  if (code === 'otp_disabled') {
+    // The signed-out screen names the remembered address and offers to bring
+    // its work back. The backend has just said there is nothing to sign in to
+    // at that address, so keeping it would repeat that offer on every reload —
+    // which is how an account deleted out from under a browser ends up being
+    // told its records are safe. Only the remembered address is dropped: a
+    // mistyped one in the box must not erase a good memory. Dropping it costs
+    // a convenience and leaves the screen saying only that this browser is
+    // signed out, which stays true either way — `otp_disabled` also covers
+    // sending being switched off project-wide, so this cannot be read as
+    // proof the account is gone.
+    if (recallEarnerEmail() === address) forgetEarnerEmail()
+    return { ok: false, reason: 'unknown_email' }
+  }
   if (code === 'over_email_send_rate_limit') return { ok: false, reason: 'rate_limited' }
   if (code === 'email_address_invalid') return { ok: false, reason: 'invalid_email' }
   return { ok: false, reason: 'error' }

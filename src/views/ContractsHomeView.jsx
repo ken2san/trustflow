@@ -263,13 +263,24 @@ export default function ContractsHomeView({
       {/* An empty list means two very different things. Someone who has never
           made a contract should be invited to make one; someone whose session
           lapsed is looking at work they think they have lost, and telling them
-          "no contracts yet" would be both wrong and alarming. */}
+          "no contracts yet" would be both wrong and alarming.
+
+          What this may NOT do is promise the work is there. The address below
+          comes from localStorage, not from the server — nothing here has asked
+          whether that account still exists or what it holds. This said "Your
+          contracts are still there … nothing has been lost" and then, one
+          click later, the sign-in screen said no account was found for that
+          address. An account deleted out from under a browser reaches exactly
+          that state, and a product whose whole claim is a record worth
+          trusting cannot be the thing that says records are safe without
+          having looked. So: what this browser remembers, and what signing in
+          would do — reassurance that is true without a round trip. */}
       {!loading && !error && !hasAny && authStatus === 'expired' && (
         <div className="rounded-[28px] border border-amber-500/20 bg-amber-500/[0.04] px-6 py-10 text-center space-y-3">
           <p className="text-white font-bold">You are signed out.</p>
           <p className="text-sm text-slate-400 max-w-sm mx-auto">
-            Your contracts are still there{authEmail ? <> under <span className="text-slate-200">{authEmail}</span></> : null}.
-            Sign in again to see them.
+            This browser was last signed in{authEmail ? <> as <span className="text-slate-200">{authEmail}</span></> : null}.
+            Sign in again to see whatever is saved under that address — signing out removes nothing.
           </p>
           <button
             onClick={onSignIn}
