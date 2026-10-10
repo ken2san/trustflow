@@ -180,13 +180,31 @@ more than its schema, and the parts that live only in the dashboard drift
 silently. Each of these cost real confusion during the 2026-10-10 manual run,
 so they are written down rather than rediscovered.
 
-**One migration behind.** `20260929000200_delete_unaccepted_drafts` is applied to
-production and not here (production 29, this project 28), so neither the
-`owner_delete_unaccepted_draft` policy nor the `delete` grant on `contracts`
-exists. Deleting a draft therefore removes nothing. It now says so — the client
-asks for an exact count and reports a refused delete — but the drafts cannot be
-cleared here until this is pushed. Pushing it needs the explicit `--db-url`
-form; a bare `supabase db push` means production.
+**Migrations drift because nothing pushes them twice.** On 2026-10-10 this
+project sat one behind — `20260929000200_delete_unaccepted_drafts` was in
+production and not here, so neither the `owner_delete_unaccepted_draft` policy
+nor the `delete` grant existed and deleting a draft removed nothing. Now at
+parity (29). Pushing here needs the explicit `--db-url` form; a bare
+`supabase db push` means production, deliberately.
+
+The database password for this project is in **1Password, `Private` /
+`trustflow-e2e-db`**. Supabase does not show it again after creation, and the
+session that built this project in September did not keep it, so the only way
+back in on 2026-10-10 was a reset. Read it without putting it on a command
+line or in a shell history:
+
+```
+PW=$(op read "op://Private/trustflow-e2e-db/password")
+ENC=$(printf '%s' "$PW" | python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
+supabase db push --dry-run --db-url "postgresql://postgres:$ENC@db.yqjtawffpesplqyurlpj.supabase.co:5432/postgres"
+unset PW ENC
+```
+
+The URL-encoding step is not optional: a single `@` or `#` in the password
+splits the URI and surfaces as `password authentication failed`, which reads
+as a wrong password rather than a quoting problem. Always `--dry-run` first —
+it names exactly which files would apply, which is the check against a drift
+repeat.
 
 **Auth email templates are configured per project.** Supabase's stock Magic Link
 template contains only `{{ .ConfirmationURL }}`. An app that asks for a typed
@@ -205,7 +223,12 @@ the `payment.*` types the same day, thirteen hours later, so this project spent
 two weeks rejecting `payment.reported` with `type_not_allowed` — a 400 the
 client renders as "That could not be recorded", which reads as a transient
 failure and is not one. Brought to parity on 2026-10-10 (`log-event` and
-`guest-contract-events`, both v2); `validate-invite-token` had not changed.
+`guest-contract-events`, both v2, deployed through the management API because
+the CLI was unrunnable that day); `validate-invite-token` had not changed.
+Verify a deploy by behaviour, never by `updated_at`: posting each payment type
+to `log-event` with a contract id that does not exist should reach
+`contract_not_found`, while a retired and an unknown type still come back with
+their own errors.
 When a function or anything under `_shared/` changes, it needs deploying twice,
 and `git log --since=<the E2E deploy time> -- supabase/functions/` is what shows
 whether it is owed.
