@@ -234,6 +234,23 @@ anything working.
 
 ## Lessons this project has already paid for
 
+- **A client that collapses the server's reason hides bugs for weeks.**
+  supabase-js turns any non-2xx into a `FunctionsHttpError` with `data` null,
+  so `data?.error ?? 'error'` — the shape every invoke site used — reduced
+  every distinct refusal to one word, and `logEvent` fell back to
+  `error.message`, which for a non-2xx is a fixed sentence. The Edge Functions
+  were always saying exactly what was wrong. Three separate symptoms on
+  2026-10-10/11 were the same cause: `type_not_allowed` from a stale
+  deployment read as a transient failure for two weeks, `invalid_guest_token`
+  read as "could not be loaded", and the client's branch for
+  `wrong_party_for_event_type` turned out to be unreachable code because a 403
+  never arrived as anything but `'error'`. `invokeErrorReason` in
+  `src/lib/supabase.js` is now the single place that reads the function's own
+  `{error}` back off the failing Response. The unit test passed throughout,
+  because it asserted a 2xx carrying `{error}` — a shape these functions never
+  produce. **When a test for a failure path has never once gone red, check
+  that it describes a failure the system can actually have.**
+
 - **A live database check beats an assumption about a client library's
   behaviour.** `isEarnerVerified()` trusted `getUser()`'s live, correct answer
   while the actual write used a token minted under the old, stale claim —
