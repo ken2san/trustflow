@@ -164,13 +164,28 @@ anything working.
 
 ## Next Priority (in order)
 
-1. **Complete one real dogfood transaction end to end.** This has been the goal
-   for several sessions and every blocker found so far was a real bug (JWT
-   staleness, wrong OTP length, a stale code left in the input, the email rate
-   limit) rather than a design problem. Nothing known is blocking it now. Start
-   from a fresh account (see Current State) and actually run the certified-
-   translation agreement through to `PERFORMANCE_ACCEPTED` with a real
-   counterparty.
+1. **The dogfood transaction is complete.** Done 2026-10-11 against the E2E
+   project, `8c98dca5` "新規サービスのロゴおよびアイコン作成", ¥50,000, carried
+   from invitation to `PERFORMANCE_ACCEPTED`: acceptance, delivery asserted
+   with a note, two access re-issues, delivery accepted, payment reported.
+   Six events, and the whole chain was **re-verified independently** from the
+   raw rows — every `event_hash`, `payload_hash`, `agreement_hash`, `dod_hash`
+   and chain link recomputed through `_shared/eventCanonical.ts` and matched,
+   thirty checks in all. The product's central claim holds on a real
+   transaction, not only in its own export's self-report.
+
+   Everything it turned up was a real defect and all of them are fixed: a
+   truncated email field, a deadline with no floor, a delete confirmation with
+   no Yes, a signed-out screen that promised records were safe without having
+   looked, no indication of which account you were acting as, two Edge
+   Functions two weeks stale on the E2E project, an unapplied migration, a
+   counterparty permanently locked out with no recovery, a URL race that threw
+   away the recovered view, and a failed load that showed a spinner for ever.
+
+   What it did NOT exercise: a second human. Both sides were the same operator
+   with two addresses, so nothing about identity, misunderstanding or dispute
+   was tested. That is the next thing worth doing, and it needs someone else.
+
 2. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
    undecided. Needs `derive_contract_state()` to project the withdrawal.
@@ -184,35 +199,15 @@ anything working.
 
 ## Open Decisions
 
-- **A counterparty who loses their browser is locked out permanently, and
-  nothing recovers them.** Found in the 2026-10-10 dogfood. The guest's
-  `guest_access_token` lives only in that browser's localStorage
-  (`src/lib/guestSession.js`), the invite token is single-use and consumed,
-  `send-acceptance-email` is deleted, and no URL re-opens the guest view — so
-  clearing site data, switching device or using a private window ends their
-  participation. They cannot confirm delivery or report payment, and the
-  owner's side waits forever. The chain itself is unharmed; what is lost is a
-  cache.
-
-  **Do not "fix" this by recognising a hirer by email.** That was proposed and
-  rejected on review. `hirer_email` is typed by the guest at acceptance and
-  explicitly unverified (`_claimed_identity_verified: false`), so granting
-  write access to whoever controls that mailbox moves authorisation from a
-  secret the earner delivered to an attribute the counterparty self-declared,
-  and creates writers who never held the invite: a typo'd address, a shared
-  `info@` mailbox, a recycled address, or anyone the guest chose to name. The
-  read side's `party_read_contract_events` is not precedent — reading history
-  and signing a new assertion into a court-oriented record are different
-  privileges.
-
-  The recommended shape is **owner-initiated reissue**: the earner, already
-  authenticated, mints a fresh `guest_access_token` for their own contract and
-  re-shares the link the same way the invite went out. It adds no new
-  principal, keeps authority anchored to the earner's out-of-band channel,
-  gives the system its first way to revoke a leaked token, and can be recorded
-  as an event so the chain shows the credential was reissued. Not implemented:
-  it needs a service-role Edge Function or RPC, because 20260923000000 revoked
-  client updates to server-owned columns on `contracts`.
+- ~~A counterparty who loses their browser is locked out permanently.~~
+  **Settled 2026-10-11: owner-initiated reissue**, shipped and exercised in
+  the dogfood. The owner mints a fresh `guest_access_token` for their own
+  accepted contract and sends the link the way they sent the invitation;
+  `access.reissued` records that access changed hands, and the new value
+  overwrites the old, which is also this system's first way to revoke a
+  leaked credential. Recognising a hirer by email was rejected — see
+  `20261011000000_reissue_guest_access.sql` for why, and do not revisit it
+  without reading that first.
 
 - **`hirer_email` is compared case-sensitively, and is stored as typed.**
   `validate-invite-token` only trims it; GoTrue lowercases the JWT email claim.
