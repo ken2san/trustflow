@@ -934,9 +934,16 @@ const App = () => {
     setView('agreement');
     const { evidence, reason } = await fetchGuestEvidence(contractId, tokenOverride);
     if (!evidence) {
-      setAgreementError(reason === 'no_credential'
-        ? 'This browser does not hold a credential for this agreement.'
-        : 'The agreement could not be loaded.');
+      // Named individually, because the three say different things to the
+      // person reading them: nothing here to open, a link that has been
+      // replaced or was never real, and one that has simply aged out. Lumping
+      // them into "could not be loaded" left a guest unable to tell whether
+      // to ask for a new link or to try again later.
+      setAgreementError({
+        no_credential:        'This browser does not hold a credential for this agreement.',
+        invalid_guest_token:  'This access link is not valid. It may have been replaced by a newer one.',
+        guest_token_expired:  'This access link has expired.',
+      }[reason] ?? 'The agreement could not be loaded.');
       return;
     }
     // Arriving on a re-issued link: the credential came in the URL and the

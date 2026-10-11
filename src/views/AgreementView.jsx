@@ -100,6 +100,31 @@ export default function AgreementView({
   const [disputeNote, setDisputeNote] = React.useState('');
 
   if (!contract) {
+    // A failed load leaves no contract, so this branch has to answer for both
+    // states. It used to show the spinner regardless, which meant a guest link
+    // whose credential the server refused sat on "Loading the agreement…" for
+    // ever — the one reading of the screen that was certainly wrong, since
+    // nothing was still loading. Found in QA 2026-10-11.
+    if (error) {
+      return (
+        <div className="max-w-lg mx-auto py-20 text-center space-y-4">
+          <AlertTriangle className="w-6 h-6 mx-auto text-amber-400" />
+          <p className="text-sm text-slate-300">{error}</p>
+          <p className="text-xs text-slate-500">
+            If this was a link someone sent you, ask them to re-issue it — an access
+            link can be replaced, and the older one stops working when it is.
+          </p>
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Back
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="max-w-lg mx-auto py-20 text-center text-slate-500 text-sm">
         <Loader2 className="w-6 h-6 mx-auto mb-3 animate-spin" /> Loading the agreement…
