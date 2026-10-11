@@ -160,6 +160,17 @@ anything working.
 - **Do not redeploy `send-acceptance-email` or `timestamp-event`.**
 - **Do not delete production's existing test data** (the QA Earner's 1272
   contracts / 2310 events) — still an open decision, not a chore.
+- **The guest access token is authority, not identity.** It is a bearer
+  capability: it says the holder may act on this agreement, and nothing about
+  who they are. The address recorded at acceptance is the one the guest typed
+  and is stored as `_claimed_identity` with `_claimed_identity_verified:
+  false`, and `_auth_method` says `invite_capability` precisely so a reader
+  can tell the two apart. Nothing downstream may treat either as a verified
+  account identity — not the record, not the export, and not an
+  authorisation check. This is what makes recognising a hirer by email the
+  wrong repair, and it is easy to reach for twice; see
+  `20261011000000_reissue_guest_access.sql` and `Decisions.md`'s
+  "What TrustFlow actually knows about the guest".
 - Gemini API and eKYC are out of scope for the current MVP spec.
 
 ## Next Priority (in order)
