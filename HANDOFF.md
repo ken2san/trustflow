@@ -193,9 +193,23 @@ anything working.
    counterparty permanently locked out with no recovery, a URL race that threw
    away the recovered view, and a failed load that showed a spinner for ever.
 
-   What it did NOT exercise: a second human. Both sides were the same operator
-   with two addresses, so nothing about identity, misunderstanding or dispute
-   was tested. That is the next thing worth doing, and it needs someone else.
+   **What it was not: two people.** Both addresses belonged to one operator in
+   two browser profiles, so this was a technical dogfood of the mechanism, not
+   a test of two independently verified parties. The data says so plainly —
+   across all 86 accepted contracts `hirer_user_id` is null and only
+   `hirer_email` is set, because a guest never gets an account row and the
+   address they accepted under is the one they typed. Nothing in the run
+   tested usability for a stranger, identity, misunderstanding or dispute.
+
+   Also observed, and worth not assuming otherwise: **Send Invite produces a
+   shareable URL and sends no email.** Delivery of an invitation is manual,
+   through whatever channel the owner chooses, and the same is true of a
+   re-issued access link.
+
+   **The next gap is a real second human.** It is where `agreement_hash`, the
+   invited-versus-claimed address distinction, and the whole correction and
+   dispute path stop being plumbing and start being the product. It cannot be
+   done alone.
 
 2. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
