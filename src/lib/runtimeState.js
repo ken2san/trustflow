@@ -26,9 +26,12 @@
 // stays in localStorage, where it already was.
 //
 // Three properties this has to hold, each with a test:
-//   1. Nothing outside CLOUD_SAFE_KEYS is sent, however the caller assembles
-//      the snapshot. An allowlist, not a denylist: this state object grows,
-//      and a denylist leaks whatever is added to it next.
+//   1. Nothing the shape does not declare is sent, AT ANY DEPTH, however the
+//      caller assembles the snapshot. An allowlist, not a denylist: this state
+//      object grows, and a denylist leaks whatever is added to it next. The
+//      first attempt at this allowlisted top-level keys only, which admitted
+//      two whole profile objects whose nested fields describe other people —
+//      see CLOUD_SAFE_SHAPE for what that would have cost.
 //   2. A snapshot read back from the server is filtered on the way IN as well.
 //      Rows written before this change still hold the old keys, and
 //      rehydrating them would put that data back into the app — and, on the
@@ -43,45 +46,127 @@ import { getDeviceId } from './identity.js'
 const LOCAL_SNAPSHOT_KEY = 'tf_runtime_snapshot_v1'
 
 /**
- * The only keys that may be written to, or read from, the server.
+ * The ONLY values that may be written to, or read from, the server — declared
+ * all the way down to the leaf.
  *
- * The test applied to each: does restoring it on a second device do something
- * useful, AND does it describe nobody but the account holder? Everything that
- * failed either half stayed local.
+ * WHY A SHAPE AND NOT A LIST OF KEYS
+ * The first version of this was a flat list of top-level key names, and it was
+ * wrong in a way worth recording. `uiProfile` and `internalProfile` were on it,
+ * described in a comment as "mock gamification counters, no personal data" —
+ * which was a claim about the names, not about the objects. Their declared
+ * shapes (src/lib/profileTypes.js) are:
  *
- * Deliberately excluded, with the reason:
- *   selectedItem      — the open agreement, counterparty address included.
- *                       Restoring it cross-device is also pointless: the views
- *                       that render an agreement are refused by the hydrate
- *                       path anyway, because the data behind them is fetched,
- *                       not stored here.
- *   byocForm          — a draft agreement, including the address being invited.
- *   contractHistory   — past counterparties.
- *   activityLog       — a timeline of who did what, and when.
- *   badActorFlags     — one user's assertions about other people. This is the
- *                       single worst thing in the list to sync and keep
- *                       indefinitely, and it was in there.
- *   acceptanceProtocol — local workflow preferences; harmless and useless to
- *                       sync, so it stays out by the same rule.
+ *   internalProfile.feedbackComments[] — { comment, rating, partnerId }
+ *   internalProfile.recentHistory[]    — { partnerId, feedback, value, … }
+ *   internalProfile.networkGraph[]     — { id, type, connectedAt }
+ *   uiProfile.badActorFlags[]          — flags raised about other people
+ *   uiProfile.location                 — free text, entered by the user
+ *
+ * so a top-level allowlist that admitted the container admitted all of that
+ * with it. Nothing in the app populates those fields today, so no such data has
+ * in fact been sent — but an allowlist whose guarantee depends on a nested
+ * field happening to stay empty is not a guarantee, and the next feature to
+ * write a `partnerId` into a profile would have shipped it to the server with
+ * no code change here and nothing to notice.
+ *
+ * So the unit of permission is a declared leaf with a declared type. Anything
+ * not named here is dropped at whatever depth it appears; anything named but
+ * of the wrong type is dropped rather than coerced. `internalProfile` is gone
+ * entirely: nothing in the app ever writes it, so syncing it bought nothing in
+ * exchange for carrying every one of those fields.
+ *
+ * The eight `uiProfile` numbers that remain are exactly the ones the app
+ * actually updates (App.jsx:656, :687, :793 and ContractView.jsx:141, :188).
+ * Everything else in that object is a static initial value, so dropping it
+ * costs no behaviour at all. They are also mock Trust Ladder counters, not
+ * evidence of anything — see Roadmap.md.
  */
-export const CLOUD_SAFE_KEYS = [
-  'hasOnboarded',
-  'mode',
-  'view',
-  'step',
-  // Mock gamification counters. No personal data, and not evidence of
-  // anything — see the Trust Ladder note in Roadmap.md.
-  'uiProfile',
-  'internalProfile',
-  'savedAt',
-]
+export const CLOUD_SAFE_SHAPE = {
+  hasOnboarded: 'boolean',
+  mode: 'string',
+  view: 'string',
+  step: 'number',
+  savedAt: 'string',
+  uiProfile: {
+    level: 'number',
+    exp: 'number',
+    points: 'number',
+    trustScore: 'number',
+    completedContracts: 'number',
+    avgRating: 'number',
+    totalEarned: 'number',
+    totalSpent: 'number',
+  },
+}
 
-/** Keep only the allowlisted keys. Used on the way out AND on the way back. */
-export function cloudSafeSubset(snapshot) {
-  if (!snapshot || typeof snapshot !== 'object') return {}
+/** Whether a value is of the declared primitive type. No coercion. */
+function isOfType(value, type) {
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value)
+  if (type === 'boolean') return typeof value === 'boolean'
+  if (type === 'string') return typeof value === 'string'
+  return false
+}
+
+/**
+ * Keep only what the shape declares, at every depth. Used on the way out AND
+ * on the way back.
+ *
+ * Iterates the SHAPE, never the input, which is what makes a field nobody
+ * declared unreachable rather than merely unlisted — including one added to a
+ * nested object later, and including `__proto__` or any other key a crafted
+ * payload might carry, since such a key is never read at all.
+ *
+ * An object is only descended into when the shape says it is an object. A
+ * declared leaf whose value arrives as an object or an array is dropped, so a
+ * scalar slot cannot be used to smuggle a structure through.
+ */
+function filterToShape(value, shape) {
+  if (typeof shape === 'string') return isOfType(value, shape) ? value : undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+
   const out = {}
-  for (const key of CLOUD_SAFE_KEYS) {
-    if (key in snapshot) out[key] = snapshot[key]
+  for (const key of Object.keys(shape)) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue
+    const kept = filterToShape(value[key], shape[key])
+    if (kept !== undefined) out[key] = kept
+  }
+  // An object that kept nothing is not worth sending, and sending `{}` would
+  // make a filtered-away branch look like one that was genuinely empty.
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+export function cloudSafeSubset(snapshot) {
+  return filterToShape(snapshot, CLOUD_SAFE_SHAPE) ?? {}
+}
+
+/**
+ * Kept as the flat list of top-level names the server may hold, since the
+ * merge in loadRuntimeSnapshot and a couple of tests read it. Derived from the
+ * shape rather than maintained beside it: two lists that must agree are one
+ * list and a bug waiting.
+ */
+export const CLOUD_SAFE_KEYS = Object.keys(CLOUD_SAFE_SHAPE)
+
+/**
+ * Lay a filtered remote snapshot over the local one, following the same shape.
+ *
+ * A plain `{ ...local, ...remote }` would be wrong now that the shape reaches
+ * inside objects: the server's `uiProfile` holds eight of that object's
+ * seventeen fields, so a shallow spread would REPLACE the local one and wipe
+ * the nine the server is no longer allowed to carry. The user would watch a
+ * cross-device restore delete data the privacy change was supposed to leave
+ * alone. Merging per declared leaf keeps both halves.
+ */
+export function mergeRemoteOverLocal(local, remote, shape = CLOUD_SAFE_SHAPE) {
+  if (!remote || typeof remote !== 'object') return local
+  if (!local || typeof local !== 'object') return remote
+
+  const out = { ...local }
+  for (const key of Object.keys(shape)) {
+    if (!Object.prototype.hasOwnProperty.call(remote, key)) continue
+    out[key] = typeof shape[key] === 'string'
+      ? remote[key]
+      : mergeRemoteOverLocal(local[key], remote[key], shape[key])
   }
   return out
 }
@@ -164,8 +249,9 @@ export async function loadRuntimeSnapshot(actorId) {
   if (!remote) return local
   if (!local) return remote
 
-  // Local first for the keys the server no longer carries, remote on top for
-  // the ones it does: a second device gets what the server can legitimately
-  // give it, and this device keeps the rest of its own state.
-  return { ...local, ...remote }
+  // Local first for everything the server no longer carries, remote on top for
+  // the declared leaves it does: a second device gets what the server can
+  // legitimately give it, and this device keeps the rest of its own state —
+  // including the parts of a profile object the server no longer holds.
+  return mergeRemoteOverLocal(local, remote)
 }
