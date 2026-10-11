@@ -28,6 +28,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
+import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 
 const CORS = {
@@ -154,6 +155,14 @@ serve(async (req: Request) => {
         // the address they accepted with, exactly as log-event resolves it.
         actorId: `guest:${claimedEmail}`,
         party: 'guest_hirer',
+        // The authority for an acceptance is the single-use invitation being
+        // consumed in this same transaction. The counterparty presents no
+        // credential of their own and there is no authentication event here at
+        // all — which is worth recording precisely because this is the act the
+        // whole agreement rests on. The address below is typed by the accepter
+        // and is already marked unverified; this says the same about the
+        // authority behind it.
+        assurance: bearerAssurance('invite_token'),
         payload: {
           counterparty_name: typeof counterparty_name === 'string'
             ? counterparty_name.slice(0, 200) : null,

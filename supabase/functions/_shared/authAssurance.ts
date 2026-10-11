@@ -46,6 +46,20 @@
 // An emailed OTP demonstrates control of a mailbox at a moment in time. It is
 // not identity proofing, and this module never labels it as such.
 
+/**
+ * Which credential the actor presented. Distinct from `method`, which is the
+ * authentication factor Supabase recorded inside an account session.
+ *
+ * The two bearer values are kept apart because they are not the same authority:
+ * an invitation is single-use and was delivered by the owner out of band, while
+ * the access token is reusable and exists only because an invitation was
+ * consumed. A reader deciding how much an act is worth needs to know which.
+ */
+export type PresentedCredential =
+  | 'invite_token'
+  | 'guest_access_token'
+  | 'account_jwt'
+
 /** The subset of a Supabase JWT this module reads. */
 export interface SessionClaims {
   aal?: string | null
@@ -68,6 +82,8 @@ export type AssuranceLevel =
 
 export interface AuthAssurance {
   assurance: AssuranceLevel
+  /** Which credential was actually presented on the request. */
+  credential: PresentedCredential | null
   /** From `amr`, e.g. 'otp', 'magiclink', 'password'. null when unknown. */
   method: string | null
   /** Supabase's own level, e.g. 'aal1'. Recorded verbatim, not interpreted. */
@@ -135,7 +151,7 @@ export function assuranceFromClaims(
 ): AuthAssurance {
   if (!claims) {
     return {
-      assurance: 'bearer_capability', method: null, aal: null,
+      assurance: 'bearer_capability', credential: null, method: null, aal: null,
       authenticated_at: null, seconds_since_authentication: null,
       recent_authentication: false,
       act_bound_authentication: false, act_binding_mechanism: null,
@@ -153,6 +169,7 @@ export function assuranceFromClaims(
 
   return {
     assurance: claims.is_anonymous ? 'anonymous' : 'account_session',
+    credential: 'account_jwt',
     method: typeof latest?.method === 'string' ? latest.method : null,
     aal: typeof claims.aal === 'string' ? claims.aal : null,
     authenticated_at: authenticatedAt,
@@ -164,10 +181,18 @@ export function assuranceFromClaims(
   }
 }
 
-/** The guest's authority: a capability, with no authentication event behind it. */
-export function bearerAssurance(): AuthAssurance {
+/**
+ * The guest's authority: a capability, with no authentication event behind it.
+ *
+ * The credential is a required argument rather than a default, because the two
+ * kinds differ in what they prove and a caller that did not think about which
+ * one it holds should not be able to record either.
+ */
+export function bearerAssurance(
+  credential: 'invite_token' | 'guest_access_token',
+): AuthAssurance {
   return {
-    assurance: 'bearer_capability', method: null, aal: null,
+    assurance: 'bearer_capability', credential, method: null, aal: null,
     authenticated_at: null, seconds_since_authentication: null,
     recent_authentication: false,
     act_bound_authentication: false, act_binding_mechanism: null,
@@ -199,7 +224,9 @@ export function assuranceMeaning(a: AuthAssurance): { proves: string[]; does_not
   if (a.assurance === 'bearer_capability') {
     return {
       proves: [
-        'the actor presented a capability this agreement\'s owner issued',
+        a.credential === 'invite_token'
+          ? 'the actor presented the single-use invitation this agreement\'s owner delivered out of band, and consumed it'
+          : 'the actor presented the reusable access credential issued when that invitation was consumed',
         'the action was bound to a specific agreement version by agreement_hash',
       ],
       does_not_prove: [
@@ -254,4 +281,113 @@ export function stepUpRequired(
   // this gate reduces the window of a stolen session and nothing more, and must
   // not be described to a user as confirming they signed anything.
   return !a.recent_authentication
+}
+
+/**
+ * Read the claims out of a JWT that has ALREADY been verified, and only then.
+ *
+ * THE TRUST BOUNDARY, WHICH IS THE WHOLE POINT OF THIS FUNCTION
+ * These claims become permanent, hashed evidence. A caller must never be able
+ * to choose them. So:
+ *
+ *   1. This function does NOT verify anything. It decodes. The only legitimate
+ *      way to call it is with a token that `auth.getUser()` has already
+ *      accepted — a successful getUser means the auth server validated the
+ *      signature, so the payload is one the project itself issued.
+ *   2. `verifiedUserId` is required, and the decoded `sub` must equal it. That
+ *      turns the ordering requirement from a comment into a check: a caller
+ *      that passes some other token — one from the body, or a second header —
+ *      gets null instead of foreign claims, because its `sub` will not match
+ *      the identity the server verified.
+ *   3. Anything malformed returns null, never a partial object. A record that
+ *      says "method unrecorded" is honest; one that says "password" because a
+ *      decode half-succeeded is not.
+ *
+ * Nothing here is ever read from a request body, a query parameter or a
+ * client-supplied field. There is no code path by which a caller can state its
+ * own assurance.
+ */
+export function claimsFromVerifiedJwt(
+  jwt: string | null | undefined,
+  verifiedUserId: string,
+): SessionClaims | null {
+  if (!jwt || !verifiedUserId) return null
+  const segments = jwt.split('.')
+  if (segments.length !== 3) return null
+
+  try {
+    const base64 = segments[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const bytes = Uint8Array.from(atob(padded), c => c.charCodeAt(0))
+    const claims = JSON.parse(new TextDecoder().decode(bytes))
+    if (!claims || typeof claims !== 'object') return null
+    // The ordering check described above.
+    if (claims.sub !== verifiedUserId) return null
+    return {
+      aal: typeof claims.aal === 'string' ? claims.aal : null,
+      amr: Array.isArray(claims.amr) ? claims.amr : null,
+      is_anonymous: claims.is_anonymous === true,
+      session_id: typeof claims.session_id === 'string' ? claims.session_id : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What goes into the permanent record — a deliberate subset of the assurance.
+ *
+ * TWO FIELDS ARE WITHHELD, FOR DIFFERENT REASONS.
+ *
+ * `authenticated_at` is dropped. It is an absolute timestamp describing a
+ * person's sign-in, and it would sit forever in an append-only log that cannot
+ * be edited or deleted, in a payload the counterparty can be shown. It also
+ * adds nothing: `created_at` minus `seconds_since_authentication` reproduces it
+ * to the second for anyone who needs it. Keeping the relative figure preserves
+ * the entire evidential content — "signed in moments ago" versus "signed in
+ * three weeks ago" — while not writing a second dated fact about someone's
+ * session into permanent storage. PII minimisation here is subtraction without
+ * loss, which is the only kind worth doing.
+ *
+ * `session_id` is dropped outright. It is a correlation handle across every act
+ * in a session and nothing in the evidence model asks for one.
+ *
+ * The window is recorded ALONGSIDE the boolean it produced. A bare
+ * `recent_authentication: true` is unreadable in five years if the constant
+ * changes; the threshold it was judged against has to travel with it.
+ */
+export function assuranceForRecord(a: AuthAssurance): Record<string, unknown> {
+  return {
+    assurance: a.assurance,
+    credential: a.credential,
+    method: a.method,
+    aal: a.aal,
+    seconds_since_authentication: a.seconds_since_authentication,
+    recent_authentication: a.recent_authentication,
+    recent_authentication_window_seconds: RECENT_AUTHENTICATION_WINDOW_SECONDS,
+    act_bound_authentication: a.act_bound_authentication,
+    act_binding_mechanism: a.act_binding_mechanism,
+  }
+}
+
+/**
+ * The legacy string, now derived from the credential instead of the role.
+ *
+ * `_auth_method` was `party === 'guest_hirer' ? 'invite_capability' : ...` — a
+ * restatement of `_actor_role` dressed as an assurance claim. The field is kept
+ * because readers exist that already parse it (guest-contract-events surfaces
+ * it, and `scripts/make-receipt.mjs` reports it), and its two values are
+ * unchanged for both of today's paths, so no stored row and no existing reader
+ * is affected.
+ *
+ * What changes is where the value comes from. It now follows the credential
+ * that was actually presented, so the one case the ternary would have got wrong
+ * — a counterparty who holds a real account and acts with a JWT, which
+ * `partyAuth.ts` already supports — is recorded as the account session it is
+ * rather than as an invitation it never used.
+ */
+export function legacyAuthMethod(a: AuthAssurance): string {
+  if (a.assurance === 'anonymous') return 'anonymous'
+  if (a.assurance === 'bearer_capability') return 'invite_capability'
+  return 'account_session'
 }

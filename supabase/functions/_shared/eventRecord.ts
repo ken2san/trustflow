@@ -18,6 +18,9 @@ import {
   HASH_VERSION, eventCanonical, payloadHash, deriveDodHash, sha256Hex,
   buildAgreementSnapshot, deriveAgreementHash,
 } from './eventCanonical.ts'
+import {
+  type AuthAssurance, assuranceForRecord, legacyAuthMethod,
+} from './authAssurance.ts'
 
 /** The event that records a counterparty accepting an agreement. */
 export const ACCEPTANCE_TYPE = 'dod.consent_recorded'
@@ -102,12 +105,20 @@ export interface EventRecord {
  * this is, who is making it, and the substance they are asserting.
  */
 export async function buildEventRecord({
-  type, contract, actorId, party, payload, prevEventHash, idempotencyKey = null,
+  type, contract, actorId, party, assurance, payload, prevEventHash,
+  idempotencyKey = null,
 }: {
   type: string
   contract: Record<string, unknown>
   actorId: string
   party: 'earner' | 'guest_hirer'
+  /**
+   * How the writer was authenticated, derived by the calling function from the
+   * credential it verified. Required, with no default: a default would mean
+   * some path could record an assurance nobody established, which is the
+   * failure this whole change exists to remove.
+   */
+  assurance: AuthAssurance
   payload?: unknown
   prevEventHash: string
   idempotencyKey?: string | null
@@ -120,11 +131,12 @@ export async function buildEventRecord({
     // they held in this agreement at the time.
     _actor_role: party,
     _role_in_agreement: roleHere,
-    // How this party obtained the authority to act. A guest's credential exists
-    // only because a single-use invitation was consumed, so that is what their
-    // authority traces back to. This claims nothing about email verification,
-    // account identity, or who the person is.
-    _auth_method: party === 'guest_hirer' ? 'invite_capability' : 'account_session',
+    // How this party obtained the authority to act, read off the credential the
+    // calling function verified rather than inferred from the role. See
+    // authAssurance.ts for what each value does and does not prove; the limits
+    // travel with the data because a machine reader cannot consult a document.
+    _auth_method: legacyAuthMethod(assurance),
+    _authentication: assuranceForRecord(assurance),
     ...(type === ACCEPTANCE_TYPE ? acceptanceFacts(contract) : {}),
   }
 

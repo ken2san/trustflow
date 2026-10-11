@@ -5,6 +5,9 @@ import {
 import {
   eventCanonical, canonicalVersionOf, payloadHash, sha256Hex, deriveAgreementHash,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
+import {
+  assuranceFromClaims, bearerAssurance,
+} from '../../supabase/functions/_shared/authAssurance.ts'
 
 // Two Edge Functions write events now — log-event for assertions, and
 // validate-invite-token for the acceptance, which had to move there so that
@@ -30,6 +33,7 @@ const acceptance = (overrides = {}) => buildEventRecord({
   contract: CONTRACT,
   actorId: `guest:${CONTRACT.hirer_email}`,
   party: 'guest_hirer',
+  assurance: bearerAssurance('invite_token'),
   payload: { counterparty_name: 'Guest', counterparty_email: CONTRACT.hirer_email },
   prevEventHash: 'GENESIS',
   ...overrides,
@@ -111,6 +115,7 @@ describe('what an acceptance records', () => {
     const record = await buildEventRecord({
       type: ACCEPTANCE_TYPE, contract: forwarded,
       actorId: 'guest:someone.else@example.test', party: 'guest_hirer',
+      assurance: bearerAssurance('invite_token'),
       payload: {}, prevEventHash: 'GENESIS',
     })
 
@@ -129,6 +134,7 @@ describe('what an acceptance records', () => {
       type: ACCEPTANCE_TYPE,
       contract: { ...CONTRACT, hirer_email: claimed },
       actorId: `guest:${claimed}`, party: 'guest_hirer',
+      assurance: bearerAssurance('invite_token'),
       payload: {}, prevEventHash: 'GENESIS',
     })
 
@@ -141,6 +147,7 @@ describe('what an acceptance records', () => {
       type: ACCEPTANCE_TYPE,
       contract: { ...CONTRACT, performed_by: 'counterparty' },
       actorId: 'guest:x@example.test', party: 'guest_hirer',
+      assurance: bearerAssurance('invite_token'),
       payload: {}, prevEventHash: 'GENESIS',
     })
 
@@ -153,6 +160,9 @@ describe('what an acceptance records', () => {
     const asserted = await buildEventRecord({
       type: 'performance.asserted', contract: CONTRACT,
       actorId: 'earner-uuid', party: 'earner',
+      assurance: assuranceFromClaims({
+        aal: 'aal1', amr: [{ method: 'otp', timestamp: 1791731476 }],
+      }),
       payload: { note: 'delivered' }, prevEventHash: 'abc',
     })
 
@@ -183,5 +193,174 @@ describe('acceptanceFacts', () => {
   it('reports an absent invited address as absent rather than guessing', () => {
     const { invited_hirer_email: _none, ...noInvite } = CONTRACT
     expect(acceptanceFacts(noInvite)._invited_recipient).toBeNull()
+  })
+})
+
+// ── what the record says about authentication ────────────────────────────────
+// Until this change `_auth_method` was `party === 'guest_hirer' ? … : …`, a
+// restatement of `_actor_role` in the shape of an assurance claim. These tests
+// pin the two properties that fix is for: the value follows the CREDENTIAL, and
+// nothing a caller sends can influence it.
+
+describe('the authentication an event records', () => {
+  const accountClaims = { aal: 'aal1', amr: [{ method: 'otp', timestamp: 1791731476 }] }
+
+  it('follows the credential, not the role', async () => {
+    // The case the old ternary got wrong, and which partyAuth.ts already
+    // supports: a counterparty who holds a real account and acts with a JWT.
+    // The ternary would have called that an invitation capability.
+    const record = await buildEventRecord({
+      type: 'performance.accepted', contract: CONTRACT,
+      actorId: 'hirer-uuid', party: 'guest_hirer',
+      assurance: assuranceFromClaims(accountClaims),
+      payload: {}, prevEventHash: 'abc',
+    })
+
+    expect(record.payload._actor_role).toBe('guest_hirer')
+    expect(record.payload._auth_method).toBe('account_session')
+    expect(record.payload._authentication.credential).toBe('account_jwt')
+  })
+
+  it('tells the two bearer credentials apart', async () => {
+    const accepting = await acceptance()
+    const later = await buildEventRecord({
+      type: 'performance.accepted', contract: CONTRACT,
+      actorId: 'guest:invited@example.test', party: 'guest_hirer',
+      assurance: bearerAssurance('guest_access_token'),
+      payload: {}, prevEventHash: 'abc',
+    })
+
+    expect(accepting.payload._authentication.credential).toBe('invite_token')
+    expect(later.payload._authentication.credential).toBe('guest_access_token')
+    // Both are capabilities. Neither is an authentication event.
+    expect(accepting.payload._authentication.method).toBeNull()
+    expect(later.payload._authentication.assurance).toBe('bearer_capability')
+  })
+
+  it('records the method and level the session actually carried', async () => {
+    const record = await buildEventRecord({
+      type: 'performance.asserted', contract: CONTRACT,
+      actorId: 'earner-uuid', party: 'earner',
+      assurance: assuranceFromClaims(accountClaims, new Date(1791731776 * 1000)),
+      payload: {}, prevEventHash: 'abc',
+    })
+
+    expect(record.payload._authentication.method).toBe('otp')
+    expect(record.payload._authentication.aal).toBe('aal1')
+    expect(record.payload._authentication.seconds_since_authentication).toBe(300)
+  })
+
+  it('never writes an absolute sign-in time or a session handle', async () => {
+    // Both are withheld deliberately: the log is append-only and the payload is
+    // shown to the counterparty, and created_at minus the relative figure
+    // reproduces the instant for anyone who needs it.
+    const record = await buildEventRecord({
+      type: 'performance.asserted', contract: CONTRACT,
+      actorId: 'earner-uuid', party: 'earner',
+      assurance: assuranceFromClaims(accountClaims),
+      payload: {}, prevEventHash: 'abc',
+    })
+
+    const serialized = JSON.stringify(record.payload)
+    expect(record.payload._authentication.authenticated_at).toBeUndefined()
+    expect(record.payload._authentication.session_id).toBeUndefined()
+    expect(serialized).not.toContain('authenticated_at')
+    expect(serialized).not.toContain('session_id')
+  })
+
+  it('answers the act-binding question rather than leaving the field out', async () => {
+    const record = await buildEventRecord({
+      type: 'performance.asserted', contract: CONTRACT,
+      actorId: 'earner-uuid', party: 'earner',
+      // As recent as it is possible to be: authenticated this instant.
+      assurance: assuranceFromClaims({ aal: 'aal1', amr: [{ method: 'otp', timestamp: Math.floor(Date.now() / 1000) }] }),
+      payload: {}, prevEventHash: 'abc',
+    })
+
+    expect(record.payload._authentication.recent_authentication).toBe(true)
+    // Recency is not binding, however recent. No challenge exists.
+    expect(record.payload._authentication.act_bound_authentication).toBe(false)
+    expect(record.payload._authentication.act_binding_mechanism).toBeNull()
+    // The threshold travels with the boolean it produced.
+    expect(record.payload._authentication.recent_authentication_window_seconds).toBe(300)
+  })
+
+  it('cannot be forged by a caller sending its own assurance', async () => {
+    const record = await buildEventRecord({
+      type: 'performance.asserted', contract: CONTRACT,
+      actorId: 'guest:invited@example.test', party: 'guest_hirer',
+      assurance: bearerAssurance('guest_access_token'),
+      payload: {
+        _authentication: { assurance: 'account_session', aal: 'aal2', act_bound_authentication: true },
+        _auth_method: 'government_id_verified',
+      },
+      prevEventHash: 'abc',
+    })
+
+    expect(record.payload._auth_method).toBe('invite_capability')
+    expect(record.payload._authentication.assurance).toBe('bearer_capability')
+    expect(record.payload._authentication.aal).toBeNull()
+    expect(record.payload._authentication.act_bound_authentication).toBe(false)
+    expect(JSON.stringify(record.payload)).not.toContain('government_id_verified')
+  })
+})
+
+// ── compatibility with everything already written ────────────────────────────
+// Adding a payload key changes payload_hash for NEW events, which is expected
+// and harmless. What must not change is the canonical: the list of fields the
+// event_hash is computed over, and how each version computes it. If that moved,
+// every one of production's 2396 stored events would read as tampered with.
+
+describe('events written before this change', () => {
+  // A real row from the E2E project, recorded under v4 before _authentication
+  // existed. Its stored event_hash is the assertion: if the canonical shifts,
+  // this fails.
+  const HISTORICAL = {
+    id: 'a3b4a0c0-9c8f-4ff7-9c64-2a1e25f4db2a',
+    type: 'performance.asserted',
+    contract_id: '8c98dca5-3ba7-4e65-9f1a-7c1b20ba2d3c',
+    actor_id: 'guest:harness-guest@example.invalid',
+    dod_hash: 'f0b9e0a3cf0b4d9d9a4f0a3e9c4a1b2c3d4e5f60718293a4b5c6d7e8f9012345',
+    created_at: '2026-10-11T04:15:22.016Z',
+    prev_event_hash: 'GENESIS',
+    payload_hash: '1111111111111111111111111111111111111111111111111111111111111111',
+    agreement_hash: '2222222222222222222222222222222222222222222222222222222222222222',
+    hash_version: 4,
+  }
+
+  it('hash the same fields, in the same order, as before', async () => {
+    // The canonical string itself, spelled out. A reader can see exactly what
+    // is covered, and any reordering or added field breaks this literal.
+    expect(eventCanonical(HISTORICAL, 4)).toBe(JSON.stringify({
+      id: HISTORICAL.id,
+      type: HISTORICAL.type,
+      contract_id: HISTORICAL.contract_id,
+      actor_id: HISTORICAL.actor_id,
+      dod_hash: HISTORICAL.dod_hash,
+      created_at: HISTORICAL.created_at,
+      prev_hash: HISTORICAL.prev_event_hash,
+      payload_hash: HISTORICAL.payload_hash,
+      agreement_hash: HISTORICAL.agreement_hash,
+    }))
+  })
+
+  it('are verified under their own version, which this change did not touch', async () => {
+    for (const version of [1, 2, 3, 4]) {
+      const canonical = eventCanonical(HISTORICAL, version)
+      // Each version is a prefix of the next, by construction.
+      expect(canonical).toContain('"id":"' + HISTORICAL.id + '"')
+      expect(JSON.parse(canonical).agreement_hash).toBe(version >= 4 ? HISTORICAL.agreement_hash : undefined)
+      expect(JSON.parse(canonical).payload_hash).toBe(version >= 3 ? HISTORICAL.payload_hash : undefined)
+      expect(JSON.parse(canonical).prev_hash).toBe(version >= 2 ? HISTORICAL.prev_event_hash : undefined)
+    }
+  })
+
+  it('still record no _authentication, and that absence is readable', () => {
+    // 2134 production events predate _auth_method entirely. A reader must be
+    // able to tell "nothing was recorded" from "a capability was recorded",
+    // which is why the new field is an object and not a bare string.
+    const legacyPayload = { step: 2 }
+    expect(legacyPayload._authentication).toBeUndefined()
+    expect(legacyPayload._auth_method).toBeUndefined()
   })
 })

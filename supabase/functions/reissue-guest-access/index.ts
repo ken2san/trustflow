@@ -32,6 +32,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { buildEventRecord } from '../_shared/eventRecord.ts'
+import { assuranceFromClaims, claimsFromVerifiedJwt } from '../_shared/authAssurance.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -97,6 +98,10 @@ serve(async (req: Request) => {
       return json({ error: 'not_the_owner' }, 403)
     }
     const earnerUserId = userData.user.id
+    // Read only after getUser accepted the token, and cross-checked against the
+    // identity it returned.
+    const ownerAssurance = assuranceFromClaims(
+      claimsFromVerifiedJwt(authHeader.slice('Bearer '.length), earnerUserId))
 
     const { data: contract, error: contractError } = await admin
       .from('contracts')
@@ -139,6 +144,7 @@ serve(async (req: Request) => {
         contract,
         actorId: earnerUserId,
         party: 'earner',
+        assurance: ownerAssurance,
         payload: {},
         prevEventHash: prevHash,
       })

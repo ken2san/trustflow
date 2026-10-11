@@ -33,6 +33,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord, roleInAgreement } from '../_shared/eventRecord.ts'
+import {
+  type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
+} from '../_shared/authAssurance.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -146,7 +149,7 @@ async function resolveActor(
   req: Request,
   admin: ReturnType<typeof createClient>,
   contract: Record<string, unknown>,
-): Promise<{ actorId: string; role: 'earner' | 'guest_hirer' } | null> {
+): Promise<{ actorId: string; role: 'earner' | 'guest_hirer'; assurance: AuthAssurance } | null> {
   const guestToken = req.headers.get('x-guest-access-token')
   if (guestToken) {
     if (
@@ -160,7 +163,13 @@ async function resolveActor(
     // contract — recorded by validate-invite-token, not chosen by the client.
     const hirerEmail = contract.hirer_email as string | null
     if (!hirerEmail) return null
-    return { actorId: `guest:${hirerEmail}`, role: 'guest_hirer' }
+    // A capability, and nothing more: no credential of this actor's own was
+    // tested, so there is no authentication event to record.
+    return {
+      actorId: `guest:${hirerEmail}`,
+      role: 'guest_hirer',
+      assurance: bearerAssurance('guest_access_token'),
+    }
   }
 
   const authHeader = req.headers.get('Authorization')
@@ -174,7 +183,15 @@ async function resolveActor(
   // anonymous caller can never legitimately be a party to one.
   if (data.user.is_anonymous) return null
   if (data.user.id !== contract.earner_user_id) return null
-  return { actorId: data.user.id, role: 'earner' }
+  // Only now, with the token accepted by the auth server and its subject
+  // matched against the user it verified, are its claims read. See
+  // claimsFromVerifiedJwt for why that ordering is a check and not a comment.
+  const claims = claimsFromVerifiedJwt(jwt, data.user.id)
+  return {
+    actorId: data.user.id,
+    role: 'earner',
+    assurance: assuranceFromClaims(claims),
+  }
 }
 
 serve(async (req: Request) => {
@@ -286,6 +303,7 @@ serve(async (req: Request) => {
         contract,
         actorId: actor.actorId,
         party: actor.role,
+        assurance: actor.assurance,
         payload,
         prevEventHash: prevHash,
         idempotencyKey: (idempotency_key as string | null) ?? null,

@@ -104,11 +104,15 @@ async function main() {
       recorded_at: r.created_at,
       actor_role: r.payload?._actor_role ?? null,
       role_in_agreement: r.payload?._role_in_agreement ?? null,
-      // Carried verbatim including its current weakness: this value is derived
-      // from the actor's role rather than observed from the session, so it
-      // does not distinguish an emailed OTP from a password. No JWT, `amr`
-      // entry or authentication timestamp is copied into this file.
+      // Carried verbatim, both of them. The string is the coarse legacy value
+      // two stored values wide; the object is what the server observed from
+      // the credential actually presented, and is absent on every event
+      // written before it existed. Neither is a verdict and neither is
+      // recomputable here — they are what the record says about how the actor
+      // got in. No JWT, `amr` entry or absolute authentication timestamp is
+      // copied into this file; the server does not store one.
       authentication_as_recorded: r.payload?._auth_method ?? null,
+      authentication: r.payload?._authentication ?? null,
       claimed_identity_verified: r.payload?._claimed_identity_verified ?? null,
       idempotency_key: r.idempotency_key ?? null,
       timestamp_token_present: Boolean(r.tsa_token),
@@ -150,8 +154,12 @@ async function main() {
       + 'an allowlisted projection, so the digest cannot be reproduced from what they see.',
       'The identity of any party. The counterparty holds a transferable bearer '
       + 'capability and their address is self-claimed and recorded unverified.',
-      'How any account holder authenticated. _auth_method is currently derived from '
-      + 'the actor role, not observed from the session.',
+      'How any account holder authenticated, beyond what the record states. From '
+      + 'the change that added the `authentication` field this is observed from the '
+      + 'credential presented rather than inferred from the role, but it is still '
+      + 'the server\'s own report of its own check: nothing in this file lets a '
+      + 'reader confirm independently that the described session existed. Events '
+      + 'written earlier carry only the coarse legacy string, or nothing at all.',
       'That the work described was performed, or that any payment moved. TrustFlow '
       + 'records that a party said so.',
       'That TrustFlow showed both parties the same history. There is no external '
@@ -164,7 +172,7 @@ async function main() {
       + 'Consent given through an authenticated session is not a signature.',
     ],
 
-    counterparty_authority: assuranceMeaning(bearerAssurance()),
+    counterparty_authority: assuranceMeaning(bearerAssurance('guest_access_token')),
   };
 
   // A receipt carries the agreement terms, both parties' roles and an address
