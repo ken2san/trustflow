@@ -69,11 +69,28 @@ fixed this session. Its `logEvent` calls fail server-side by design. Do not
 mistake it for the real flow, and do not read its "✅" history as evidence of
 anything working.
 
+**One transaction has now been carried end to end, 2026-10-11.** Contract
+`8c98dca5`, ¥50,000, on the E2E project: acceptance, delivery asserted with a
+note, two access re-issues, delivery accepted, payment reported — six events,
+ending at `PERFORMANCE_ACCEPTED`. The chain was then **re-verified
+independently** from the raw rows through `_shared/eventCanonical.ts`, outside
+the app: every `event_hash`, `payload_hash`, `agreement_hash`, `dod_hash` and
+chain link recomputed, thirty checks, all matching. The central claim holds on
+a real transaction rather than only in the export's own `VERIFIED` flag.
+
+Ten defects surfaced on the way and all are fixed: a truncated email field, a
+deadline with no floor, a delete confirmation with no Yes, a signed-out screen
+that promised records were safe without having looked, no sign of which
+account you were acting as, two Edge Functions two weeks stale on E2E, an
+unapplied migration, a counterparty permanently locked out, a URL race that
+discarded the recovered view, and a failed load that showed a spinner for
+ever. None was a design fault; every one was something built and never driven.
+What the run did **not** cover is Next Priority #1.
+
 ## Current State
 
 - Branch **`main`**, in sync with `origin/main`, tree clean.
-- Build ✓ 0 errors (`index-*.js` ~610 kB, css ~62 kB). Unit tests **201 passing**
-  across 12 files (`npm test`).
+- Build ✓ 0 errors. Unit tests **206 passing** across 12 files (`npm test`).
 - **Two Supabase projects**, both in org `wavfjqgbnahqfhgeleqe` (free), Mumbai:
 
   | | ref | used by |
@@ -83,14 +100,19 @@ anything working.
 
   See `docs/e2e-project.md` for the whole arrangement. Live E2E stood at 92/92 as
   of 2026-09-26; not re-run this session (no live-flow code changed there).
-- **29 migrations**, fully applied to production, nothing pending. Newest:
-  `20260929000200_delete_unaccepted_drafts.sql` (grants `delete` on `contracts`
-  to `authenticated`, gated entirely by the RLS policy above it).
+- **30 migrations. For the first time the two projects are NOT level, and the
+  E2E one is ahead.** `20261011000000_reissue_guest_access.sql` is applied to
+  **trustflow-e2e only**; production is still at 29. Every earlier drift ran
+  the other way, so do not assume parity in either direction — check.
+  Production's newest remains `20260929000200_delete_unaccepted_drafts.sql`.
 - **Edge Functions in production**: `log-event` (v9), `guest-contract-events`
   (v8), `validate-invite-token` (v8) — all called from `src/`. Plus
   `create-payment-intent`, `capture-payment`, `cancel-payment` (deployed,
-  current, unreachable from the app). Every deploy this session was verified by
-  downloading the source back and diffing — do that, not `updated_at`.
+  current, unreachable from the app). **`reissue-guest-access` does not exist
+  in production**, and production's `log-event` and `guest-contract-events`
+  predate the `access.reissued` registration, so the re-issue feature is live
+  on E2E only. Verify a deploy by behaviour or by downloading the source back
+  and diffing — never by `updated_at`.
 - **`send-acceptance-email` and `timestamp-event` remain deleted** (both 404
   since 2026-09-26). Do not redeploy either.
 - **Auth, materially changed this session:**
@@ -175,48 +197,33 @@ anything working.
 
 ## Next Priority (in order)
 
-1. **The dogfood transaction is complete.** Done 2026-10-11 against the E2E
-   project, `8c98dca5` "新規サービスのロゴおよびアイコン作成", ¥50,000, carried
-   from invitation to `PERFORMANCE_ACCEPTED`: acceptance, delivery asserted
-   with a note, two access re-issues, delivery accepted, payment reported.
-   Six events, and the whole chain was **re-verified independently** from the
-   raw rows — every `event_hash`, `payload_hash`, `agreement_hash`, `dod_hash`
-   and chain link recomputed through `_shared/eventCanonical.ts` and matched,
-   thirty checks in all. The product's central claim holds on a real
-   transaction, not only in its own export's self-report.
+1. **A real second human.** The dogfood proved the mechanism (see "Where the
+   product stands"); it did not test a stranger. Both addresses were one
+   operator in two browser profiles, and across all 86 accepted contracts
+   `hirer_user_id` is null with only `hirer_email` set — a guest never gets an
+   account row, and the address is the one they typed. So nothing yet has
+   tested usability for someone who did not build this, identity,
+   misunderstanding, correction or dispute. That is where `agreement_hash` and
+   the invited-versus-claimed distinction stop being plumbing and become the
+   product. It cannot be done alone.
 
-   Everything it turned up was a real defect and all of them are fixed: a
-   truncated email field, a deadline with no floor, a delete confirmation with
-   no Yes, a signed-out screen that promised records were safe without having
-   looked, no indication of which account you were acting as, two Edge
-   Functions two weeks stale on the E2E project, an unapplied migration, a
-   counterparty permanently locked out with no recovery, a URL race that threw
-   away the recovered view, and a failed load that showed a spinner for ever.
+   Worth knowing before arranging it: **Send Invite produces a shareable URL
+   and sends no email.** Invitation delivery is manual, through whatever
+   channel the owner picks, and so is a re-issued access link.
 
-   **What it was not: two people.** Both addresses belonged to one operator in
-   two browser profiles, so this was a technical dogfood of the mechanism, not
-   a test of two independently verified parties. The data says so plainly —
-   across all 86 accepted contracts `hirer_user_id` is null and only
-   `hirer_email` is set, because a guest never gets an account row and the
-   address they accepted under is the one they typed. Nothing in the run
-   tested usability for a stranger, identity, misunderstanding or dispute.
+2. **Ship the re-issue work to production when it has earned it.** It is on
+   E2E only: migration `20261011000000`, the new `reissue-guest-access`
+   function, and re-deploys of `log-event` and `guest-contract-events` for the
+   `access.reissued` registration. Order matters — migration first, or the
+   function calls an RPC that does not exist. Not urgent; production has no
+   live counterparty to strand yet.
 
-   Also observed, and worth not assuming otherwise: **Send Invite produces a
-   shareable URL and sends no email.** Delivery of an invitation is manual,
-   through whatever channel the owner chooses, and the same is true of a
-   re-issued access link.
-
-   **The next gap is a real second human.** It is where `agreement_hash`, the
-   invited-versus-claimed address distinction, and the whole correction and
-   dispute path stop being plumbing and start being the product. It cannot be
-   done alone.
-
-2. **Cancellation: build only the withdraw-before-acceptance half.** Decided
+3. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
    undecided. Needs `derive_contract_state()` to project the withdrawal.
-3. **The onboarding "Skip Intro" path lands on the legacy Marketplace, not
+4. **The onboarding "Skip Intro" path lands on the legacy Marketplace, not
    `ContractsHomeView`.** Found this session, not fixed. Reroute it.
-4. **The rest of the MVP consistency refactor** — `App.jsx` decomposition (still
+5. **The rest of the MVP consistency refactor** — `App.jsx` decomposition (still
    ~1740 lines), escrow-terminology cleanup, and whatever the full-spec review
    (not in this repo) still calls for. Trust Score / Trust Passport remain out
    of scope; do not build them speculatively — see `Decisions.md`'s
