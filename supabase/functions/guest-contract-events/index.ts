@@ -68,6 +68,12 @@ const PAYLOAD_ALLOWLIST: Record<string, string[]> = {
   'dod.consent_recorded':  ['counterparty_name', 'counterparty_email', 'dod_items'],
   'dispute.opened':        ['reason'],
   'rating.submitted':      ['rating'],
+  // The owner replaced this guest's access credential. Nothing is allowlisted
+  // because nothing was asserted — the type is the entire statement — but it
+  // must appear in the trail rather than be filtered out of it: it is how a
+  // reader knows the events after it may not be the same person as the ones
+  // before, and the guest is the party most entitled to see that.
+  'access.reissued':       [],
   // A party's claim about payment sent/received/disputed outside TrustFlow —
   // see log-event's ALLOWED_TYPES comment. 'note' is the only field either
   // side writes: method, reference, whatever they choose to say.

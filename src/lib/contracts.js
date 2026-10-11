@@ -148,6 +148,16 @@ export function inviteUrlFor(inviteToken) {
 }
 
 /**
+ * The link that puts a re-issued credential back in the counterparty's
+ * browser. Distinct from an invite URL on purpose: an invite is consumed to
+ * create a party, while this one restores access for a party who already
+ * exists, and conflating them would make a spent invite look reusable.
+ */
+export function guestAccessUrlFor(guestToken) {
+  return `${window.location.origin}${window.location.pathname}?guest=${encodeURIComponent(guestToken)}`
+}
+
+/**
  * Read the contract behind an invite token, without consuming it.
  * Values come from the contract row via the Edge Function — the URL only
  * identifies the contract, it never carries the terms.
@@ -184,10 +194,14 @@ export async function fetchInvite(inviteToken) {
  *          reason is 'no_credential' | 'invalid_guest_token'
  *                  | 'guest_token_expired' | 'error'
  */
-export async function fetchGuestEvidence(contractId) {
+export async function fetchGuestEvidence(contractId, tokenOverride = null) {
   if (!supabase) return { evidence: null, reason: 'error' }
 
-  const guestToken = getGuestAccessToken(contractId)
+  // tokenOverride is how a counterparty arriving on a re-issued link gets in:
+  // they have a credential but not yet a contract id to file it under, and
+  // the server resolves the contract from the token anyway. Everything else
+  // still goes through the stored credential.
+  const guestToken = tokenOverride ?? getGuestAccessToken(contractId)
   if (!guestToken) return { evidence: null, reason: 'no_credential' }
 
   const { data, error } = await supabase.functions.invoke('guest-contract-events', {
@@ -198,6 +212,38 @@ export async function fetchGuestEvidence(contractId) {
     return { evidence: null, reason: data?.error ?? 'error' }
   }
   return { evidence: data, reason: null }
+}
+
+/**
+ * Issue the counterparty a fresh access credential, on the owner's authority.
+ *
+ * The guest's token lives only in the browser they accepted in, so clearing
+ * it, changing device, or accepting in a private window strands them: they can
+ * no longer confirm delivery or report payment, and this side waits on a
+ * review that cannot arrive. Only the owner can do this, the server re-checks
+ * that, and the new token replaces the old one — which also makes this the
+ * only way to kill a credential that has leaked.
+ *
+ * Deliberately not an email match on `hirer_email`: that address is typed by
+ * the guest at acceptance and recorded as unverified, so trusting it would
+ * hand write access to a mistyped address or a shared mailbox. See
+ * 20261011000000_reissue_guest_access.sql.
+ *
+ * @returns {Promise<{ token: string|null, expiresAt: string|null, reason: string|null }>}
+ *          reason is 'not_the_owner' | 'not_accepted' | 'contract_not_found'
+ *                  | 'chain_contention' | 'error'
+ */
+export async function reissueGuestAccess(contractId) {
+  if (!supabase) return { token: null, expiresAt: null, reason: 'error' }
+
+  const { data, error } = await supabase.functions.invoke('reissue-guest-access', {
+    body: { contract_id: contractId },
+  })
+
+  if (error || data?.error || !data?.guest_access_token) {
+    return { token: null, expiresAt: null, reason: data?.error ?? 'error' }
+  }
+  return { token: data.guest_access_token, expiresAt: data.expires_at ?? null, reason: null }
 }
 
 /**

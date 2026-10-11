@@ -41,6 +41,11 @@ const RECORD_LABELS = {
   'payment.reported':      'Reported payment sent',
   'payment.acknowledged':  'Confirmed payment received',
   'payment.disputed':      'Reported payment as not received',
+  // The owner replaced the counterparty's access credential. Worded as an
+  // event about access rather than about the agreement, because that is what
+  // it is — and it belongs on screen rather than only in the export, since it
+  // is what tells a reader the entries after it may be a different person.
+  'access.reissued':       'Counterparty access re-issued',
 };
 
 function formatWhen(iso) {
@@ -77,10 +82,14 @@ export default function AgreementView({
   contract, events, viewerRole, busy, error,
   onAssertDelivery, onAccept, onRequestCorrection,
   onReportPayment, onAcknowledgePayment, onDisputePayment,
-  onExport, exportKind, onCopyInvite, onBack,
+  onExport, exportKind, onCopyInvite, onReissueAccess, onBack,
 }) {
   const [correcting, setCorrecting] = React.useState(false);
   const [reason, setReason] = React.useState('');
+  const [reissuing, setReissuing] = React.useState(false);
+  const [reissuedUrl, setReissuedUrl] = React.useState(null);
+  const [reissueError, setReissueError] = React.useState(null);
+  const [reissueCopied, setReissueCopied] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
   const [exportError, setExportError] = React.useState(null);
   const [assertingDelivery, setAssertingDelivery] = React.useState(false);
@@ -107,6 +116,10 @@ export default function AgreementView({
   // creation dialog closed: opening the contract from the list showed
   // everything about it except the one thing that still needed sending.
   const canReshare = Boolean(contract.invite_token) && !contract.invite_token_used_at && onCopyInvite;
+  // The complement of canReshare: somebody HAS accepted, so the invite is
+  // spent and the only credential that exists is the one in their browser.
+  // That credential cannot be recovered from anywhere else — hence this.
+  const canReissue = Boolean(contract.invite_token_used_at) && Boolean(onReissueAccess);
   // The address the invite was addressed to and the address whoever accepted
   // it actually claimed are recorded separately on purpose (Decisions.md,
   // "What TrustFlow actually knows about the guest") — acceptance never
@@ -173,6 +186,48 @@ export default function AgreementView({
           >
             <Copy className="w-3.5 h-3.5" /> Copy invite link
           </button>
+        )}
+        {canReissue && (
+          <div className="mt-1 space-y-2">
+            <button
+              onClick={async () => {
+                setReissuing(true); setReissueError(null);
+                try { setReissuedUrl(await onReissueAccess()); }
+                catch (e) { setReissueError(e?.message ?? 'Access could not be re-issued.'); }
+                finally { setReissuing(false); }
+              }}
+              disabled={reissuing}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl border border-white/10 text-slate-400 font-bold text-xs hover:bg-white/5 hover:text-white disabled:opacity-40 transition-all"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              {reissuing ? 'Re-issuing…' : 'Re-issue counterparty access'}
+            </button>
+            {reissueError && (
+              <p className="text-xs text-rose-400">{reissueError}</p>
+            )}
+            {reissuedUrl && (
+              <div className="rounded-2xl border border-indigo-500/30 bg-slate-800/60 px-5 py-4 space-y-2">
+                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">
+                  New access link — send this to them
+                </p>
+                <p className="text-xs text-slate-400 break-all font-mono leading-relaxed">{reissuedUrl}</p>
+                {/* Said plainly because both halves surprise people: their old
+                    link stops working, and this one is the credential itself,
+                    so anyone who gets hold of it is them as far as the record
+                    is concerned. */}
+                <p className="text-[11px] text-slate-500">
+                  Their previous link no longer works. Anyone holding this one can act as
+                  the counterparty, so send it the way you sent the invitation.
+                </p>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(reissuedUrl); setReissueCopied(true); setTimeout(() => setReissueCopied(false), 2000); }}
+                  className={`w-full py-2.5 rounded-2xl font-black text-xs transition-all ${reissueCopied ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
+                >
+                  {reissueCopied ? '✓ Copied!' : 'Copy link'}
+                </button>
+              </div>
+            )}
+          </div>
         )}
         {emailMismatch && (
           <p className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-2xl px-4 py-3 mt-1">

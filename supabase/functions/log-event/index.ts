@@ -92,7 +92,12 @@ const ALLOWED_TYPES = new Set([
 // second, later acceptance to the same agreement, with a snapshot taken at a
 // different moment, and leave a reader with two records and no rule for which
 // one is the agreement. Existing rows are untouched and verify as before.
-const SERVER_RECORDED_TYPES = new Set([ACCEPTANCE_TYPE])
+//
+// access.reissued is the same kind of fact: it records that the owner replaced
+// the counterparty's access credential, written by reissue-guest-access inside
+// the transaction that replaces it. A party asserting it themselves would be
+// claiming the credential changed when it did not.
+const SERVER_RECORDED_TYPES = new Set([ACCEPTANCE_TYPE, 'access.reissued'])
 
 // Written before the vocabulary above. Still readable and still verifiable
 // under the canonical they were written with — the log is append-only, so

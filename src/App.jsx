@@ -78,7 +78,7 @@ import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { ensureActorIdentity } from './lib/identity.js';
-import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract } from './lib/contracts.js';
+import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor } from './lib/contracts.js';
 import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
@@ -401,7 +401,10 @@ const App = () => {
         if (typeof snapshot.mode === 'string') setMode(snapshot.mode);
         // Don't restore view when an invite token is present in the URL
         const hasInviteParams = new URLSearchParams(window.location.search).has('token')
-          || new URLSearchParams(window.location.search).has('invite');
+          || new URLSearchParams(window.location.search).has('invite')
+          // A re-issued guest link opens the agreement itself; a restored
+          // view would race it for the same screen.
+          || new URLSearchParams(window.location.search).has('guest');
         // Nor 'agreement': that view renders whatever `agreement` state holds
         // (the fetched contract + events), which this snapshot never carries
         // and nothing here re-fetches. Restoring the view alone left
@@ -909,16 +912,23 @@ const App = () => {
   }, [shapeOwnerEvents]);
 
   /** Open the same agreement as the invited counterparty, with no account. */
-  const openAgreementAsGuest = useCallback(async (contractId) => {
+  const openAgreementAsGuest = useCallback(async (contractId, tokenOverride = null) => {
     setAgreementError(null);
     setAgreement(null);
     setView('agreement');
-    const { evidence, reason } = await fetchGuestEvidence(contractId);
+    const { evidence, reason } = await fetchGuestEvidence(contractId, tokenOverride);
     if (!evidence) {
       setAgreementError(reason === 'no_credential'
         ? 'This browser does not hold a credential for this agreement.'
         : 'The agreement could not be loaded.');
       return;
+    }
+    // Arriving on a re-issued link: the credential came in the URL and the
+    // contract it belongs to is only known once the server has answered, so
+    // it is filed now. From here this browser behaves like the one that
+    // accepted — the link does not have to be kept.
+    if (tokenOverride && evidence.contract?.id) {
+      storeGuestAccessToken(String(evidence.contract.id), tokenOverride);
     }
     setAgreement({
       // A guest has no auth.users row, so RLS gives them nothing from `events`
@@ -941,6 +951,22 @@ const App = () => {
       role: evidence.contract.viewer_role ?? 'receiver',
     });
   }, []);
+
+  // A counterparty arriving on a re-issued link. This is the only way back in
+  // for a guest whose browser no longer holds their credential: the invite is
+  // single-use and spent, no email carries a link, and nothing else opens this
+  // view. Declared after openAgreementAsGuest because it depends on it.
+  //
+  // The token is read once, filed under the contract the server resolves it
+  // to, and then stripped from the address bar — leaving a live credential in
+  // the URL would put it in history, in the next screenshot, and in any link
+  // the guest pastes to ask someone what this is.
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('guest');
+    if (!token) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    openAgreementAsGuest('', token);
+  }, [openAgreementAsGuest]);
 
   /**
    * Hand the party a self-contained, re-verifiable copy of their record.
@@ -993,6 +1019,33 @@ const App = () => {
    * make it — the screen only offers the action that belongs to the viewer, and
    * a refusal here means the two disagree, which is worth showing.
    */
+  /**
+   * Give the counterparty a working credential again.
+   *
+   * Returns the link rather than sending it: there is no mail path for this
+   * (send-acceptance-email is deleted), and the owner already has whatever
+   * channel they used for the invite. The agreement is re-read afterwards so
+   * the access.reissued event appears without a manual refresh — the record
+   * showing that access changed hands is the point, not a side effect.
+   */
+  const reissueAccess = useCallback(async () => {
+    const contract = agreement?.contract;
+    if (!contract?.id) return null;
+    const { token, reason } = await reissueGuestAccess(contract.id);
+    if (!token) {
+      throw new Error(reason === 'not_accepted'
+        ? 'Nobody has accepted this agreement yet — share the invite link instead.'
+        : reason === 'not_the_owner'
+          ? 'Only the owner of this agreement can re-issue access.'
+          : 'Access could not be re-issued. Try again in a moment.');
+    }
+    const rows = await fetchContractEvents(contract.id);
+    setAgreement(prev => (prev?.contract?.id === contract.id
+      ? { ...prev, events: shapeOwnerEvents(rows, contract) }
+      : prev));
+    return guestAccessUrlFor(token);
+  }, [agreement, shapeOwnerEvents]);
+
   const recordAgreementEvent = useCallback(async (type, payload = {}) => {
     const contract = agreement?.contract;
     if (!contract) return;
@@ -1562,6 +1615,7 @@ const App = () => {
               : agreement?.source === 'guest' ? exportGuestRecord : undefined}
             exportKind={agreement?.source === 'guest' ? 'server_verified' : 'verifiable'}
             onCopyInvite={agreement?.source === 'owner' ? copyInviteLink : undefined}
+            onReissueAccess={agreement?.source === 'owner' ? reissueAccess : undefined}
             onBack={() => { setAgreement(null); setView(auth.status === 'signed_in' ? 'home' : 'invite-accepted'); }}
           />
         )}
