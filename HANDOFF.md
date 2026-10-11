@@ -110,8 +110,16 @@ What the run did **not** cover is Next Priority #1.
   `create-payment-intent`, `capture-payment`, `cancel-payment` (deployed,
   current, unreachable from the app). **`reissue-guest-access` does not exist
   in production**, and production's `log-event` and `guest-contract-events`
-  predate the `access.reissued` registration, so the re-issue feature is live
-  on E2E only. Verify a deploy by behaviour or by downloading the source back
+  predate the `access.reissued` registration — but **the frontend for it is
+  already live there.** Vercel deploys production from a push to `main`, so
+  every UI change on 2026-10-11 shipped the moment it was pushed while the
+  backend stayed behind. The live site therefore offers "Re-issue counterparty
+  access" on any accepted contract and the call cannot succeed; worse, the
+  failure is reported as "Try again in a moment", which is wrong advice for a
+  function that does not exist. Nobody real is affected — production has no
+  live counterparty — but "production is unchanged" was said repeatedly today
+  and was only true of the database. **A push to `main` is a production
+  deploy.** Verify a deploy by behaviour or by downloading the source back
   and diffing — never by `updated_at`.
 - **`send-acceptance-email` and `timestamp-event` remain deleted** (both 404
   since 2026-09-26). Do not redeploy either.
