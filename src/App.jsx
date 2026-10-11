@@ -184,6 +184,22 @@ const todayLocalISO = () => new Date().toLocaleDateString('en-CA');
 // --- Main App Component ---
 
 const App = () => {
+  // The query string as the page was opened with, captured during the first
+  // render so that nothing below has to read it live.
+  //
+  // It is mutable global state and one of the effects rewrites it: the guest
+  // recovery link strips its own token from the address bar as soon as it has
+  // it. Readers that run after an await therefore saw a DIFFERENT URL from
+  // readers that ran synchronously, and the hydrate effect — which awaits
+  // identity and the runtime snapshot first — concluded there was no guest
+  // parameter and restored the saved view straight over the agreement the
+  // guest had just been sent to. The agreement loaded; the screen showed "No
+  // contracts yet". Reproduced on 2026-10-11.
+  //
+  // dataBackedViews below stops a saved view being restored TO 'agreement'.
+  // It could not stop one being restored OVER it, which is why capturing the
+  // URL once is the fix rather than another exclusion.
+  const [initialParams] = useState(() => new URLSearchParams(window.location.search));
   // Centralized Acceptance Protocol state (DoD/terms)
   const [acceptanceProtocol, setAcceptanceProtocol] = useState([
     'Definitive Figma Library',
@@ -225,8 +241,7 @@ const App = () => {
   // ?invite=1 that read project/amount/dod straight from query params. A URL
   // may identify a contract; it must not carry what the contract says.
   const [inviteData, setInviteData] = useState(null);
-  const [inviteLoading, setInviteLoading] = useState(() =>
-    new URLSearchParams(window.location.search).has('token'));
+  const [inviteLoading, setInviteLoading] = useState(() => initialParams.has('token'));
   const [inviteTokenError, setInviteTokenError] = useState(null);
   // The guest Hirer's evidence trail, fetched on demand from the contract's
   // guest credential. Null until they ask to see it.
@@ -241,8 +256,7 @@ const App = () => {
   // 'home' is the Contracts list. Marketplace and Command Center still exist
   // and still render, but nothing in the primary navigation points at them —
   // see the command palette for the remaining way in.
-  const [view, setView] = useState(() =>
-    new URLSearchParams(window.location.search).has('token') ? 'invite' : 'home');
+  const [view, setView] = useState(() => (initialParams.has('token') ? 'invite' : 'home'));
   // Who this browser is acting as: 'signed_in', 'anonymous' or 'expired'.
   // Resolved on load from the persisted session — supabase-js restores and
   // refreshes it itself, so this only has to report what it found.
@@ -296,7 +310,7 @@ const App = () => {
   const [contractHistory, setContractHistory] = useState([]);
   const [isRehire, setIsRehire] = useState(false);
   const [hasOnboarded, setHasOnboarded] = useState(() => {
-    if (new URLSearchParams(window.location.search).has('reset')) {
+    if (initialParams.has('reset')) {
       localStorage.removeItem('tf_onboarded');
       return false;
     }
@@ -374,7 +388,7 @@ const App = () => {
 
 
   useEffect(() => {
-    const raw = new URLSearchParams(window.location.search).get('token');
+    const raw = initialParams.get('token');
     if (!raw) return;
     let alive = true;
     fetchInvite(raw).then(({ invite, reason }) => {
@@ -400,11 +414,13 @@ const App = () => {
         if (typeof snapshot.hasOnboarded === 'boolean') setHasOnboarded(snapshot.hasOnboarded);
         if (typeof snapshot.mode === 'string') setMode(snapshot.mode);
         // Don't restore view when an invite token is present in the URL
-        const hasInviteParams = new URLSearchParams(window.location.search).has('token')
-          || new URLSearchParams(window.location.search).has('invite')
+        // Read from the captured query, not the live one: by the time this
+        // runs the guest effect has already stripped its token out of the URL.
+        const hasInviteParams = initialParams.has('token')
+          || initialParams.has('invite')
           // A re-issued guest link opens the agreement itself; a restored
           // view would race it for the same screen.
-          || new URLSearchParams(window.location.search).has('guest');
+          || initialParams.has('guest');
         // Nor 'agreement': that view renders whatever `agreement` state holds
         // (the fetched contract + events), which this snapshot never carries
         // and nothing here re-fetches. Restoring the view alone left
@@ -962,11 +978,15 @@ const App = () => {
   // the URL would put it in history, in the next screenshot, and in any link
   // the guest pastes to ask someone what this is.
   useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get('guest');
+    const token = initialParams.get('guest');
     if (!token) return;
-    window.history.replaceState({}, '', window.location.pathname);
+    // Only this parameter is removed, so a link that also carried others does
+    // not quietly lose them.
+    const url = new URL(window.location.href);
+    url.searchParams.delete('guest');
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
     openAgreementAsGuest('', token);
-  }, [openAgreementAsGuest]);
+  }, [initialParams, openAgreementAsGuest]);
 
   /**
    * Hand the party a self-contained, re-verifiable copy of their record.
@@ -1709,7 +1729,9 @@ const App = () => {
               // nothing. The client used to write that evidence itself in a
               // second call, which meant a dropped connection could leave an
               // accepted agreement with no record of what was accepted.
-              const raw = new URLSearchParams(window.location.search).get('token');
+              // The captured query again: this runs on a click, long after an
+              // effect could have rewritten the address bar.
+              const raw = initialParams.get('token');
               const name = guestName || 'Guest';
               const { accepted, reason } = await acceptInvite(raw, email, name);
               if (!accepted) {
