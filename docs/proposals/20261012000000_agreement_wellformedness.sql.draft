@@ -26,7 +26,10 @@
 -- COMPATIBILITY
 -- Every predicate below was counted against live data on 2026-10-11 before
 -- being written: 1321 production contracts, 2051 dod elements, and 145 E2E
--- contracts. Zero violations of any of them. So no NOT VALID, no backfill, no
+-- contracts. Zero violations of any of them. The whole file is additionally
+-- applied to a throwaway local PostgreSQL 17 by `npm run check:sql-draft`,
+-- which also asserts that it agrees with agreementRules.ts case by case, so
+-- "this SQL compiles" is a test result and not a belief. So no NOT VALID, no backfill, no
 -- exceptions list. Rollback is a DROP CONSTRAINT and loses nothing.
 --
 -- The length bounds are UNRATIFIED: no prior specification sets them, and they
@@ -46,19 +49,48 @@ alter table contracts
 -- The terms themselves: dod_hash is derived from this server-side and is cited
 -- by every event in the chain, so an empty or malformed one produces a chain
 -- whose every link points at nothing.
+--
+-- WHY THIS IS NOT THE OBVIOUS `NOT EXISTS (SELECT ... jsonb_array_elements)`
+-- An earlier draft of this file used exactly that, and it does not compile:
+--
+--   ERROR:  0A000: cannot use subquery in check constraint
+--
+-- A CHECK constraint may not contain a subquery, and jsonb_array_elements is
+-- set-returning, so per-element inspection has to be expressed another way.
+-- Verified on PostgreSQL 17.11 before this rewrite.
+--
+-- WHY `strict`, WHICH IS NOT OPTIONAL HERE
+-- SQL/JSON path defaults to lax mode, which FLATTENS nested arrays. In lax
+-- mode `$[*]` over '[["nested"]]' yields the string "nested", so a nested
+-- array passes a test for "every element is a string" — measured, it was
+-- accepted. `strict` stops the unwrapping and the same input is refused.
+--
+-- WHAT THIS CANNOT EXPRESS, AND WHERE IT WENT INSTEAD
+-- A per-element maximum length. like_regex refuses a repetition count that
+-- large ("invalid regular expression: invalid repetition count(s)"), so the
+-- bound below is on the serialized size of the whole `dod` — which is the
+-- quantity that actually matters for something hashed into a chain forever.
+-- The per-element limit stays in agreementRules.ts and the creation path.
+--
+-- CONSIDERED AND REJECTED: an IMMUTABLE helper function. It expresses every
+-- rule exactly, including per-element length, and reads far better. It can
+-- also be silently disarmed: `CREATE OR REPLACE FUNCTION dod_well_formed(jsonb)
+-- ... AS $$ SELECT true $$` leaves the constraint in place, under the same
+-- name, with no ALTER TABLE and no revalidation, and the table then accepts
+-- anything. Demonstrated live. An inlined expression has nothing to redefine,
+-- so the readability is not worth the extra way to turn the rule off quietly.
 alter table contracts drop constraint if exists contracts_dod_shape_check;
 alter table contracts
   add constraint contracts_dod_shape_check
   check (
     jsonb_typeof(dod) = 'array'
     and jsonb_array_length(dod) between 1 and 50
-    and not exists (
-      select 1
-      from jsonb_array_elements(dod) as e(item)
-      where jsonb_typeof(item) <> 'string'
-         or btrim(item #>> '{}') = ''
-         or length(item #>> '{}') > 1000
-    )
+    -- every element is a string …
+    and not jsonb_path_match(dod, 'strict exists($[*] ? (@.type() <> "string"))')
+    -- … and none of them is blank
+    and not jsonb_path_match(dod, 'strict exists($[*] ? (@ like_regex "^[[:space:]]*$"))')
+    -- total serialized size, standing in for a per-element cap
+    and length(dod::text) <= 20000
   );
 
 -- ── amount ──────────────────────────────────────────────────────────────────

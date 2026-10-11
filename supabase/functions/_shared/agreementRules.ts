@@ -26,10 +26,28 @@
 // Edge Function would drift the same way — with the UI copy silently becoming
 // the lenient one, which is exactly today's situation.
 //
-// WHAT IS DELIBERATELY NOT HERE
-// Anything about whether the deal is wise, fair, or true. These rules decide
-// only whether a proposal is well-formed enough to be recorded. TrustFlow
-// attests that a party said something; it does not vet what they said.
+// WELL-FORMEDNESS ONLY — THE LINE THIS MODULE DOES NOT CROSS
+// Two different kinds of rule get confused with each other, and keeping them
+// apart is the point of this file.
+//
+//   WELL-FORMEDNESS (here). Is this proposal structurally capable of being
+//   recorded as evidence? Is `dod` an array of real strings, is the amount a
+//   positive integer, is the date a date. These are timeless, decidable from
+//   the proposal alone, need no account, no history and no configuration, and
+//   the answer never changes. They can be constraints in the database.
+//
+//   BUSINESS POLICY (NOT here). May THIS party offer THIS deal right now?
+//   Contract value limits, tiering, per-account caps, rate limits, who may
+//   transact with whom, fees. These depend on the actor, on history, and on
+//   decisions nobody has made yet. They belong in the creation path, against
+//   the actor's record, where they can change without a migration.
+//
+// A policy rule written as a CHECK constraint is a policy you can no longer
+// change without a migration, applied retroactively to rows agreed under
+// different terms. That is the mistake this split exists to prevent.
+//
+// Neither kind says anything about whether the deal is wise, fair, or true.
+// TrustFlow attests that a party said something; it does not vet what they said.
 
 /** Every rule violation this module can report. Stable strings: they are an API. */
 export type RuleViolation =
@@ -73,6 +91,12 @@ export const PERFORMED_BY_VALUES = ['creator', 'counterparty'] as const
  * different question from what a sensible maximum is. Raising one is backwards
  * compatible; lowering one is not, so they start generous.
  */
+// Note on enforcement: `dodItemMaxChars` is enforceable here and in the
+// creation path, but NOT as a database CHECK. A CHECK may not contain a
+// subquery, so per-element inspection has to go through SQL/JSON path, whose
+// like_regex rejects a repetition count that large ("invalid repetition
+// count(s)"). The database bounds the serialized size of the whole `dod`
+// instead. Verified against PostgreSQL 17.11.
 export const UNRATIFIED_LIMITS = {
   projectNameMaxChars: 500,
   dodMaxItems: 50,
@@ -81,21 +105,28 @@ export const UNRATIFIED_LIMITS = {
 } as const
 
 /**
- * NO UPPER BOUND ON AMOUNT, on purpose.
+ * THE AMOUNT CEILING IS UNDECIDED, and this module must not settle it.
  *
- * It is tempting to add one, and it would contradict the only specification
- * this project has on the subject. The Progressive Trust Ladder
- * (src/lib/constants.js) caps contracts by level — ¥100k, ¥500k, ¥2M — and
- * then `contractLimit: null`, explicitly unlimited at level 10. A hard database
- * ceiling would make that final tier undeliverable.
+ * An earlier draft of this file asserted that there must be no ceiling, citing
+ * TRUST_LADDER in src/lib/constants.js — ¥100k / ¥500k / ¥2M and then
+ * `contractLimit: null` at level 10 — as if that were ratified policy. It is
+ * not. Roadmap.md records "no trust ladder enforcement on the DB-backed flow"
+ * (line 103) and "no trust ladder on the real flow" (line 224), and its only
+ * consumers are ProfileModal, which displays it, and ContractStep1, which is
+ * part of the legacy mock surface reachable only through command-palette
+ * entries labelled "(legacy)". It is a sketch of a destination.
  *
- * So an amount cap is a per-account policy check against the actor's level,
- * which is a different layer with a different owner, and it is not part of
- * well-formedness. What belongs here is only that the number is a positive
- * integer: JPY has no minor unit, the column is `integer`, and all 1466
- * existing rows are >= 1.
+ * So there is no evidence either way, and freezing "unlimited" into a
+ * permanent test would make a mock into a guarantee just as surely as adding a
+ * ceiling would invent one. Both are decisions for the user, taken against the
+ * real history of the product.
+ *
+ * What this module therefore enforces is only the SHAPE: a positive integer.
+ * JPY has no minor unit and the column is `integer`. Any ceiling — flat,
+ * tiered, or per-account — is business policy, belongs in the creation path
+ * against the actor's record, and is UNDECIDED.
  */
-export const AMOUNT_HAS_NO_UPPER_BOUND = true
+export const AMOUNT_CEILING: 'UNDECIDED' = 'UNDECIDED'
 
 /**
  * Deliberately permissive address shape.

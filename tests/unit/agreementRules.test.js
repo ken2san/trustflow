@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   violationsOf, isWellFormed, deadlineFloor,
-  SUPPORTED_CURRENCIES, UNRATIFIED_LIMITS, DEADLINE_TIMEZONE_SLACK_DAYS,
+  SUPPORTED_CURRENCIES, UNRATIFIED_LIMITS, DEADLINE_TIMEZONE_SLACK_DAYS, AMOUNT_CEILING,
 } from '../../supabase/functions/_shared/agreementRules.ts'
 
 // A proposal that is well-formed, so each test can break exactly one thing.
@@ -18,6 +19,39 @@ const WELL_FORMED = {
 }
 
 const AT = { now: new Date('2026-10-11T12:00:00Z') }
+
+// The same case table scripts/check-sql-draft.mjs runs against a real
+// PostgreSQL. Shared deliberately: two implementations of one rule drifting
+// apart is the only production bug this project's hash chain has ever had, and
+// a validation rule written twice drifts the same way. If a case is added here
+// it is also checked against the database, and vice versa.
+const shared = JSON.parse(
+  readFileSync(new URL('../fixtures/agreementCases.json', import.meta.url), 'utf8'))
+
+describe('the shared case table — same cases the database is checked against', () => {
+  for (const { label, patch, wellFormed } of shared.cases) {
+    it(`${wellFormed ? 'accepts' : 'rejects'} ${label}`, () => {
+      const violations = violationsOf({ ...shared.baseline, ...patch }, AT)
+      expect(violations.length === 0).toBe(wellFormed)
+    })
+  }
+
+  it('documents what the database cannot express, rather than pretending it can', () => {
+    // These two rules live only here and in the creation path. The reasons are
+    // specific and were each confirmed against PostgreSQL 17.11, so this
+    // assertion exists to stop the list being quietly emptied.
+    expect(shared.sqlCannotExpress.map(r => r.label)).toEqual([
+      'a single dod item over 1000 chars',
+      'a deadline in the past',
+    ])
+    for (const { why } of shared.sqlCannotExpress) expect(why.length).toBeGreaterThan(40)
+  })
+
+  it('still enforces, here, the per-element length the database cannot', () => {
+    expect(violationsOf({ ...shared.baseline, dod: ['x'.repeat(1001)] }, AT))
+      .toContain('dod_item_too_long')
+  })
+})
 
 describe('the baseline proposal is accepted', () => {
   it('reports no violations', () => {
@@ -51,13 +85,21 @@ describe('the ten inserts that a direct POST accepted', () => {
     })
   }
 
-  // The tenth probe, ¥2,000,000,000, is deliberately still accepted. The
-  // Progressive Trust Ladder specifies `contractLimit: null` — explicitly
-  // unlimited — at level 10, so a hard ceiling here would make that tier
-  // undeliverable. An amount cap is a per-account policy check against the
-  // actor's level, not a question of well-formedness.
-  it('still accepts an absurd amount, because no spec sets a ceiling', () => {
-    expect(violationsOf({ ...WELL_FORMED, amount_jpy: 2_000_000_000 }, AT)).toEqual([])
+  // The tenth probe, ¥2,000,000,000, is not asserted either way here.
+  //
+  // An earlier version of this test pinned it as permanently ACCEPTED, citing
+  // TRUST_LADDER's `contractLimit: null` as if that settled it. Roadmap.md says
+  // the trust ladder is not enforced on the DB-backed flow and lives on the
+  // legacy mock surface, so that test would have frozen a mock into a
+  // guarantee. A ceiling is business policy and is UNDECIDED; this module only
+  // decides shape, so there is nothing here to assert about the number.
+  it('treats any ceiling as an undecided policy question, not a shape rule', () => {
+    expect(AMOUNT_CEILING).toBe('UNDECIDED')
+    // Shape is all this layer claims: a large amount is well-FORMED. Whether
+    // it is PERMITTED is a different question, asked somewhere else, and this
+    // assertion deliberately does not answer it.
+    expect(violationsOf({ ...WELL_FORMED, amount_jpy: 2_000_000_000 }, AT))
+      .not.toContain('amount_not_an_integer')
   })
 })
 

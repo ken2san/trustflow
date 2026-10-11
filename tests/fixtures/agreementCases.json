@@ -1,0 +1,40 @@
+{
+  "_comment": "One case table, used by BOTH tests/unit/agreementRules.test.js and scripts/check-sql-draft.mjs. It exists so the TypeScript rules and the SQL constraints cannot drift apart silently — two implementations of one rule drifting apart is the only production bug this project's hash chain has ever had. `sqlEnforced` marks the cases the database is expected to decide; a rule the database cannot express is listed under sqlCannotExpress with the reason.",
+  "cases": [
+    { "label": "a normal proposal",          "patch": {},                                          "wellFormed": true,  "sqlEnforced": true },
+    { "label": "japanese dod text",          "patch": { "dod": ["日本語の要件"] },                   "wellFormed": true,  "sqlEnforced": true },
+    { "label": "no deadline",                "patch": { "deadline": null },                         "wellFormed": true,  "sqlEnforced": true },
+    { "label": "single dod item",            "patch": { "dod": ["only one"] },                      "wellFormed": true,  "sqlEnforced": true },
+    { "label": "amount of 1 yen",            "patch": { "amount_jpy": 1 },                          "wellFormed": true,  "sqlEnforced": true },
+    { "label": "empty dod array",            "patch": { "dod": [] },                                "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod is a string",            "patch": { "dod": "just do it" },                      "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod has a number",           "patch": { "dod": ["ok", 42] },                        "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod has a blank string",     "patch": { "dod": ["ok", "   "] },                     "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod has an empty string",    "patch": { "dod": [""] },                              "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod has null",               "patch": { "dod": ["ok", null] },                      "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod has an object",          "patch": { "dod": [{ "a": 1 }] },                      "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod has a bool",             "patch": { "dod": ["ok", true] },                      "wellFormed": false, "sqlEnforced": true },
+    { "label": "dod nests an array",         "patch": { "dod": [["nested"]] },                      "wellFormed": false, "sqlEnforced": true },
+    { "label": "empty project name",         "patch": { "project_name": "" },                       "wellFormed": false, "sqlEnforced": true },
+    { "label": "whitespace project name",    "patch": { "project_name": "   " },                    "wellFormed": false, "sqlEnforced": true },
+    { "label": "amount zero",                "patch": { "amount_jpy": 0 },                          "wellFormed": false, "sqlEnforced": true },
+    { "label": "amount negative",            "patch": { "amount_jpy": -50000 },                     "wellFormed": false, "sqlEnforced": true },
+    { "label": "currency not JPY",           "patch": { "currency": "ZZZ" },                        "wellFormed": false, "sqlEnforced": true },
+    { "label": "malformed invited email",    "patch": { "invited_hirer_email": "not-an-email" },    "wellFormed": false, "sqlEnforced": true },
+    { "label": "invited email with a space", "patch": { "invited_hirer_email": "a b@example.com" }, "wellFormed": false, "sqlEnforced": true }
+  ],
+  "baseline": {
+    "project_name": "Logo animation",
+    "dod": ["Deliver the animation", "Matches the brief"],
+    "amount_jpy": 50000,
+    "currency": "JPY",
+    "deadline": "2099-12-31",
+    "invited_hirer_email": "client@example.com",
+    "earner_display_name": "Kenji",
+    "performed_by": "creator"
+  },
+  "sqlCannotExpress": [
+    { "label": "a single dod item over 1000 chars", "why": "a CHECK may not contain a subquery, and SQL/JSON path's like_regex rejects a repetition count that large; the database bounds the whole dod's serialized size instead" },
+    { "label": "a deadline in the past", "why": "a CHECK is re-evaluated on every later UPDATE, so the rule would start failing once the date passed; and current_date is UTC, a calendar day ahead of a user in UTC-7" }
+  ]
+}
