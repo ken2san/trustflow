@@ -1,0 +1,154 @@
+{
+  "receipt_version": 1,
+  "issued_at": "2026-10-11T15:58:42.966Z",
+  "source": {
+    "project_ref": "yqjtawffpesplqyurlpj",
+    "api": "https://yqjtawffpesplqyurlpj.supabase.co",
+    "issued_for_role": "owner"
+  },
+  "agreement": {
+    "contract_id": "7773166e-c8b3-4717-8989-fc6e96139443",
+    "snapshot": {
+      "snapshot_version": 1,
+      "project_name": "api-e2e 2026-10-11T14:08:42.143Z — slice 1",
+      "dod": [
+        "Deliver the thing",
+        "Thing matches the brief"
+      ],
+      "amount": 50000,
+      "currency": "JPY",
+      "deadline": "2026-10-12",
+      "performed_by": "creator",
+      "offered_by": "API Harness Owner"
+    },
+    "agreement_hash": "7d5f1725ebd5dbf26aed9036aee71cbad4b6ac14e7e8e5c6a8d3d87e10008868",
+    "state": "PERFORMANCE_ACCEPTED"
+  },
+  "acts": [
+    {
+      "sequence": 0,
+      "canonical": {
+        "id": "4a6bb50c-1e19-4fed-a7f6-b85a6dc52b6c",
+        "type": "dod.consent_recorded",
+        "contract_id": "7773166e-c8b3-4717-8989-fc6e96139443",
+        "actor_id": "guest:harness-guest@example.invalid",
+        "dod_hash": "64bd8f3dad5aa74caa135392cbc83cca9571d591d956aafa0d1e3185c55643ca",
+        "created_at": "2026-10-11T14:08:43.747+00:00",
+        "prev_event_hash": "GENESIS",
+        "payload_hash": "72ff95b983a94a9367fa615cd56ef123543b9d88bd45cdcf04a3bc0534024112",
+        "agreement_hash": "7d5f1725ebd5dbf26aed9036aee71cbad4b6ac14e7e8e5c6a8d3d87e10008868",
+        "hash_version": 4
+      },
+      "event_hash": "5f5f4cf6d0d46171fb399809dab0dc929b23f659d2e0d2db16d4214caef996f5",
+      "recorded_at": "2026-10-11T14:08:43.747+00:00",
+      "actor_role": "guest_hirer",
+      "role_in_agreement": "receiver",
+      "authentication_as_recorded": "invite_capability",
+      "claimed_identity_verified": false,
+      "idempotency_key": "acceptance:7773166e-c8b3-4717-8989-fc6e96139443",
+      "timestamp_token_present": false
+    },
+    {
+      "sequence": 1,
+      "canonical": {
+        "id": "8ee48f0e-6b85-4df2-9637-90adbed64e64",
+        "type": "performance.asserted",
+        "contract_id": "7773166e-c8b3-4717-8989-fc6e96139443",
+        "actor_id": "5984f56a-ae5a-4d89-ab21-89b8fe483c27",
+        "dod_hash": "64bd8f3dad5aa74caa135392cbc83cca9571d591d956aafa0d1e3185c55643ca",
+        "created_at": "2026-10-11T14:08:47.307+00:00",
+        "prev_event_hash": "5f5f4cf6d0d46171fb399809dab0dc929b23f659d2e0d2db16d4214caef996f5",
+        "payload_hash": "c4adc6d946c65b94adb10ba976304c4202b230edf4721c232c42640080698e49",
+        "agreement_hash": "7d5f1725ebd5dbf26aed9036aee71cbad4b6ac14e7e8e5c6a8d3d87e10008868",
+        "hash_version": 4
+      },
+      "event_hash": "159e9d53716fe33dd93f5025b22f6d844c031b7442d4c95d0d4fc15940793095",
+      "recorded_at": "2026-10-11T14:08:47.307+00:00",
+      "actor_role": "earner",
+      "role_in_agreement": "performer",
+      "authentication_as_recorded": "account_session",
+      "claimed_identity_verified": null,
+      "idempotency_key": "api-e2e 2026-10-11T14:08:42.143Z:asserted",
+      "timestamp_token_present": false
+    },
+    {
+      "sequence": 2,
+      "canonical": {
+        "id": "0f94f8b5-099f-4807-8188-961197a9fd75",
+        "type": "performance.accepted",
+        "contract_id": "7773166e-c8b3-4717-8989-fc6e96139443",
+        "actor_id": "guest:harness-guest@example.invalid",
+        "dod_hash": "64bd8f3dad5aa74caa135392cbc83cca9571d591d956aafa0d1e3185c55643ca",
+        "created_at": "2026-10-11T14:08:49.284+00:00",
+        "prev_event_hash": "159e9d53716fe33dd93f5025b22f6d844c031b7442d4c95d0d4fc15940793095",
+        "payload_hash": "d8d1d03477569596a49352353083c8c0eb959e221d5ef1871a8a8f2a377d9111",
+        "agreement_hash": "7d5f1725ebd5dbf26aed9036aee71cbad4b6ac14e7e8e5c6a8d3d87e10008868",
+        "hash_version": 4
+      },
+      "event_hash": "7814e7ec45e53441655b0556d58ce04a01cdeea262dd36fa8429b28e60cf8c35",
+      "recorded_at": "2026-10-11T14:08:49.284+00:00",
+      "actor_role": "guest_hirer",
+      "role_in_agreement": "receiver",
+      "authentication_as_recorded": "invite_capability",
+      "claimed_identity_verified": null,
+      "idempotency_key": "api-e2e 2026-10-11T14:08:42.143Z:accepted",
+      "timestamp_token_present": false
+    },
+    {
+      "sequence": 3,
+      "canonical": {
+        "id": "cc8f1003-c883-42bf-b2d3-cfd5af44b643",
+        "type": "access.reissued",
+        "contract_id": "7773166e-c8b3-4717-8989-fc6e96139443",
+        "actor_id": "5984f56a-ae5a-4d89-ab21-89b8fe483c27",
+        "dod_hash": "64bd8f3dad5aa74caa135392cbc83cca9571d591d956aafa0d1e3185c55643ca",
+        "created_at": "2026-10-11T14:08:50.986+00:00",
+        "prev_event_hash": "7814e7ec45e53441655b0556d58ce04a01cdeea262dd36fa8429b28e60cf8c35",
+        "payload_hash": "5e3545c7c291bfa42a88fe2d744c044efbad0dfa215e481920594803dc2ddb34",
+        "agreement_hash": "7d5f1725ebd5dbf26aed9036aee71cbad4b6ac14e7e8e5c6a8d3d87e10008868",
+        "hash_version": 4
+      },
+      "event_hash": "f9f37f14eddfd3fa21cf06e0aabb0a1a5c32f94fdd7790970c2c5df6469e50e5",
+      "recorded_at": "2026-10-11T14:08:50.986+00:00",
+      "actor_role": "earner",
+      "role_in_agreement": "performer",
+      "authentication_as_recorded": "account_session",
+      "claimed_identity_verified": null,
+      "idempotency_key": null,
+      "timestamp_token_present": false
+    }
+  ],
+  "how_to_verify": {
+    "command": "node scripts/verify-receipt.mjs <this-file>",
+    "offline": true,
+    "recomputes": [
+      "event_hash per act",
+      "chain linkage",
+      "agreement_hash from the snapshot"
+    ],
+    "canonical_definition": "supabase/functions/_shared/eventCanonical.ts",
+    "note": "The verifier needs no network and no access to TrustFlow. If it disagrees with this file, believe the verifier."
+  },
+  "not_verifiable_here": [
+    "That the text of any statement matches what was committed to. Canonical v4 commits to one payload_hash over the whole payload, and the parties are shown an allowlisted projection, so the digest cannot be reproduced from what they see.",
+    "The identity of any party. The counterparty holds a transferable bearer capability and their address is self-claimed and recorded unverified.",
+    "How any account holder authenticated. _auth_method is currently derived from the actor role, not observed from the session.",
+    "That the work described was performed, or that any payment moved. TrustFlow records that a party said so.",
+    "That TrustFlow showed both parties the same history. There is no external witness to its log, so an operator presenting two different consistent histories to the two parties would not be detectable from this file — only by comparing it against the other party's receipt.",
+    "That anyone authenticated in order to perform an act. Authentication is not bound to the act: there is no challenge tied to this agreement_hash and action, so even a login seconds beforehand shows recency, not intent. Consent given through an authenticated session is not a signature."
+  ],
+  "counterparty_authority": {
+    "proves": [
+      "the actor presented a capability this agreement's owner issued",
+      "the action was bound to a specific agreement version by agreement_hash"
+    ],
+    "does_not_prove": [
+      "that the holder is the invited counterparty — the credential is transferable and the address is self-claimed",
+      "any authentication event whatsoever: no credential of the actor's own was tested",
+      "the identity of the person who acted",
+      "that the work described was actually performed",
+      "that any payment actually moved",
+      "that the actor authenticated IN ORDER TO perform this act — there is no challenge bound to this agreement and action, so a recent login proves recency and not intent"
+    ]
+  }
+}

@@ -15,7 +15,9 @@
     "check:migrations": "node scripts/check-migrations.mjs",
     "test:api": "node scripts/api-e2e.mjs",
     "verify:chain": "node scripts/verify-chain.mjs",
-    "check:sql-draft": "node scripts/check-sql-draft.mjs"
+    "check:sql-draft": "node scripts/check-sql-draft.mjs",
+    "receipt": "node scripts/make-receipt.mjs",
+    "verify:receipt": "node scripts/verify-receipt.mjs"
   },
   "dependencies": {
     "@stripe/react-stripe-js": "^6.4.0",
