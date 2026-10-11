@@ -5,21 +5,34 @@
 // is the whole reason this file exists.
 //
 // The owning account can read the raw `events` rows, so its export carries
-// every payload and invites the reader to recompute each hash and re-verify the
-// chain without TrustFlow. A guest has no auth.users row: RLS returns them
-// nothing from `events`, and their trail arrives from guest-contract-events
-// already allowlist-filtered, with each payload reduced to the fields that
-// party may see. Handing them the same document would tell a reader to
-// recompute a hash over a payload that is deliberately incomplete, and every
-// untouched event would come back as tampered with. An evidence export that
-// falsely cries tampering is worse than no export at all.
+// every payload. A guest has no auth.users row: RLS returns them nothing from
+// `events`, and their trail arrives from guest-contract-events already
+// allowlist-filtered, with each payload reduced to the fields that party may
+// see.
 //
-// So this document reports what the SERVER checked, at the moment it read the
-// unfiltered rows, and says plainly that the reader cannot repeat those checks
-// from this file. The verdicts are the server's; nothing here re-derives them.
-// What this module adds is a readable reason for the verdict, the accepted
-// terms alongside the current ones, and the limits stated rather than left for
-// the reader to discover.
+// WHAT CHANGED, AND WHY THE SPLIT MATTERS
+// This file used to say the reader could reproduce nothing, which was true of
+// the response it was built from: three of the nine canonical inputs were never
+// sent, so the guest had the digests and not the material, and all they could
+// do was believe the server. The response now carries a `canonical` block per
+// act, so HALF of that is no longer true, and leaving the blanket disclaimer in
+// place would understate the record exactly as badly as the old
+// `integrity_status: VERIFIED` overstated it.
+//
+// The honest statement is a split, and this document makes it:
+//
+//   REPRODUCIBLE HERE — each act's event_hash, the chain linking the acts, and
+//     the agreement_hash every act is bound to. Recomputable offline from this
+//     file, with no access to TrustFlow. If the verifier disagrees with the
+//     server's verdicts below, believe the verifier.
+//   NOT REPRODUCIBLE HERE — payload_hash. Canonical v4 takes one digest over
+//     the WHOLE payload and this document carries an allowlisted projection of
+//     it, so recomputing it would fail on an untouched record as readily as on
+//     a tampered one. `substance_valid` stays the server's word.
+//
+// The server's verdicts are still carried verbatim, and still labelled as the
+// server's. What this module adds is that the reader can now check the first
+// half for themselves rather than take all of it on trust.
 
 const DOCUMENT_VERSION = '1.0'
 
@@ -72,10 +85,10 @@ export function buildGuestRecordDocument(evidence) {
       // document draws the wrong conclusion from it.
       what_this_document_is: [
         'A copy of the record TrustFlow holds for this agreement, as released to the counterparty.',
-        'The integrity results below were computed by the TrustFlow server against the complete stored rows at the time this document was generated.',
-        'They CANNOT be reproduced from this file. The detail of each event is filtered to what this party may see, so recomputing a hash from the text here would not match, on an untampered record as much as on a tampered one.',
-        'TrustFlow records what each party stated. It does not establish that a statement is true.',
-        'The party who owns this agreement can produce a fuller export that a third party can re-verify independently.',
+        'Each act below carries a `canonical` block: every input its event_hash is computed over. From those alone a reader can recompute each hash and follow the chain offline, with no access to TrustFlow and no need to trust the verdicts in this file.',
+        'The payload digest CANNOT be reproduced from this file. One digest covers each whole payload, and the detail shown here is filtered to what this party may see, so recomputing it would not match on an untampered record any more than on a tampered one. `substance_valid` below is the server\'s word for that check, not a result a reader can repeat.',
+        'The integrity verdicts below were computed by the TrustFlow server against the complete stored rows. Where a reader can repeat a check and disagrees, the reader is right.',
+        'TrustFlow records what each party stated. It does not establish that a statement is true, who the parties are, or that any work or payment happened.',
       ],
 
       verification: {
@@ -114,6 +127,19 @@ export function buildGuestRecordDocument(evidence) {
       // forwarded, and the divergence is itself evidence. Neither is verified.
       acceptance_identity: evidence.acceptance_identity ?? null,
 
+      // How to check the reproducible half, and what no amount of checking in
+      // this file will establish. Carried from the server response so the two
+      // documents cannot drift into saying different things; defaulted here so
+      // an older response still produces a document that states its limits.
+      independent_verification: evidence.verification ?? {
+        canonical_definition: 'supabase/functions/_shared/eventCanonical.ts',
+        recompute: 'sha256 over the canonical string built from each act\'s '
+          + '`canonical` block, under that block\'s own hash_version',
+        not_verifiable_here: [
+          'This response predates the canonical blocks, so nothing in it can be recomputed.',
+        ],
+      },
+
       // The agreement as it stands NOW. May differ from accepted_agreement.
       current_terms: {
         project_name:        contract.project_name ?? null,
@@ -136,6 +162,10 @@ export function buildGuestRecordDocument(evidence) {
         // hashes below cannot be recomputed from it.
         payload:    ev.payload ?? null,
         dod_hash:   ev.dod_hash ?? null,
+        // Every input this act's event_hash is taken over. Null on a response
+        // from before the server sent them, which is itself worth seeing: it
+        // says this act cannot be checked from this file.
+        canonical:  ev.canonical ?? null,
         server_verification: ev.integrity ?? null,
       })),
     },

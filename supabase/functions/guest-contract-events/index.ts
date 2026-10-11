@@ -29,9 +29,13 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
-  GENESIS_HASH, eventCanonical, canonicalVersionOf, payloadHash, sha256Hex,
+  GENESIS_HASH, canonicalVersionOf, payloadHash,
   buildAgreementSnapshot,
 } from '../_shared/eventCanonical.ts'
+import {
+  canonicalInputsOf, filterPayload, guestVerificationNotes,
+  recomputeFromCanonicalBlock,
+} from '../_shared/guestEventView.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -46,55 +50,9 @@ const json = (body: unknown, status: number) =>
 
 const MAX_EVENTS = 500
 
-// Payload keys a guest may see, per event type. Everything else is dropped.
-//
-// An allowlist rather than a denylist: payloads are free-form jsonb written
-// over two trust models, so the set of keys that could appear is open-ended and
-// a denylist would silently leak whatever gets added next. Notable exclusions:
-//   _actor_role — internal; surfaced as actor.role instead
-//   user_agent  — the accepting browser's UA, recorded by legacy consent rows
-const PAYLOAD_ALLOWLIST: Record<string, string[]> = {
-  'contract.initiated':    ['step', 'title', 'budgetPoints'],
-  'contract.accepted':     ['step'],
-  'performance.asserted':  ['step', 'note'],
-  'performance.accepted':  ['step'],
-  'performance.rejected':  ['step', 'reason'],
-  // Retired names, kept so historical rows still render their detail.
-  'work.submitted':        ['step'],
-  'work.approved':         ['step'],
-  'work.rejected':         ['step', 'reason'],
-  'contract.cancelled':    ['reason'],
-  'contract.completed':    [],
-  'dod.consent_recorded':  ['counterparty_name', 'counterparty_email', 'dod_items'],
-  'dispute.opened':        ['reason'],
-  'rating.submitted':      ['rating'],
-  // The owner replaced this guest's access credential. Nothing is allowlisted
-  // because nothing was asserted — the type is the entire statement — but it
-  // must appear in the trail rather than be filtered out of it: it is how a
-  // reader knows the events after it may not be the same person as the ones
-  // before, and the guest is the party most entitled to see that.
-  'access.reissued':       [],
-  // A party's claim about payment sent/received/disputed outside TrustFlow —
-  // see log-event's ALLOWED_TYPES comment. 'note' is the only field either
-  // side writes: method, reference, whatever they choose to say.
-  'payment.reported':      ['note'],
-  'payment.acknowledged':  ['note'],
-  'payment.disputed':      ['note'],
-}
-
-function filterPayload(type: string, payload: unknown): Record<string, unknown> {
-  const allowed = PAYLOAD_ALLOWLIST[type]
-  // An unknown type gets an empty payload rather than a pass-through: a type
-  // this function has not been taught about is one whose payload shape nobody
-  // has reviewed.
-  if (!allowed || typeof payload !== 'object' || payload === null) return {}
-  const source = payload as Record<string, unknown>
-  const out: Record<string, unknown> = {}
-  for (const key of allowed) {
-    if (key in source) out[key] = source[key]
-  }
-  return out
-}
+// The payload allowlist and the shaping of a verifiable act now live in
+// _shared/guestEventView.ts, where they can be exercised without a live
+// request. See that file for why.
 
 /**
  * Which agreed terms the contract row no longer matches.
@@ -213,17 +171,12 @@ serve(async (req: Request) => {
       // was written with. Applying the newest to an older row reports an
       // untouched event as tampered with.
       const hashVersion = canonicalVersionOf(row)
-      const recomputed = await sha256Hex(eventCanonical({
-        id:              row.id,
-        type:            row.type,
-        contract_id:     contract.id,
-        actor_id:        row.actor_id,
-        dod_hash:        row.dod_hash ?? null,
-        created_at:      row.created_at,
-        prev_event_hash: row.prev_event_hash,
-        payload_hash:    row.payload_hash,
-        agreement_hash:  row.agreement_hash,
-      }, hashVersion))
+      // Built once and both returned to the guest and used here, so what the
+      // server checked and what the guest is given to check are by
+      // construction the same inputs. If they could differ, the guest's
+      // recomputation would be verifying something other than the record.
+      const canonical = canonicalInputsOf(row, contract.id)
+      const recomputed = await recomputeFromCanonicalBlock(canonical)
 
       // From v3 the payload is bound into the hash, so the substance of an
       // assertion can be checked as well as its authorship. null rather than
@@ -242,6 +195,11 @@ serve(async (req: Request) => {
         actor:      describeActor(row.actor_id, contract, actorRole ?? null),
         dod_hash:   row.dod_hash ?? null,
         payload:    filterPayload(row.type, row.payload),
+        // Every input the event_hash is taken over, so the guest can recompute
+        // it with no access to TrustFlow. Redundant with the fields above on
+        // purpose: this is the ten-field block scripts/verify-receipt.mjs
+        // already consumes, so one verifier serves both parties.
+        canonical,
         integrity: {
           // v1 rows were written by a browser that chose its own actor_id,
           // type and hash. They are preserved as history, not as attestation.
@@ -286,7 +244,13 @@ serve(async (req: Request) => {
         invited_recipient: invitedRecipient,
         claimed_identity: claimedIdentity,
         claimed_identity_verified: false,
+        // How the accepting party got in — which for an acceptance is always
+        // a consumed invitation and never an authentication event. Both the
+        // coarse legacy string and the structured record are returned; the
+        // latter is absent on acceptances written before it existed, and that
+        // absence is a fact rather than a gap to fill in.
         authentication: (acceptance.payload as Record<string, unknown>)?._auth_method ?? null,
+        authentication_detail: (acceptance.payload as Record<string, unknown>)?._authentication ?? null,
       } : null,
       // The CURRENT row. May differ from accepted_agreement.
       contract: {
@@ -310,6 +274,10 @@ serve(async (req: Request) => {
         hirer_email:         contract.hirer_email,
       },
       events,
+      // What the guest can establish for themselves from this response, and
+      // what no amount of hashing in it will establish. Carried in the data
+      // because a machine reader has no README.
+      verification: guestVerificationNotes(),
       chain: {
         event_count:          events.length,
         server_attested:      attested.length,

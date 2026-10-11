@@ -32,6 +32,9 @@
 
 import { ownerSession, rest, invoke, PROJECT_REF } from './lib/tfClient.mjs';
 import { redact } from './lib/e2eGuard.mjs';
+import {
+  CANONICAL_INPUTS, missingCanonicalInputs, recomputeFromCanonicalBlock,
+} from '../supabase/functions/_shared/guestEventView.ts';
 
 const RUN = `api-e2e ${new Date().toISOString()}`;
 let step = 0;
@@ -228,6 +231,35 @@ async function main() {
   ok('both parties see the same events, in the same order',
     guestIds.length > 0 && JSON.stringify(guestIds) === JSON.stringify(ownerIds),
     guestIds.length ? `owner ${ownerIds.length} / guest ${guestIds.length}` : 'guest view exposes no event ids');
+
+  // ── measured, not asserted ────────────────────────────────────────────────
+  // Whether the counterparty can check the record for themselves, instead of
+  // being told the server checked it. This is deliberately NOT an ok() check:
+  // the answer depends on which build of guest-contract-events is deployed to
+  // this project, and a harness that failed because the repo is ahead of the
+  // deployment would be reporting the wrong thing. It is printed because the
+  // number is the whole point of the read path, and because a gap nobody
+  // measures is a gap nobody closes.
+  const recomputable = [];
+  const missing = new Set();
+  for (const ev of guestEvents) {
+    const block = ev.canonical ?? null;
+    const absent = missingCanonicalInputs(block);
+    absent.forEach(k => missing.add(k));
+    if (absent.length) continue;
+    const stored = ev.integrity?.event_hash ?? null;
+    if (stored && (await recomputeFromCanonicalBlock(block)) === stored) recomputable.push(ev.id);
+  }
+
+  console.log(`\n--- what the counterparty can verify without trusting the server`);
+  console.log(`events recomputable from the response alone: `
+    + `${recomputable.length} / ${guestEvents.length}`);
+  if (missing.size) {
+    console.log(`canonical inputs the deployed response omits: ${[...missing].join(', ')}`);
+    console.log(`  (of ${CANONICAL_INPUTS.length}; the repo's guest-contract-events sends all of them)`);
+  }
+  console.log(`payload preimage: still not disclosed, by design — one digest covers`);
+  console.log(`  the whole payload, so the allowlisted projection cannot reproduce it.`);
 
   console.log(`\n${step} checks, ${fail.length} failed`);
   if (fail.length) {
