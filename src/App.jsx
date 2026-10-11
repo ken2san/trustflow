@@ -1096,7 +1096,18 @@ const App = () => {
     const fresh = contracts.find(c => c.id === contract.id);
     if (fresh) {
       const rows = await fetchContractEvents(contract.id);
-      setAgreement({ contract: fresh, events: shapeOwnerEvents(rows, fresh), role: agreement.role });
+      // Merged into what is already open, not rebuilt from the parts this
+      // function happens to know about. Rebuilding dropped `source`, and the
+      // screen decides from that alone whether to offer the export, the
+      // invite link and the access re-issue — so recording any event made all
+      // three vanish from the owner's own agreement until it was reopened.
+      // Found in QA 2026-10-11, after Mark as delivered.
+      //
+      // The id guard is the other half: there are two awaits above this, and
+      // whoever was on screen when it started may not be on screen now.
+      setAgreement(prev => (prev?.contract?.id === contract.id
+        ? { ...prev, contract: fresh, events: shapeOwnerEvents(rows, fresh) }
+        : prev));
       setMyContracts(contracts);
     } else {
       // Guest path: no PostgREST access, so re-read the shaped response.

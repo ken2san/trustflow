@@ -63,6 +63,66 @@ test('the owner sees the export button on their own agreement', async ({ page })
   await expect(page.getByRole('button', { name: 'Download the signed record' })).toBeVisible();
 });
 
+// Recording an event used to rebuild the open agreement from the pieces
+// recordAgreementEvent happened to hold, which dropped `source` — and the
+// screen decides from `source` alone whether the owner gets the export, the
+// invite link and the access re-issue. So marking a delivery made all three
+// disappear from the owner's own agreement until they reopened it. Found in
+// QA 2026-10-11; the state is merged into what is open now rather than
+// reassembled.
+test('the owner keeps their own controls after recording an event', async ({ page }) => {
+  // The contract as the re-read sees it: TERMS_ACCEPTED before the write,
+  // AWAITING_CONFIRMATION after. Without this the screen could not show that
+  // anything happened, and the test could pass on a write that never landed —
+  // which is exactly how the first version of it passed against the bug.
+  let delivered = false;
+  await page.route('**/rest/v1/contracts*', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await json(route, [{ ...OWNER_CONTRACT, state: delivered ? 'AWAITING_CONFIRMATION' : 'TERMS_ACCEPTED' }]);
+  });
+  await page.route('**/rest/v1/events*', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await json(route, []);
+  });
+  await page.route('**/functions/v1/log-event', async (route) => {
+    // The preflight has to be answered as a preflight. Returning the success
+    // body to it instead fails the invoke, and a failed invoke returns early
+    // before the state is rebuilt — leaving the controls on screen for the
+    // wrong reason.
+    if (route.request().method() === 'OPTIONS') {
+      return route.fulfill({
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-guest-access-token',
+        },
+        body: '',
+      });
+    }
+    delivered = true;
+    await json(route, { event: { id: 'e1', type: 'performance.asserted' } }, 201);
+  });
+  await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByRole('button', { name: 'Download the signed record' })).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'Mark as delivered' }).click();
+  await page.getByRole('button', { name: 'Confirm' }).click();
+
+  // The write landed and the screen re-read it. Only now is the next
+  // assertion about anything.
+  await expect(page.getByText('You marked this delivered.')).toBeVisible({ timeout: 15_000 });
+
+  // And it is still the owner's agreement: recordAgreementEvent used to
+  // rebuild the open agreement without `source`, and the screen decides from
+  // that alone whether to offer the export, the invite link and the access
+  // re-issue. All three vanished until the agreement was reopened.
+  await expect(page.getByRole('button', { name: 'Download the signed record' })).toBeVisible();
+});
+
 // ── Guest path: agreement-record-ui.spec.js's stubbing style ────────────────
 
 const ACCEPTED = {
