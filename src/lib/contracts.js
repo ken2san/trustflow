@@ -10,7 +10,7 @@
 // defaults to AWAITING_ACCEPTANCE, invite_token to a random UUID, and
 // invite_token_expires_at to now() + 72h.
 
-import { supabase } from './supabase.js'
+import { supabase, invokeErrorReason } from './supabase.js'
 import { getGuestAccessToken } from './guestSession.js'
 
 const NOT_CONFIGURED = new Error('Supabase is not configured')
@@ -168,13 +168,13 @@ export function guestAccessUrlFor(guestToken) {
 export async function fetchInvite(inviteToken) {
   if (!supabase) return { invite: null, reason: 'error' }
 
-  const { data, error } = await supabase.functions.invoke('validate-invite-token', {
+  const result = await supabase.functions.invoke('validate-invite-token', {
     body: { invite_token: inviteToken },
   })
 
-  if (error || data?.error) {
-    return { invite: null, reason: data?.error ?? 'error' }
-  }
+  const reason = await invokeErrorReason(result)
+  if (reason) return { invite: null, reason }
+  const { data } = result
   return { invite: data, reason: null }
 }
 
@@ -204,13 +204,13 @@ export async function fetchGuestEvidence(contractId, tokenOverride = null) {
   const guestToken = tokenOverride ?? getGuestAccessToken(contractId)
   if (!guestToken) return { evidence: null, reason: 'no_credential' }
 
-  const { data, error } = await supabase.functions.invoke('guest-contract-events', {
+  const result = await supabase.functions.invoke('guest-contract-events', {
     headers: { 'x-guest-access-token': guestToken },
   })
 
-  if (error || data?.error) {
-    return { evidence: null, reason: data?.error ?? 'error' }
-  }
+  const reason = await invokeErrorReason(result)
+  if (reason) return { evidence: null, reason }
+  const { data } = result
   return { evidence: data, reason: null }
 }
 
@@ -236,12 +236,15 @@ export async function fetchGuestEvidence(contractId, tokenOverride = null) {
 export async function reissueGuestAccess(contractId) {
   if (!supabase) return { token: null, expiresAt: null, reason: 'error' }
 
-  const { data, error } = await supabase.functions.invoke('reissue-guest-access', {
+  const result = await supabase.functions.invoke('reissue-guest-access', {
     body: { contract_id: contractId },
   })
 
-  if (error || data?.error || !data?.guest_access_token) {
-    return { token: null, expiresAt: null, reason: data?.error ?? 'error' }
+  const reason = await invokeErrorReason(result)
+  if (reason) return { token: null, expiresAt: null, reason }
+  const { data } = result
+  if (!data?.guest_access_token) {
+    return { token: null, expiresAt: null, reason: 'error' }
   }
   return { token: data.guest_access_token, expiresAt: data.expires_at ?? null, reason: null }
 }
@@ -262,7 +265,7 @@ export async function acceptInvite(inviteToken, hirerEmail, counterpartyName) {
   // One call. The function consumes the invitation and writes the acceptance
   // evidence in the same transaction, so there is no second request whose
   // failure could leave an accepted agreement without a record of it.
-  const { data, error } = await supabase.functions.invoke('validate-invite-token', {
+  const result = await supabase.functions.invoke('validate-invite-token', {
     body: {
       invite_token: inviteToken,
       accept: true,
@@ -271,9 +274,9 @@ export async function acceptInvite(inviteToken, hirerEmail, counterpartyName) {
     },
   })
 
-  if (error || data?.error) {
-    return { accepted: null, reason: data?.error ?? 'error' }
-  }
+  const reason = await invokeErrorReason(result)
+  if (reason) return { accepted: null, reason }
+  const { data } = result
   return { accepted: data, reason: null }
 }
 

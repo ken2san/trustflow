@@ -21,7 +21,7 @@
 // Reads stay client-side: fetchContractEvents and subscribeToContractEvents go
 // straight to PostgREST under the party-scoped SELECT policy.
 
-import { supabase } from './supabase.js'
+import { supabase, invokeErrorReason } from './supabase.js'
 import { getGuestAccessToken } from './guestSession.js'
 
 // ── Event type constants ────────────────────────────────────────────────────
@@ -147,7 +147,7 @@ export async function logEvent({ type, contractId, actorId, payload = {}, idempo
 
   const guestToken = getGuestAccessToken(contractId)
 
-  const { data, error } = await supabase.functions.invoke('log-event', {
+  const result = await supabase.functions.invoke('log-event', {
     body: {
       type,
       contract_id: contractId,
@@ -157,7 +157,15 @@ export async function logEvent({ type, contractId, actorId, payload = {}, idempo
     ...(guestToken ? { headers: { 'x-guest-access-token': guestToken } } : {}),
   })
 
-  const reason = data?.error ?? (error ? error.message : null)
+  // The function's own reason, not the library's. This line used to fall back
+  // to error.message, which for any non-2xx is the fixed string "Edge Function
+  // returned a non-2xx status code" — so every refusal arrived here
+  // indistinguishable. That is how a stale deployment rejecting
+  // payment.reported with type_not_allowed looked like a transient failure for
+  // two weeks, and why the caller's check for wrong_party_for_event_type could
+  // never once have matched.
+  const { data } = result
+  const reason = await invokeErrorReason(result)
   if (reason || !data?.event) {
     console.warn(`[TrustFlow] event not recorded (${type}): ${reason ?? 'no event returned'}`)
     return { ...local, persisted: false, persist_error: reason ?? 'unknown' }

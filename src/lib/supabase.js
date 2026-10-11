@@ -19,3 +19,36 @@ export const isSupabaseEnabled = Boolean(supabase)
 // asserts this value instead of assuming. No new exposure: the URL is already in
 // the bundle and on every request it makes.
 if (typeof window !== 'undefined') window.__TF_SUPABASE_URL__ = url ?? null
+
+/**
+ * The reason the SERVER gave for refusing an Edge Function call.
+ *
+ * supabase-js turns any non-2xx into a FunctionsHttpError and sets `data` to
+ * null, so the obvious `data?.error` collapses every distinct refusal into one
+ * generic string. That has now cost this project twice: `type_not_allowed`
+ * hid behind "That could not be recorded" for two weeks while a stale function
+ * rejected every payment, and `invalid_guest_token` hid behind "The agreement
+ * could not be loaded" the day guest links shipped. Both times the server was
+ * saying exactly what was wrong and the client threw it away.
+ *
+ * The failing Response is carried back on the result, and the library throws
+ * before reading its body, so the JSON the function returned is still there.
+ * It is cloned rather than consumed, so a caller that wants the response for
+ * anything else still can.
+ *
+ * Returns null when the call succeeded, the function's own `error` string when
+ * there is one, and 'error' when the failure carried no readable reason —
+ * a network drop, or a body that is not the JSON shape these functions use.
+ */
+export async function invokeErrorReason({ data, error, response }) {
+  if (data?.error) return data.error
+  if (!error) return null
+  try {
+    const body = await (response ?? error.context)?.clone?.()?.json?.()
+    if (typeof body?.error === 'string') return body.error
+  } catch {
+    // Not JSON, already consumed, or not a Response at all (a fetch failure
+    // carries the cause here instead). Fall through to the generic reason.
+  }
+  return 'error'
+}

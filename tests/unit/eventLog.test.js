@@ -5,7 +5,11 @@ import { createEvent, logEvent, GENESIS_HASH, EVENT_TYPES } from '../../src/lib/
 // be inspected without a live client. The default mock reports success.
 const invoke = vi.fn()
 
-vi.mock('../../src/lib/supabase.js', () => ({
+vi.mock('../../src/lib/supabase.js', async (importOriginal) => ({
+  // The real invokeErrorReason, not a stand-in: it is what turns the
+  // function's own refusal into the reason logEvent reports, so a mock of it
+  // would test the mock. Only the client itself is replaced.
+  ...(await importOriginal()),
   supabase: { functions: { invoke: (...args) => invoke(...args) } },
 }))
 vi.mock('../../src/lib/guestSession.js', () => ({
@@ -191,6 +195,44 @@ describe('logEvent request contract', () => {
     expect(result.persisted).toBe(false)
     expect(result.persist_error).toBe('contract_not_found')
     expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  // The shape above — a 2xx carrying {error} — is not what these functions
+  // actually do. They answer with a status, and supabase-js turns any non-2xx
+  // into an error with data null, which is why the generic path below went
+  // unnoticed: a stale deployment refused every payment.reported with
+  // type_not_allowed for two weeks and the screen said only "That could not be
+  // recorded", and the caller's own check for wrong_party_for_event_type could
+  // never have matched anything.
+  it("reports the server's reason from a non-2xx, not the library's generic message", async () => {
+    invoke.mockResolvedValueOnce({
+      data: null,
+      error: Object.assign(new Error('Edge Function returned a non-2xx status code'),
+        { name: 'FunctionsHttpError' }),
+      response: new Response(JSON.stringify({ error: 'type_not_allowed' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }),
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await logEvent(baseParams)
+    expect(result.persisted).toBe(false)
+    expect(result.persist_error).toBe('type_not_allowed')
+    warn.mockRestore()
+  })
+
+  it('falls back to a generic reason when the failure carries no readable one', async () => {
+    // A dropped connection: there is no Response to read a reason out of, and
+    // inventing a specific one would be worse than admitting ignorance.
+    invoke.mockResolvedValueOnce({
+      data: null,
+      error: Object.assign(new Error('Failed to send a request to the Edge Function'),
+        { name: 'FunctionsFetchError' }),
+      response: undefined,
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await logEvent(baseParams)
+    expect(result.persisted).toBe(false)
+    expect(result.persist_error).toBe('error')
     warn.mockRestore()
   })
 
