@@ -90,7 +90,10 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**, **16 commits ahead of `origin/main`, nothing pushed.**
+- Branch **`main`**. **Nothing has been pushed since `1930d20`** (2026-10-11);
+  everything after it is local only. Count it with
+  `git rev-list --count origin/main..main` rather than reading a number here —
+  a number written in this file goes stale on the commit that writes it.
   A push to `main` is a production frontend deploy (see below), so these 12 are
   deliberately held. Working tree is NOT clean: `tests/e2e/anonymousSession.js`
   (new) and edits to `tests/e2e/event-ingestion.spec.js` /
@@ -311,7 +314,8 @@ database is how the migration drift above happened in the first place.
    no split retry.
 2. **Production** deploy of those four functions. Blocked on (1) and on
    `test:api` being re-run against a single-vintage E2E.
-3. **`git push`** — 16 commits, and a push to `main` deploys the frontend.
+3. **`git push`** — everything after `1930d20`, and a push to `main` deploys
+   the frontend.
 
 ### Approved and done, 2026-10-12
 
