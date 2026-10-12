@@ -135,10 +135,17 @@ What the run did **not** cover is Next Priority #1.
 
   | function | production | trustflow-e2e |
   |---|---|---|
-  | `log-event` | v9, **3 commits stale** | v4, **stale** (pre-`5ab1140`) |
-  | `guest-contract-events` | v8, **stale** | v4, **stale** (pre-`be0cba1`) |
+  | `log-event` | v9, **3 commits stale** | **v5, current** (`edb1fae3…`) |
+  | `guest-contract-events` | v8, **stale** | **v5, current** (`2d15e3a2…`) |
   | `validate-invite-token` | v8, **stale** (`429e571e…`) | **v3, current** (`a94f9381…`) |
-  | `reissue-guest-access` | **absent** | v1, **stale** (pre-`5ab1140`) |
+  | `reissue-guest-access` | **absent** | **v2, current** (`a415bd80…`) |
+
+  **E2E is one vintage again as of 2026-10-12.** It briefly was not: deploying
+  `validate-invite-token` alone, before the batch deploy of the other three was
+  refused, left two vintages live at once — the same split this file flags as
+  the hazard for production. It was benign (`legacyAuthMethod()` holds the old
+  `_auth_method` vocabulary fixed, and the chain verified throughout), but it is
+  the concrete demonstration of why the production set deploys together.
 
   **E2E is therefore itself a two-vintage deployment, and that happened here, in
   this session**, by deploying `validate-invite-token` alone before the batch
@@ -158,7 +165,8 @@ What the run did **not** cover is Next Priority #1.
   split would be a documented hazard rather than a benign one, because
   production is what a counterparty reads.
 
-  Production's bundle predates `0b8f409` / `5ab1140` / `be0cba1`: its
+  Production's bundle predates `0b8f409` / `5ab1140` / `be0cba1` and is now the
+  only side that does. Its
   `SERVER_RECORDED_TYPES` is `new Set([ACCEPTANCE_TYPE])` with no
   `'access.reissued'`, its `_shared/eventRecord.ts` takes no `assurance`
   argument and writes no `_authentication`, and `_shared/authAssurance.ts` is
@@ -170,11 +178,9 @@ What the run did **not** cover is Next Priority #1.
   `eventRecord.ts` in production at once — the exact drift that file's header
   comment warns about. Deploy the set together, or not at all.
 
-  E2E is not a clean reference either: `guest-contract-events` there is also
-  behind `be0cba1`, which `npm run test:api` reports in its own footer
-  ("canonical inputs the deployed response omits … the repo's
-  guest-contract-events sends all of them"). Read that footer; it is a parity
-  check, not decoration.
+  `npm run test:api`'s footer is the parity check for this, not decoration. It
+  read `0 / 4` recomputable while E2E was behind `be0cba1` and reads **`4 / 4`**
+  now. Read it on every run.
 
   Plus `create-payment-intent`, `capture-payment`, `cancel-payment` (deployed,
   unreachable from the app). **The reissue frontend is already live in
@@ -306,24 +312,40 @@ database is how the migration drift above happened in the first place.
 
 ### Still waiting on approval
 
-1. **E2E** deploy of `log-event`, `guest-contract-events` and
-   `reissue-guest-access` (`--project-ref yqjtawffpesplqyurlpj`). Refused by the
-   auto-mode classifier as [Modify Shared Resources]; a single-function deploy
-   went through, so it is the batched form that trips it. Needs a Bash
-   permission rule or Manual mode. **Not worked around** — no alternative API,
-   no split retry.
-2. **Production** deploy of those four functions. Blocked on (1) and on
-   `test:api` being re-run against a single-vintage E2E.
-3. **`git push`** — everything after `1930d20`, and a push to `main` deploys
-   the frontend.
+1. **Production** deploy of `validate-invite-token`, `log-event`,
+   `guest-contract-events` and `reissue-guest-access`, as one set, to
+   `fqgpzhwvvfsxswlnbbgg`. Every gate on it is now met — see "What the
+   production deploy is waiting for" below.
+2. **`git push`** — everything after `1930d20`, and a push to `main` deploys
+   the frontend. Independent of (1): the production UI already offers re-issue
+   and gets a 404, so (1) fixes a live defect without needing (2).
+
+### What the production deploy is waiting for — gates, and their state
+
+| gate | state |
+|---|---|
+| migration `20261011000000` applied to production | ✅ 2026-10-12, digest + ACL identical to E2E |
+| E2E on one vintage | ✅ 2026-10-12 |
+| `test:api` against that E2E | ✅ 20/20, footer `4 / 4` recomputable |
+| chain recomputed independently | ✅ `de936dfb`, 4 events, 17 checks, VERIFIED |
+| every act carries `_authentication` | ✅ all four, `invite_token` / `account_jwt` / `guest_access_token` told apart |
+| no further DB work needed | ✅ the only migration among the three missing commits is already applied |
+| backward compatible with the live frontend | ✅ new `guest-contract-events` keeps every per-act key and adds `canonical`; no field removed or renamed |
+| rollback point identified | ✅ `50e8147`, an ancestor of `origin/main`; redeploy the three from there. `reissue-guest-access` needs no rollback — it does not exist in production |
+
+Nothing is outstanding except the decision. The order is the four together, in
+one window, because each function bundles its own `_shared`.
 
 ### Approved and done, 2026-10-12
 
 - Production: `20261011000000_reissue_guest_access` applied; the three duplicate
   October ledger rows deleted by Kenji in the dashboard SQL Editor.
-- E2E: `validate-invite-token` deployed (v3).
-- Measured: 366 unit tests / 17 files, build clean, `check-migrations` OK,
-  `test:api` 20/20 on E2E.
+- E2E: all four Edge Functions brought current — `validate-invite-token` (v3),
+  then `log-event` (v5), `guest-contract-events` (v5), `reissue-guest-access`
+  (v2).
+- Measured: 373 unit tests / 17 files, build clean, `check-migrations` OK,
+  `test:api` 20/20 with a `4 / 4` parity footer, chain independently
+  recomputed.
 
 ### Not approved — do not do these without a fresh instruction
 
@@ -334,17 +356,13 @@ database is how the migration drift above happened in the first place.
 
 ### The next safe step
 
-Bring `log-event`, `guest-contract-events` and `reissue-guest-access` current on
-**E2E only** (`--project-ref yqjtawffpesplqyurlpj`), then re-run
-`npm run test:api` and read its parity footer. That is reversible, touches no
-production surface, and is what the production decision is waiting on. It is
-also what returns E2E to a single vintage, which it is not today.
+There is no further preparatory work. The next step is the production deploy
+above, which is a decision, not an investigation — every gate it had is green
+and recorded in the table.
 
-Confirmed prerequisite, so nobody has to re-derive it: **Step 3 needs no further
-DB work.** The only migration in the three commits production lacks
-(`0b8f409`, `5ab1140`, `be0cba1`) is `20261011000000`, already applied. The rest
-is `supabase/functions/**` and `src/**`, and `src/**` ships only via a push to
-`main`, which is gated.
+If it is declined or deferred, the next safe thing is **not** more deployment:
+it is Next Priority #1, a real second human. Nothing in the backend queue tests
+what that tests.
 
 ## Next Priority (in order)
 
