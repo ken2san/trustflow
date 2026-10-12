@@ -128,12 +128,30 @@ What the run did **not** cover is Next Priority #1.
 - **Edge Function vintage, measured 2026-10-12 by downloading the deployed
   source, not by `updated_at`:**
 
-  | function | production | trustflow-e2e | repo |
-  |---|---|---|---|
-  | `log-event` | v9, **3 commits stale** | v4, current | — |
-  | `guest-contract-events` | v8, **stale** | v4, **stale** | — |
-  | `validate-invite-token` | v8, **stale** (`429e571e…`) | **v3, current** (`a94f9381…`) | — |
-  | `reissue-guest-access` | **absent** | v1, current | — |
+  | function | production | trustflow-e2e |
+  |---|---|---|
+  | `log-event` | v9, **3 commits stale** | v4, **stale** (pre-`5ab1140`) |
+  | `guest-contract-events` | v8, **stale** | v4, **stale** (pre-`be0cba1`) |
+  | `validate-invite-token` | v8, **stale** (`429e571e…`) | **v3, current** (`a94f9381…`) |
+  | `reissue-guest-access` | **absent** | v1, **stale** (pre-`5ab1140`) |
+
+  **E2E is therefore itself a two-vintage deployment, and that happened here, in
+  this session**, by deploying `validate-invite-token` alone before the batch
+  deploy of the other three was refused. Measured first-hand, not inferred:
+  on contract `be6f9297` the acceptance written by the new
+  `validate-invite-token` carries
+  `_authentication: {assurance: bearer_capability, credential: invite_token}`,
+  while the three events written by `log-event` and `reissue-guest-access`
+  carry `_authentication: null` — a field the current code always writes.
+
+  It is benign **in E2E** and the reason is worth keeping: `legacyAuthMethod()`
+  exists precisely so the old `_auth_method` vocabulary does not move, and it
+  held — all four events agree on `invite_capability` / `account_session`, and
+  `scripts/verify-chain.mjs` recomputed the whole chain independently, 17
+  checks, 0 failed. So the two vintages do not corrupt each other; they differ
+  only in how much they disclose about the credential. In production the same
+  split would be a documented hazard rather than a benign one, because
+  production is what a counterparty reads.
 
   Production's bundle predates `0b8f409` / `5ab1140` / `be0cba1`: its
   `SERVER_RECORDED_TYPES` is `new Set([ACCEPTANCE_TYPE])` with no
@@ -301,7 +319,14 @@ database is how the migration drift above happened in the first place.
 Bring `log-event`, `guest-contract-events` and `reissue-guest-access` current on
 **E2E only** (`--project-ref yqjtawffpesplqyurlpj`), then re-run
 `npm run test:api` and read its parity footer. That is reversible, touches no
-production surface, and is what the production decision is waiting on.
+production surface, and is what the production decision is waiting on. It is
+also what returns E2E to a single vintage, which it is not today.
+
+Confirmed prerequisite, so nobody has to re-derive it: **Step 3 needs no further
+DB work.** The only migration in the three commits production lacks
+(`0b8f409`, `5ab1140`, `be0cba1`) is `20261011000000`, already applied. The rest
+is `supabase/functions/**` and `src/**`, and `src/**` ships only via a push to
+`main`, which is gated.
 
 ## Next Priority (in order)
 
