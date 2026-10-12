@@ -1,7 +1,8 @@
 # TrustFlow — AI Session Handoff
 
-_Last updated: 2026-09-27 (payment evidence shipped; Custom SMTP live; a run of
-real-usage bugs found and fixed; Protocol.md/Roadmap.md brought current)_
+_Last updated: 2026-10-12 (migration-history drift repaired on both projects;
+production and E2E migration ledgers level again at 34; `reissue_guest_access`
+applied to production; Edge Function vintage drift measured and still open)_
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -89,8 +90,15 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**, in sync with `origin/main`, tree clean.
-- Build ✓ 0 errors. Unit tests **206 passing** across 12 files (`npm test`).
+- Branch **`main`**, **12 commits ahead of `origin/main`, nothing pushed.**
+  A push to `main` is a production frontend deploy (see below), so these 12 are
+  deliberately held. Working tree is NOT clean: `tests/e2e/anonymousSession.js`
+  (new) and edits to `tests/e2e/event-ingestion.spec.js` /
+  `tests/e2e/invite-persistence.spec.js` are **Codex's uncommitted work** —
+  do not commit, revert or edit them (see "Ownership and locks").
+- Build ✓ 0 errors. Unit tests **366 passing across 17 files** (`npm test`,
+  measured 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
+  `npm run test:api` (E2E project only) → **20 checks, 0 failed**.
 - **Two Supabase projects**, both in org `wavfjqgbnahqfhgeleqe` (free), Mumbai:
 
   | | ref | used by |
@@ -100,18 +108,54 @@ What the run did **not** cover is Next Priority #1.
 
   See `docs/e2e-project.md` for the whole arrangement. Live E2E stood at 92/92 as
   of 2026-09-26; not re-run this session (no live-flow code changed there).
-- **30 migrations. For the first time the two projects are NOT level, and the
-  E2E one is ahead.** `20261011000000_reissue_guest_access.sql` is applied to
-  **trustflow-e2e only**; production is still at 29. Every earlier drift ran
-  the other way, so do not assume parity in either direction — check.
-  Production's newest remains `20260929000200_delete_unaccepted_drafts.sql`.
-- **Edge Functions in production**: `log-event` (v9), `guest-contract-events`
-  (v8), `validate-invite-token` (v8) — all called from `src/`. Plus
-  `create-payment-intent`, `capture-payment`, `cancel-payment` (deployed,
-  current, unreachable from the app). **`reissue-guest-access` does not exist
-  in production**, and production's `log-event` and `guest-contract-events`
-  predate the `access.reissued` registration — but **the frontend for it is
-  already live there.** Vercel deploys production from a push to `main`, so
+- **34 migration files; both projects' ledgers now hold 34 rows and are level
+  again** (repaired 2026-10-11/12). Before the repair, three October migrations
+  appeared TWICE in each remote ledger — once under the local filename's version
+  and once under a timestamp the management API minted for itself — so
+  `supabase migration list` was not bijective and `db push` was blocked. The
+  schema bodies were never in doubt: every CHECK constraint definition, the
+  `party_read_contract_events` policy expression, all `contracts` triggers and
+  `validate_contract_creation_only`'s source were compared across both projects
+  and are byte-identical. Only the ledger was wrong, and only the ledger was
+  touched. See `20261011235959_reconcile_october_security_migrations.sql`, which
+  documents the drift table and why replaying the bodies was unacceptable.
+- **`reissue_guest_access` now exists in production** (applied 2026-10-12).
+  `md5(pg_get_functiondef(...))` = `36c958a35945282f244052fe573cc7a7` on BOTH
+  projects; `prosecdef` true, `proconfig` `search_path=""`, and `proacl` =
+  `{postgres=X/postgres,service_role=X/postgres}` on both — no EXECUTE for
+  `anon`, `authenticated` or `public`. The two projects' migration ledgers and
+  this function are now level; **their Edge Functions are not** (next bullet).
+- **Edge Function vintage, measured 2026-10-12 by downloading the deployed
+  source, not by `updated_at`:**
+
+  | function | production | trustflow-e2e | repo |
+  |---|---|---|---|
+  | `log-event` | v9, **3 commits stale** | v4, current | — |
+  | `guest-contract-events` | v8, **stale** | v4, **stale** | — |
+  | `validate-invite-token` | v8, **stale** (`429e571e…`) | **v3, current** (`a94f9381…`) | — |
+  | `reissue-guest-access` | **absent** | v1, current | — |
+
+  Production's bundle predates `0b8f409` / `5ab1140` / `be0cba1`: its
+  `SERVER_RECORDED_TYPES` is `new Set([ACCEPTANCE_TYPE])` with no
+  `'access.reissued'`, its `_shared/eventRecord.ts` takes no `assurance`
+  argument and writes no `_authentication`, and `_shared/authAssurance.ts` is
+  not deployed at all. **This is not a hole** — `access.reissued` is absent from
+  production's `ALLOWED_TYPES` too, so no party can assert it; the only
+  difference is which refusal code comes back. It matters for a different
+  reason: **each Edge Function bundles its own copy of `_shared` at deploy
+  time**, so shipping `reissue-guest-access` alone would put two vintages of
+  `eventRecord.ts` in production at once — the exact drift that file's header
+  comment warns about. Deploy the set together, or not at all.
+
+  E2E is not a clean reference either: `guest-contract-events` there is also
+  behind `be0cba1`, which `npm run test:api` reports in its own footer
+  ("canonical inputs the deployed response omits … the repo's
+  guest-contract-events sends all of them"). Read that footer; it is a parity
+  check, not decoration.
+
+  Plus `create-payment-intent`, `capture-payment`, `cancel-payment` (deployed,
+  unreachable from the app). **The reissue frontend is already live in
+  production** while its backend is not. Vercel deploys production from a push to `main`, so
   every UI change on 2026-10-11 shipped the moment it was pushed while the
   backend stayed behind. The live site therefore offers "Re-issue counterparty
   access" on any accepted contract and the call cannot succeed; worse, the
@@ -181,8 +225,17 @@ What the run did **not** cover is Next Priority #1.
   held throughout this session; expect the auto-mode permission layer to block
   the first attempt at each and ask again.
 - **Push migrations with `supabase db push`, never the management API.**
-  `db push` has no `--project-ref` — use `--db-url`, or the linked project
-  (confirmed still linked to production, not the E2E project).
+  `db push` has no `--project-ref` — use `--db-url`, or the linked project.
+  **The CLI is now linked to `trustflow-e2e`, not production**, and
+  `supabase/.temp/project-ref` is absent, so anything taking `--linked` fails
+  with "Cannot find project ref". Pass `--project-ref` explicitly instead; that
+  also removes any chance of a command meant for E2E landing on production.
+  The management API's `apply_migration` is banned for a concrete reason, paid
+  for twice: **it mints its own timestamp version per call and rewrites the
+  body** (schema-qualifying identifiers, stripping the file's `begin;`/`commit;`
+  because it supplies its own transaction), so the ledger records a version no
+  file has. That is the whole cause of the October drift above.
+- **A single owner per workspace and per database.** See "Ownership and locks".
 - **Never run the full E2E suite repeatedly** — per-IP signup cap risk.
 - **Do not restart, delete or otherwise destructively touch the production
   Supabase project as a whole.** Deleting one test user (as done this session)
@@ -203,6 +256,53 @@ What the run did **not** cover is Next Priority #1.
   "What TrustFlow actually knows about the guest".
 - Gemini API and eKYC are out of scope for the current MVP spec.
 
+## Ownership and locks
+
+Adopted 2026-10-12. Not a new design — the working arrangement that was already
+in force, written down because two agents editing the same tree and the same
+database is how the migration drift above happened in the first place.
+
+- **Kenji → ADA (orchestrator) → the assigned agent.** Direct instructions to an
+  agent are avoided; when one happens anyway, it is mirrored back to ADA so the
+  orchestrator's picture stays whole.
+- **Claude = Builder. Codex = Auditor (read-only).** The roles were stated
+  backwards once and real edits were made under the wrong one, so: an auditor
+  reports, it does not write.
+- **One owner at a time for the working tree and for each database.** Codex is
+  paused as of 2026-10-11; its uncommitted test files are listed under "Current
+  State" and are not Claude's to touch.
+- **Every push, every deploy and every production write is individually
+  approved.** Approval for one does not carry to the next, and approval in E2E
+  never implies approval in production.
+- **Report to ADA:** what was done, what is blocking, what needs a decision, and
+  the exact scope of what changed.
+- **Refresh this file** at the end of each phase, before any production change,
+  and before any handoff — updating what is stale rather than appending beneath
+  it. Check its "Last updated" line against `git log -1 -- HANDOFF.md` and the
+  working tree before trusting it.
+
+### Approved and done, 2026-10-12
+
+- Production: `20261011000000_reissue_guest_access` applied; the three duplicate
+  October ledger rows deleted by Kenji in the dashboard SQL Editor.
+- E2E: `validate-invite-token` deployed (v3).
+- Measured: 366 unit tests / 17 files, build clean, `check-migrations` OK,
+  `test:api` 20/20 on E2E.
+
+### Not approved — do not do these without a fresh instruction
+
+- Any `git push`, and therefore any production frontend deploy.
+- Any production Edge Function deploy.
+- Any further production SQL beyond what is listed above.
+- Touching Codex's uncommitted test files.
+
+### The next safe step
+
+Bring `log-event`, `guest-contract-events` and `reissue-guest-access` current on
+**E2E only** (`--project-ref yqjtawffpesplqyurlpj`), then re-run
+`npm run test:api` and read its parity footer. That is reversible, touches no
+production surface, and is what the production decision is waiting on.
+
 ## Next Priority (in order)
 
 1. **A real second human.** The dogfood proved the mechanism (see "Where the
@@ -219,12 +319,25 @@ What the run did **not** cover is Next Priority #1.
    and sends no email.** Invitation delivery is manual, through whatever
    channel the owner picks, and so is a re-issued access link.
 
-2. **Ship the re-issue work to production when it has earned it.** It is on
-   E2E only: migration `20261011000000`, the new `reissue-guest-access`
-   function, and re-deploys of `log-event` and `guest-contract-events` for the
-   `access.reissued` registration. Order matters — migration first, or the
+2. **Finish shipping the re-issue work to production. Half-done, and the
+   remaining half is the approval-gated half.**
+   - ✅ migration `20261011000000` applied to production 2026-10-12, verified
+     identical to E2E by function digest and ACL.
+   - ✅ `validate-invite-token` brought current on E2E (v3).
+   - ⛔ **Blocked, needs approval:** bringing `log-event`,
+     `guest-contract-events` and `reissue-guest-access` current **on E2E**. The
+     auto-mode classifier refused the deploy ([Modify Shared Resources]); a
+     single-function deploy of `validate-invite-token` went through, so it is
+     the batched form that trips it. Needs a Bash permission rule or Manual
+     mode.
+   - ⛔ **Not approved:** the production deploy of those same functions. Do not
+     propose it until E2E is one vintage and `npm run test:api` has been re-run
+     against it — the point of E2E is that production never runs a build E2E
+     has not. Deploy the four as one set (see the vintage table above).
+
+   The ordering constraint still holds: migration before function, or the
    function calls an RPC that does not exist. Not urgent; production has no
-   live counterparty to strand yet.
+   live counterparty to strand.
 
 3. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
@@ -308,6 +421,13 @@ What the run did **not** cover is Next Priority #1.
 - **A test suite that has never run is worth nothing**, and a skip that reports
   success is worse than a failure.
 - **Verify a deploy by downloading the deployed source and diffing it.**
+- **A migration ledger can be wrong while the schema is right, and the ledger
+  is what blocks you.** Three October migrations were recorded twice under
+  different versions; every constraint, policy, trigger and function body was
+  byte-identical across both projects throughout. The fix was never to re-run
+  the DDL — each of those files drops and recreates a constraint, so a replay
+  that fails between the two leaves validation off. Prove the bodies match by
+  digest first, then repair the ledger alone.
 - **Being unreachable from `src/` protects nothing.**
 - **A comment asserting a behaviour is not that behaviour.**
 

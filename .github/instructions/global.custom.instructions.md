@@ -31,6 +31,23 @@ If you are an AI agent deciding where to add a rule:
 
 _Last updated: 2026-05-26_
 
+## Operating Model
+
+Adopted 2026-10-12. Who may do what; `HANDOFF.md` says who currently holds it.
+
+- **Kenji → ADA (orchestrator) → the assigned agent.** Claude is the Builder,
+  Codex the Auditor. An auditor reports findings; it does not edit the tree.
+- **One owner at a time** for the working tree and for each Supabase project.
+  Do not edit files another agent has uncommitted.
+- **Push and deploy are gated.** `git push` to `main` IS a production frontend
+  deploy (Vercel). Every push, Edge Function deploy and production SQL write is
+  approved individually; approval against `trustflow-e2e` never implies approval
+  against production.
+- **Check `HANDOFF.md`'s freshness before trusting it** — compare its
+  "Last updated" line with `git log -1 -- HANDOFF.md` and `git status`. Update it
+  at the end of a phase and before any production change, replacing what is
+  stale rather than appending under it.
+
 ## Testing Gate
 
 - Run `make check` (unit tests + build) before every commit. Do not commit if either fails.
