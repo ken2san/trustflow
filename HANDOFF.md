@@ -90,15 +90,17 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**, **12 commits ahead of `origin/main`, nothing pushed.**
+- Branch **`main`**, **17 commits ahead of `origin/main`, nothing pushed.**
   A push to `main` is a production frontend deploy (see below), so these 12 are
   deliberately held. Working tree is NOT clean: `tests/e2e/anonymousSession.js`
   (new) and edits to `tests/e2e/event-ingestion.spec.js` /
   `tests/e2e/invite-persistence.spec.js` are **Codex's uncommitted work** —
   do not commit, revert or edit them (see "Ownership and locks").
-- Build ✓ 0 errors. Unit tests **366 passing across 17 files** (`npm test`,
+- Build ✓ 0 errors. Unit tests **373 passing across 17 files** (`npm test`,
   measured 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
-  `npm run test:api` (E2E project only) → **20 checks, 0 failed**.
+  `npm run test:api` (E2E project only) → **20 checks, 0 failed**, and
+  `scripts/verify-chain.mjs` recomputed that run's chain independently — 4
+  events, 17 checks, `CHAIN VERIFIED`.
 - **Two Supabase projects**, both in org `wavfjqgbnahqfhgeleqe` (free), Mumbai:
 
   | | ref | used by |
@@ -299,6 +301,18 @@ database is how the migration drift above happened in the first place.
   it. Check its "Last updated" line against `git log -1 -- HANDOFF.md` and the
   working tree before trusting it.
 
+### Still waiting on approval
+
+1. **E2E** deploy of `log-event`, `guest-contract-events` and
+   `reissue-guest-access` (`--project-ref yqjtawffpesplqyurlpj`). Refused by the
+   auto-mode classifier as [Modify Shared Resources]; a single-function deploy
+   went through, so it is the batched form that trips it. Needs a Bash
+   permission rule or Manual mode. **Not worked around** — no alternative API,
+   no split retry.
+2. **Production** deploy of those four functions. Blocked on (1) and on
+   `test:api` being re-run against a single-vintage E2E.
+3. **`git push`** — 17 commits, and a push to `main` deploys the frontend.
+
 ### Approved and done, 2026-10-12
 
 - Production: `20261011000000_reissue_guest_access` applied; the three duplicate
@@ -367,8 +381,18 @@ is `supabase/functions/**` and `src/**`, and `src/**` ships only via a push to
 3. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
    undecided. Needs `derive_contract_state()` to project the withdrawal.
-4. **The onboarding "Skip Intro" path lands on the legacy Marketplace, not
-   `ContractsHomeView`.** Found this session, not fixed. Reroute it.
+4. ~~The onboarding "Skip Intro" path lands on the legacy Marketplace.~~
+   **Settled 2026-10-12, and the diagnosis was wrong.** Skip Intro was already
+   fine: the initial view is `'home'` and `onComplete` only dismisses the
+   overlay. What put a user on the legacy surface uninvited was the **snapshot
+   restore**, which accepted any view name but two. Since `view` is cloud-safe
+   and the state those views need is not — `selectedItem` is local-cache-only,
+   `projectDetail` is not persisted at all — a restore could also land on a
+   blank screen or the spinner that never resolved for `'agreement'` in
+   September. `RESTORABLE_VIEWS` in `src/lib/runtimeState.js` is now an
+   allowlist (`home`, `wallet`), matching that file's existing payload
+   allowlist and for the same reason. The legacy Marketplace / Command Center
+   remain reachable from the command palette's "(legacy)" entries.
 5. **The rest of the MVP consistency refactor** — `App.jsx` decomposition (still
    ~1740 lines), escrow-terminology cleanup, and whatever the full-spec review
    (not in this repo) still calls for. Trust Score / Trust Passport remain out
