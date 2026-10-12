@@ -19,7 +19,7 @@ vi.mock('../../src/lib/identity.js', () => ({ getDeviceId: () => 'device-1' }))
 
 const {
   CLOUD_SAFE_KEYS, CLOUD_SAFE_SHAPE, cloudSafeSubset, mergeRemoteOverLocal,
-  saveRuntimeSnapshot, loadRuntimeSnapshot,
+  saveRuntimeSnapshot, loadRuntimeSnapshot, RESTORABLE_VIEWS, restorableView,
 } = await import('../../src/lib/runtimeState.js')
 
 // The real UI state object, with every key App.jsx actually saves.
@@ -361,5 +361,52 @@ describe('restoring a legacy row with nested personal data', () => {
     expect(merged.uiProfile.level).toBe(2)
     expect(merged.uiProfile).not.toHaveProperty('badActorFlags')
     expect(merged.uiProfile.badges).toEqual(['early'])
+  })
+})
+
+describe('which view a restored snapshot may land on', () => {
+  it('restores the home screen', () => {
+    expect(restorableView('home')).toBe('home')
+  })
+
+  it('restores the wallet, which needs nothing the snapshot does not carry', () => {
+    expect(restorableView('wallet')).toBe('wallet')
+  })
+
+  it('does not return the user to the legacy marketplace or command center', () => {
+    // Reachable on purpose from the command palette's "(legacy)" entries; being
+    // put back there by a reload is not the same as choosing it. This is the
+    // defect in HANDOFF.md's Next Priority #4.
+    expect(restorableView('marketplace')).toBe('home')
+    expect(restorableView('command-center')).toBe('home')
+  })
+
+  it('does not restore a view whose backing state the snapshot never carries', () => {
+    // 'agreement' showed "Loading the agreement…" for ever when restored
+    // (2026-09-28, live). 'scoping' and 'contract' need selectedItem, which is
+    // local-cache-only; 'project-detail' needs projectDetail, which is not
+    // persisted at all — so a second device restores a blank screen.
+    for (const view of ['agreement', 'guest-evidence', 'scoping', 'contract',
+      'project-detail', 'negotiation-chat']) {
+      expect(restorableView(view)).toBe('home')
+    }
+  })
+
+  it('falls back to home for a missing, malformed or unknown view', () => {
+    expect(restorableView(undefined)).toBe('home')
+    expect(restorableView(null)).toBe('home')
+    expect(restorableView(42)).toBe('home')
+    expect(restorableView('a-view-added-after-this-test-was-written')).toBe('home')
+  })
+
+  it('allowlists, so a view added to App.jsx is not restorable by default', () => {
+    // The point of the shape above, applied to the view name: a denylist would
+    // admit whatever is added next without anyone having to decide.
+    expect([...RESTORABLE_VIEWS].sort()).toEqual(['home', 'wallet'])
+  })
+
+  it('keeps view in the cloud-safe shape — this is about which values, not whether', () => {
+    expect(CLOUD_SAFE_SHAPE.view).toBe('string')
+    expect(cloudSafeSubset({ view: 'marketplace' })).toEqual({ view: 'marketplace' })
   })
 })

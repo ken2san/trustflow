@@ -140,6 +140,38 @@ export function cloudSafeSubset(snapshot) {
 }
 
 /**
+ * The only views a restored snapshot may put the user back on.
+ *
+ * WHY AN ALLOWLIST, FOR THE SECOND TIME IN THIS FILE
+ * `view` is in CLOUD_SAFE_SHAPE, so it crosses devices. Almost nothing the
+ * views need crosses with it: `selectedItem`, `projectDetail` and the fetched
+ * agreement are local-cache-only or not persisted at all. Restoring a view
+ * whose backing state did not come along renders an empty screen or a spinner
+ * that never resolves — already hit live on 2026-09-28 with 'agreement', and
+ * fixed then by excluding that one name.
+ *
+ * A denylist of the known-bad names was the wrong shape for the same reason it
+ * was wrong for the payload above: the next view added to App.jsx is restorable
+ * by default and nobody has to notice. So this names what MAY be restored:
+ *
+ *   home   — re-fetches its own contracts from the server.
+ *   wallet — reads only the local ledger and the profile counters, both of
+ *            which the snapshot carries or the app recomputes.
+ *
+ * Everything else falls back to 'home', which is also where the legacy
+ * Marketplace / five-step ContractView surface stops being somewhere a reload
+ * can strand you. Those screens run on local mock state and are reachable on
+ * purpose from the command palette's "(legacy)" entries; being returned to one
+ * by a restore is not the same thing as choosing it.
+ */
+export const RESTORABLE_VIEWS = new Set(['home', 'wallet'])
+
+/** The view to open after a restore: the snapshot's, if it is one we may trust. */
+export function restorableView(view) {
+  return typeof view === 'string' && RESTORABLE_VIEWS.has(view) ? view : 'home'
+}
+
+/**
  * Kept as the flat list of top-level names the server may hold, since the
  * merge in loadRuntimeSnapshot and a couple of tests read it. Derived from the
  * shape rather than maintained beside it: two lists that must agree are one

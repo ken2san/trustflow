@@ -76,7 +76,7 @@ import { sha256, buildDodCanonical } from './lib/crypto.js';
 import { logEvent, EVENT_TYPES, fetchContractEvents, subscribeToContractEvents } from './lib/eventLog.js';
 import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
-import { loadRuntimeSnapshot, saveRuntimeSnapshot } from './lib/runtimeState.js';
+import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor } from './lib/contracts.js';
 import { storeGuestAccessToken } from './lib/guestSession.js';
@@ -421,18 +421,13 @@ const App = () => {
           // A re-issued guest link opens the agreement itself; a restored
           // view would race it for the same screen.
           || initialParams.has('guest');
-        // Nor 'agreement': that view renders whatever `agreement` state holds
-        // (the fetched contract + events), which this snapshot never carries
-        // and nothing here re-fetches. Restoring the view alone left
-        // AgreementView showing "Loading the agreement…" forever — reproduced
-        // live 2026-09-28, on a fresh actor whose local snapshot fallback (not
-        // scoped by actor_id — see loadRuntimeSnapshot) still had 'agreement'
-        // saved from an unrelated earlier session on the same browser.
-        const dataBackedViews = new Set(['agreement', 'guest-evidence']);
-        if (typeof snapshot.view === 'string' && !hasInviteParams
-          && !dataBackedViews.has(snapshot.view)) {
-          setView(snapshot.view);
-        }
+        // Which views a restore may land on is RESTORABLE_VIEWS' decision, not
+        // this effect's: the reason is about what the snapshot carries, and the
+        // snapshot's shape is defined in that module. It used to be an
+        // exclusion list of two names here, which covered the one case already
+        // hit ('agreement', a spinner that never resolved) and left every other
+        // view restorable by default.
+        if (!hasInviteParams) setView(restorableView(snapshot.view));
         if (typeof snapshot.step === 'number') setStep(snapshot.step);
         if (snapshot.selectedItem) setSelectedItem(snapshot.selectedItem);
         if (snapshot.uiProfile) setUIProfile(snapshot.uiProfile);
@@ -857,9 +852,15 @@ const App = () => {
     addToast('Escrow Secured', 'Payment held. Work can begin.', 'success');
   };
 
+  // Lands on the real home screen, named rather than inherited. Dismissing the
+  // overlay used to reveal whatever `view` happened to hold, which on a first
+  // visit is 'home' already — but a snapshot restore resolves asynchronously
+  // and could still arrive afterwards, so the intended destination is stated
+  // here instead of depending on which of the two lands last.
   const handleOnboardingComplete = useCallback(() => {
     localStorage.setItem('tf_onboarded', '1');
     setHasOnboarded(true);
+    setView('home');
   }, []);
 
   // Signing in or out swaps which rows RLS will return, so both re-read.
