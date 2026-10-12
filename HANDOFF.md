@@ -100,10 +100,11 @@ What the run did **not** cover is Next Priority #1.
   a number written in this file goes stale on the commit that writes it.
   **A push to `main` is a production frontend deploy** (see below) — that is
   why those commits were held until the backend caught up, and it is still true
-  of the next one. Working tree is NOT clean: `tests/e2e/anonymousSession.js`
-  (new) and edits to `tests/e2e/event-ingestion.spec.js` /
-  `tests/e2e/invite-persistence.spec.js` are **Codex's uncommitted work** —
-  do not commit, revert or edit them (see "Ownership and locks").
+  of the next one. **Working tree is clean.** Codex's three E2E test files —
+  `tests/e2e/anonymousSession.js` (new), `event-ingestion.spec.js`,
+  `invite-persistence.spec.js` — were held unstaged for most of 2026-10-12 and
+  are now **committed by Codex itself as `dc354ec`**, so the ownership lock on
+  them is released.
 - Build ✓ 0 errors. Unit tests **373 passing across 17 files** (`npm test`,
   measured 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
   `npm run test:api` (E2E project only) → **20 checks, 0 failed**, and
@@ -290,9 +291,11 @@ database is how the migration drift above happened in the first place.
 - **Claude = Builder. Codex = Auditor (read-only).** The roles were stated
   backwards once and real edits were made under the wrong one, so: an auditor
   reports, it does not write.
-- **One owner at a time for the working tree and for each database.** Codex is
-  paused as of 2026-10-11; its uncommitted test files are listed under "Current
-  State" and are not Claude's to touch.
+- **One owner at a time for the working tree and for each database.** This was
+  exercised for real on 2026-10-12: Codex's three E2E test files sat unstaged
+  in the tree for most of a day of Claude's work, through several commits, and
+  were committed by Codex itself (`dc354ec`). Nobody merged another agent's
+  work for them, and nothing was lost.
 - **Every push, every deploy and every production write is individually
   approved.** Approval for one does not carry to the next, and approval in E2E
   never implies approval in production.
@@ -352,7 +355,7 @@ They do not carry forward.
 - A further `git push`, and therefore a further production frontend deploy.
 - A further production Edge Function deploy.
 - Any production SQL beyond what is listed above.
-- Touching Codex's uncommitted test files.
+- Designing or starting phase ② (see Next Priority #2).
 
 ### The next safe step
 
@@ -362,9 +365,13 @@ the list tests what that tests. Resist adding backend work in front of it; the
 reason it keeps getting deferred is that it is the only item that cannot be
 done alone.
 
-Also outstanding, not blocking: Codex's three uncommitted E2E test files still
-sit in the tree, untouched, and Codex is still paused. Decide what happens to
-them before anyone else edits `tests/e2e/`.
+Worth knowing before touching `tests/e2e/`: Codex's `dc354ec` added
+`tests/e2e/anonymousSession.js`, which caches an anonymous refresh token so the
+suite stops burning the 30/hour per-IP signup cap. Its two focused specs pass
+**2/2 under `--workers=1`**. They are **not known to pass in parallel** — there
+is an unresolved `earnerSession` contention between workers, so run that file
+serially until someone fixes it rather than reading a parallel failure as a
+regression.
 
 ## Next Priority (in order)
 
