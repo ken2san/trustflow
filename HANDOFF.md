@@ -356,16 +356,36 @@ They do not carry forward.
 - A further production Edge Function deploy.
 - Any production SQL beyond what is listed above.
 - Sending ANY private code, logs, PII, secrets or real contract data to an
-  external model (OpenRouter and the free tiers included). Kenji holds $10 of
-  OpenRouter credit and a read-only UX/spec review by an outside model is
-  proposed, but connection, model choice, routing, cost and privacy settings
-  belong to the **Model-Trials** thread, not to this repo. CLAUDE.md's standing
-  ban on China-hosted providers (DeepSeek/Qwen/GLM/Kimi/MiniMax) for private
-  material is unchanged, and applies to the whole context sent, not just the
-  file being discussed. An external model is a pure recipient: no shell, no
-  filesystem, no network, no GitHub or Supabase tools. Synthetic or public
-  material only, checked locally before it is sent. Privacy settings alone do
-  not make a provider safe.
+  external model (including OpenRouter and free tiers). The standing restriction
+  on sending private context to China-hosted providers remains in force.
+
+### OpenRouter delegation — approved by Kenji, 2026-10-12 (ADA handoff)
+
+Kenji explicitly authorizes OPTIONAL low-risk, read-only external-model work
+(e.g. reviewing synthetic UX scenarios, comparing publicly available specs)
+using the existing **$10 prepaid OpenRouter credit**. No separate approval is
+required for each such review, but **no top-up or spending beyond available
+credit** is authorized. This is a spending and task-scope approval, NOT a
+production deployment, repo exposure, or data-disclosure approval.
+
+- Model-Trials owns provider/model selection, routing, connection and cost/privacy
+  validation; coordinate with its configuration instead of adding ad-hoc routes.
+- Only synthetic, public or specifically approved-and-checked anonymized
+  material may leave the local environment. Never transmit private repo source,
+  private logs, real contracts, family/customer PII, credentials, .env, API keys,
+  JWTs, cookies or secrets; this applies to **every** provider. China-hosted
+  models must not receive non-public context, including context attached to an
+  otherwise harmless request.
+- Fix the model and provider explicitly; no unreviewed fallbacks. Treat external
+  models strictly as text-only recipients, with **no** shell, filesystem,
+  network, GitHub or Supabase tool access.
+- Do not interpret provider privacy flags or ZDR claims as permission to disclose
+  sensitive material. No external API call has been made by this TrustFlow work
+  as of the handoff; the permission does not require spending the credit.
+
+The independent-counterparty E2E simulation is committed locally as
+`2691c67`, tests verified (19/19 scenario, 29/29 chain, 373 unit tests);
+it remains **unpushed** and does not authorize any additional production write.
 
 ### The next safe step
 
