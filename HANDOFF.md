@@ -1,8 +1,8 @@
 # TrustFlow — AI Session Handoff
 
-_Last updated: 2026-10-12 (migration-history drift repaired on both projects;
-production and E2E migration ledgers level again at 34; `reissue_guest_access`
-applied to production; Edge Function vintage drift measured and still open)_
+_Last updated: 2026-10-12 (migration-history drift repaired; both migration
+ledgers level at 34; all four Edge Functions now identical on production and
+E2E; everything pushed through `545526c`. The backend queue is empty)_
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -63,10 +63,13 @@ before touching anything in the evidence model.
   risk. UI: a trash icon next to Copy invite link, same visibility condition.
 
 The legacy five-step `ContractView` / Marketplace surface still exists on local
-mock state, reachable through command-palette entries labelled "(legacy)", and
-through "Skip Intro" on first visit — **the onboarding flow's default landing
-view is still this legacy marketplace, not `ContractsHomeView`**; noticed but not
-fixed this session. Its `logEvent` calls fail server-side by design. Do not
+mock state, reachable through command-palette entries labelled "(legacy)". It is
+no longer somewhere the app can put you without asking: the initial view is
+`'home'` (`ContractsHomeView`), onboarding lands there explicitly, and a
+snapshot restore may only reopen a view on `RESTORABLE_VIEWS`. An earlier
+version of this file said the onboarding default was the legacy marketplace;
+that was wrong when written — see Next Priority #4 for what the real defect
+turned out to be. Its `logEvent` calls fail server-side by design. Do not
 mistake it for the real flow, and do not read its "✅" history as evidence of
 anything working.
 
@@ -90,12 +93,14 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**. **Nothing has been pushed since `1930d20`** (2026-10-11);
-  everything after it is local only. Count it with
+- Branch **`main`**, **pushed through `545526c`** (2026-10-12): the nineteen
+  commits held back since `1930d20` went out in one push, which also deployed
+  the frontend. Check for later local-only work with
   `git rev-list --count origin/main..main` rather than reading a number here —
   a number written in this file goes stale on the commit that writes it.
-  A push to `main` is a production frontend deploy (see below), so these 12 are
-  deliberately held. Working tree is NOT clean: `tests/e2e/anonymousSession.js`
+  **A push to `main` is a production frontend deploy** (see below) — that is
+  why those commits were held until the backend caught up, and it is still true
+  of the next one. Working tree is NOT clean: `tests/e2e/anonymousSession.js`
   (new) and edits to `tests/e2e/event-ingestion.spec.js` /
   `tests/e2e/invite-persistence.spec.js` are **Codex's uncommitted work** —
   do not commit, revert or edit them (see "Ownership and locks").
@@ -111,8 +116,12 @@ What the run did **not** cover is Next Priority #1.
   | `trustflow` | `fqgpzhwvvfsxswlnbbgg` | the deployed site, `.env` |
   | `trustflow-e2e` | `yqjtawffpesplqyurlpj` | live E2E only, `.env.e2e` |
 
-  See `docs/e2e-project.md` for the whole arrangement. Live E2E stood at 92/92 as
-  of 2026-09-26; not re-run this session (no live-flow code changed there).
+  See `docs/e2e-project.md` for the whole arrangement. The Playwright suite
+  last stood at 92/92 on 2026-09-26 and **has not been re-run since**, which
+  now matters more than it did: live-flow code HAS changed under it. It is held
+  back by the per-IP anonymous-signup cap (see Active Constraints), not by a
+  judgement that it would pass. The API-level `npm run test:api` has been run
+  against the current build and passes 20/20.
 - **34 migration files; both projects' ledgers now hold 34 rows and are level
   again** (repaired 2026-10-11/12). Before the repair, three October migrations
   appeared TWICE in each remote ledger — once under the local filename's version
@@ -133,67 +142,48 @@ What the run did **not** cover is Next Priority #1.
 - **Edge Function vintage, measured 2026-10-12 by downloading the deployed
   source, not by `updated_at`:**
 
-  | function | production | trustflow-e2e |
-  |---|---|---|
-  | `log-event` | v9, **3 commits stale** | **v5, current** (`edb1fae3…`) |
-  | `guest-contract-events` | v8, **stale** | **v5, current** (`2d15e3a2…`) |
-  | `validate-invite-token` | v8, **stale** (`429e571e…`) | **v3, current** (`a94f9381…`) |
-  | `reissue-guest-access` | **absent** | **v2, current** (`a415bd80…`) |
+  | function | production | trustflow-e2e | `ezbr_sha256` |
+  |---|---|---|---|
+  | `log-event` | **v10** | v5 | `edb1fae3…` |
+  | `guest-contract-events` | **v9** | v5 | `2d15e3a2…` |
+  | `validate-invite-token` | **v9** | v3 | `a94f9381…` |
+  | `reissue-guest-access` | **v1 (new)** | v2 | `a415bd80…` |
 
-  **E2E is one vintage again as of 2026-10-12.** It briefly was not: deploying
-  `validate-invite-token` alone, before the batch deploy of the other three was
-  refused, left two vintages live at once — the same split this file flags as
-  the hazard for production. It was benign (`legacyAuthMethod()` holds the old
-  `_auth_method` vocabulary fixed, and the chain verified throughout), but it is
-  the concrete demonstration of why the production set deploys together.
+  **Both projects are on one vintage as of 2026-10-12, and the digests are
+  identical across them** — the version numbers differ only because each
+  project has its own deploy count. `verify_jwt` is true on all four. The
+  two-week production lag described below is closed; the paragraph stays
+  because the reasoning is what makes the rule worth keeping.
 
-  **E2E is therefore itself a two-vintage deployment, and that happened here, in
-  this session**, by deploying `validate-invite-token` alone before the batch
-  deploy of the other three was refused. Measured first-hand, not inferred:
-  on contract `be6f9297` the acceptance written by the new
-  `validate-invite-token` carries
-  `_authentication: {assurance: bearer_capability, credential: invite_token}`,
-  while the three events written by `log-event` and `reissue-guest-access`
-  carry `_authentication: null` — a field the current code always writes.
+  E2E briefly ran two vintages during this work: `validate-invite-token` was
+  deployed alone, before the batch deploy of the other three was refused. It
+  was benign (`legacyAuthMethod()` holds the old `_auth_method` vocabulary
+  fixed, and the chain verified throughout), and it is the concrete
+  demonstration of why the set deploys together rather than a hypothetical.
 
-  It is benign **in E2E** and the reason is worth keeping: `legacyAuthMethod()`
-  exists precisely so the old `_auth_method` vocabulary does not move, and it
-  held — all four events agree on `invite_capability` / `account_session`, and
-  `scripts/verify-chain.mjs` recomputed the whole chain independently, 17
-  checks, 0 failed. So the two vintages do not corrupt each other; they differ
-  only in how much they disclose about the credential. In production the same
-  split would be a documented hazard rather than a benign one, because
-  production is what a counterparty reads.
-
-  Production's bundle predates `0b8f409` / `5ab1140` / `be0cba1` and is now the
-  only side that does. Its
-  `SERVER_RECORDED_TYPES` is `new Set([ACCEPTANCE_TYPE])` with no
-  `'access.reissued'`, its `_shared/eventRecord.ts` takes no `assurance`
-  argument and writes no `_authentication`, and `_shared/authAssurance.ts` is
-  not deployed at all. **This is not a hole** — `access.reissued` is absent from
-  production's `ALLOWED_TYPES` too, so no party can assert it; the only
-  difference is which refusal code comes back. It matters for a different
-  reason: **each Edge Function bundles its own copy of `_shared` at deploy
-  time**, so shipping `reissue-guest-access` alone would put two vintages of
-  `eventRecord.ts` in production at once — the exact drift that file's header
+  **The rule this cost, which outlives the incident: each Edge Function bundles
+  its own copy of `_shared` at deploy time.** Deploying one of a set puts two
+  vintages of `eventRecord.ts` live at once — the exact drift that file's header
   comment warns about. Deploy the set together, or not at all.
 
-  `npm run test:api`'s footer is the parity check for this, not decoration. It
-  read `0 / 4` recomputable while E2E was behind `be0cba1` and reads **`4 / 4`**
-  now. Read it on every run.
+  `npm run test:api`'s footer is the parity check, not decoration. It read
+  `0 / 4` recomputable while E2E was behind `be0cba1` and reads **`4 / 4`** now.
+  Read it on every run.
 
   Plus `create-payment-intent`, `capture-payment`, `cancel-payment` (deployed,
-  unreachable from the app). **The reissue frontend is already live in
-  production** while its backend is not. Vercel deploys production from a push to `main`, so
-  every UI change on 2026-10-11 shipped the moment it was pushed while the
-  backend stayed behind. The live site therefore offers "Re-issue counterparty
-  access" on any accepted contract and the call cannot succeed; worse, the
-  failure is reported as "Try again in a moment", which is wrong advice for a
-  function that does not exist. Nobody real is affected — production has no
-  live counterparty — but "production is unchanged" was said repeatedly today
-  and was only true of the database. **A push to `main` is a production
-  deploy.** Verify a deploy by behaviour or by downloading the source back
-  and diffing — never by `updated_at`.
+  unreachable from the app).
+
+  **Past, for context — do not read as current.** Until 2026-10-12 production's
+  bundle predated `0b8f409` / `5ab1140` / `be0cba1`: no `'access.reissued'` in
+  `SERVER_RECORDED_TYPES`, an `_shared/eventRecord.ts` that took no `assurance`
+  and wrote no `_authentication`, and no `_shared/authAssurance.ts` at all. It
+  was never a hole — `access.reissued` was absent from `ALLOWED_TYPES` too, so
+  no party could assert it. Meanwhile the reissue **frontend** had been live
+  since 2026-10-11 calling a function that did not exist, reported to the user
+  as "Try again in a moment", which was wrong advice. Both halves are now
+  deployed. **A push to `main` is a production deploy.** Verify a deploy by
+  behaviour or by downloading the source back and diffing — never by
+  `updated_at`.
 - **`send-acceptance-email` and `timestamp-event` remain deleted** (both 404
   since 2026-09-26). Do not redeploy either.
 - **Auth, materially changed this session:**
@@ -259,6 +249,9 @@ What the run did **not** cover is Next Priority #1.
   `supabase/.temp/project-ref` is absent, so anything taking `--linked` fails
   with "Cannot find project ref". Pass `--project-ref` explicitly instead; that
   also removes any chance of a command meant for E2E landing on production.
+  `supabase functions deploy <name> --project-ref <ref>` works and was how both
+  projects were deployed on 2026-10-12 — so there is no reason to relink, and
+  relinking to production would leave exactly the footgun this avoids.
   The management API's `apply_migration` is banned for a concrete reason, paid
   for twice: **it mints its own timestamp version per call and rewrites the
   body** (schema-qualifying identifiers, stripping the file's `begin;`/`commit;`
@@ -312,57 +305,66 @@ database is how the migration drift above happened in the first place.
 
 ### Still waiting on approval
 
-1. **Production** deploy of `validate-invite-token`, `log-event`,
-   `guest-contract-events` and `reissue-guest-access`, as one set, to
-   `fqgpzhwvvfsxswlnbbgg`. Every gate on it is now met — see "What the
-   production deploy is waiting for" below.
-2. **`git push`** — everything after `1930d20`, and a push to `main` deploys
-   the frontend. Independent of (1): the production UI already offers re-issue
-   and gets a 404, so (1) fixes a live defect without needing (2).
+Nothing. The backend queue is empty for the first time since 2026-10-10.
 
-### What the production deploy is waiting for — gates, and their state
+### Rollback, if the deploy turns out to be wrong
 
-| gate | state |
-|---|---|
-| migration `20261011000000` applied to production | ✅ 2026-10-12, digest + ACL identical to E2E |
-| E2E on one vintage | ✅ 2026-10-12 |
-| `test:api` against that E2E | ✅ 20/20, footer `4 / 4` recomputable |
-| chain recomputed independently | ✅ `de936dfb`, 4 events, 17 checks, VERIFIED |
-| every act carries `_authentication` | ✅ all four, `invite_token` / `account_jwt` / `guest_access_token` told apart |
-| no further DB work needed | ✅ the only migration among the three missing commits is already applied |
-| backward compatible with the live frontend | ✅ new `guest-contract-events` keeps every per-act key and adds `canonical`; no field removed or renamed |
-| rollback point identified | ✅ `50e8147`, an ancestor of `origin/main`; redeploy the three from there. `reissue-guest-access` needs no rollback — it does not exist in production |
+- **Edge Functions**: there is no CLI rollback. Redeploy the three pre-existing
+  functions from **`50e8147`** (an ancestor of `origin/main`), which is what
+  production ran until 2026-10-12. `reissue-guest-access` is new; leaving it in
+  place is harmless, and its RPC is `revoke`d from everything but
+  `service_role`.
+- **Frontend**: Vercel keeps the previous production deployment
+  (`1930d20`, `dpl_9sATxFCyNfX42WACVEc8axGBU9nb`); promote that rather than
+  reverting commits.
+- **Database**: nothing to roll back. No DDL and no row was written in this
+  work — `events` stayed at 2396 and `contracts` at 1321 across the whole
+  deploy, checked before and after.
 
-Nothing is outstanding except the decision. The order is the four together, in
-one window, because each function bundles its own `_shared`.
 
 ### Approved and done, 2026-10-12
 
-- Production: `20261011000000_reissue_guest_access` applied; the three duplicate
-  October ledger rows deleted by Kenji in the dashboard SQL Editor.
-- E2E: all four Edge Functions brought current — `validate-invite-token` (v3),
-  then `log-event` (v5), `guest-contract-events` (v5), `reissue-guest-access`
-  (v2).
+- Production DB: `20261011000000_reissue_guest_access` applied; the three
+  duplicate October ledger rows deleted by Kenji in the dashboard SQL Editor.
+- E2E: all four Edge Functions brought current.
+- **Production: all four Edge Functions deployed**, digests identical to E2E,
+  `verify_jwt` true on each. `reissue-guest-access` existed nowhere in
+  production before this. An unauthenticated POST now returns 401 rather than
+  404, which establishes only that the function exists and is routed — **the
+  authenticated re-issue path has not been exercised in production**, and
+  deliberately will not be: that would write an `access.reissued` event onto a
+  real contract. It is exercised on E2E by `npm run test:api` checks 16 and 17.
+  So the live "Re-issue counterparty access" button is no longer calling a
+  function that does not exist; whether it succeeds end to end in production is
+  untested and will stay untested until there is a contract worth testing it
+  on.
+- **Pushed `1930d20..545526c`** (fast-forward, no force), which deployed the
+  frontend.
 - Measured: 373 unit tests / 17 files, build clean, `check-migrations` OK,
   `test:api` 20/20 with a `4 / 4` parity footer, chain independently
-  recomputed.
+  recomputed, and production row counts unchanged either side of the deploy.
 
 ### Not approved — do not do these without a fresh instruction
 
-- Any `git push`, and therefore any production frontend deploy.
-- Any production Edge Function deploy.
-- Any further production SQL beyond what is listed above.
+The approvals given on 2026-10-12 were for the work listed above and are spent.
+They do not carry forward.
+
+- A further `git push`, and therefore a further production frontend deploy.
+- A further production Edge Function deploy.
+- Any production SQL beyond what is listed above.
 - Touching Codex's uncommitted test files.
 
 ### The next safe step
 
-There is no further preparatory work. The next step is the production deploy
-above, which is a decision, not an investigation — every gate it had is green
-and recorded in the table.
+**Next Priority #1 — a real second human.** The backend queue that has filled
+this file for three days is empty, both projects are level, and nothing left in
+the list tests what that tests. Resist adding backend work in front of it; the
+reason it keeps getting deferred is that it is the only item that cannot be
+done alone.
 
-If it is declined or deferred, the next safe thing is **not** more deployment:
-it is Next Priority #1, a real second human. Nothing in the backend queue tests
-what that tests.
+Also outstanding, not blocking: Codex's three uncommitted E2E test files still
+sit in the tree, untouched, and Codex is still paused. Decide what happens to
+them before anyone else edits `tests/e2e/`.
 
 ## Next Priority (in order)
 
@@ -380,25 +382,17 @@ what that tests.
    and sends no email.** Invitation delivery is manual, through whatever
    channel the owner picks, and so is a re-issued access link.
 
-2. **Finish shipping the re-issue work to production. Half-done, and the
-   remaining half is the approval-gated half.**
-   - ✅ migration `20261011000000` applied to production 2026-10-12, verified
-     identical to E2E by function digest and ACL.
-   - ✅ `validate-invite-token` brought current on E2E (v3).
-   - ⛔ **Blocked, needs approval:** bringing `log-event`,
-     `guest-contract-events` and `reissue-guest-access` current **on E2E**. The
-     auto-mode classifier refused the deploy ([Modify Shared Resources]); a
-     single-function deploy of `validate-invite-token` went through, so it is
-     the batched form that trips it. Needs a Bash permission rule or Manual
-     mode.
-   - ⛔ **Not approved:** the production deploy of those same functions. Do not
-     propose it until E2E is one vintage and `npm run test:api` has been re-run
-     against it — the point of E2E is that production never runs a build E2E
-     has not. Deploy the four as one set (see the vintage table above).
+2. ~~Ship the re-issue work to production.~~ **Done 2026-10-12**: migration
+   applied, all four Edge Functions deployed to both projects with identical
+   digests, everything pushed. Nothing remains. The constraint it was carrying
+   is recorded where it belongs — see the Edge Function table in Current State
+   for why the set deploys together.
 
-   The ordering constraint still holds: migration before function, or the
-   function calls an RPC that does not exist. Not urgent; production has no
-   live counterparty to strand.
+   **Proposed, NOT STARTED: independent-AI-counterparty simulation.**
+   Implementation and the account/session architecture are **TBD with Claude in
+   phase ②** and deliberately undecided here. Do not design it in this file.
+   It is not a substitute for #1 — a simulated counterparty cannot test
+   misunderstanding, correction or dispute between two real people.
 
 3. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
