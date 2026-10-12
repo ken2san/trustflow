@@ -18,10 +18,8 @@
 
 import { test, expect } from '@playwright/test';
 import { getEarnerSession } from './earnerSession.js';
+import { getAnonymousSession } from './anonymousSession.js';
 import { SUPABASE_URL, SUPABASE_KEY, LIVE_SKIPPED } from './liveEnv.js';
-import { readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 test.skip(LIVE_SKIPPED,
   'TF_LIVE_E2E=skip — the live-API suites were deliberately disabled.');
@@ -48,53 +46,6 @@ async function api(request, path, { method = 'POST', token, body, prefer } = {})
   let parsed = null;
   try { parsed = await response.json(); } catch { /* empty body */ }
   return { status: response.status(), body: parsed };
-}
-
-// A persistent anonymous test identity.
-//
-// Anonymous sign-ins are capped at 30/hour per IP, and the app itself calls
-// signInAnonymously() on every page load — so a full suite run spends most of
-// the budget before this test even starts. Minting a session per run therefore
-// failed for reasons that had nothing to do with the gate under test.
-//
-// An anonymous auth.users row is permanent, so one is enough forever. The
-// fixture file holds its refresh token; exchanging a refresh token is not
-// subject to the signup rate limit. Tokens rotate, so the new one is written
-// back after each exchange. The file is created on first use and gitignored.
-const ANON_FIXTURE = process.env.TF_TEST_ANON_FIXTURE
-  ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '.anon-fixture.json');
-
-let anonSessionPromise = null;
-
-async function anonymousSession(request) {
-  anonSessionPromise ??= (async () => {
-    let stored = null;
-    try {
-      stored = JSON.parse(await readFile(ANON_FIXTURE, 'utf8'));
-    } catch { /* no fixture yet */ }
-
-    if (stored?.refresh_token) {
-      const refreshed = await api(request, '/auth/v1/token?grant_type=refresh_token', {
-        body: { refresh_token: stored.refresh_token },
-      });
-      if (refreshed.status === 200) {
-        await writeFile(ANON_FIXTURE, JSON.stringify({ refresh_token: refreshed.body.refresh_token }, null, 2));
-        expect(refreshed.body.user.is_anonymous, 'fixture identity is no longer anonymous').toBe(true);
-        return { accessToken: refreshed.body.access_token, userId: refreshed.body.user.id };
-      }
-      // Refresh token expired or revoked — fall through and mint a new one.
-    }
-
-    const { status, body } = await api(request, '/auth/v1/signup', { body: {} });
-    expect(status,
-      `could not establish an anonymous identity. 429 means the 30/hr per-IP signup cap is `
-      + `exhausted and no reusable fixture exists at ${ANON_FIXTURE} — wait for the window to `
-      + `reset and re-run once to create it. Response: ${JSON.stringify(body)}`).toBe(200);
-    expect(body.user.is_anonymous).toBe(true);
-    await writeFile(ANON_FIXTURE, JSON.stringify({ refresh_token: body.refresh_token }, null, 2));
-    return { accessToken: body.access_token, userId: body.user.id };
-  })();
-  return anonSessionPromise;
 }
 
 // Shared across every live-API suite and cached on disk — see earnerSession.js.
@@ -148,7 +99,7 @@ test('an unverified (anonymous) Earner cannot persist a contract at all', async 
   // If the cap is genuinely hit the test fails rather than skips — an
   // unreachable anonymous session is an environment problem worth seeing, but
   // it is now one sign-in per run instead of one per attempt.
-  const anon = await anonymousSession(request);
+  const anon = await getAnonymousSession(request);
 
   const { status, body } = await api(request, '/rest/v1/contracts', {
     token: anon.accessToken,

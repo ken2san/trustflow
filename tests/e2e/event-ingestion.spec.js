@@ -14,6 +14,7 @@
 
 import { test, expect } from '@playwright/test';
 import { getEarnerSession } from './earnerSession.js';
+import { getAnonymousSession } from './anonymousSession.js';
 import { SUPABASE_URL, SUPABASE_KEY, LIVE_SKIPPED } from './liveEnv.js';
 
 test.skip(LIVE_SKIPPED,
@@ -93,6 +94,33 @@ test('a public anonymous client cannot read the event trail', async ({ request }
 
   expect(status).toBe(200);
   expect(body).toEqual([]); // RLS returns no rows rather than an error
+});
+
+test('an anonymous JWT cannot read an event trail after guest acceptance', async ({ request }) => {
+  const { contract } = await createContract(request);
+  const claimedEmail = 'self.claimed@example.test';
+
+  // Acceptance records a self-claimed address and creates an event. The
+  // anonymous JWT still has no authority; guests read through their capability.
+  // A direct regression for a matching verified-account email needs a separate
+  // verified account fixture, which this suite intentionally does not create.
+  const accepted = await api(request, '/functions/v1/validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token,
+      accept: true,
+      hirer_email: claimedEmail,
+    },
+  });
+  expect(accepted.status).toBe(200);
+
+  const anonymous = await getAnonymousSession(request);
+  const { status, body } = await api(request,
+    `/rest/v1/events?contract_id=eq.${contract.id}&select=id,type`, {
+      method: 'GET', token: anonymous.accessToken,
+    });
+
+  expect(status).toBe(200);
+  expect(body).toEqual([]);
 });
 
 // ── What the ingestion function refuses ─────────────────────────────────────
