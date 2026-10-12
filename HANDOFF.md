@@ -355,7 +355,17 @@ They do not carry forward.
 - A further `git push`, and therefore a further production frontend deploy.
 - A further production Edge Function deploy.
 - Any production SQL beyond what is listed above.
-- Designing or starting phase ② (see Next Priority #2).
+- Sending ANY private code, logs, PII, secrets or real contract data to an
+  external model (OpenRouter and the free tiers included). Kenji holds $10 of
+  OpenRouter credit and a read-only UX/spec review by an outside model is
+  proposed, but connection, model choice, routing, cost and privacy settings
+  belong to the **Model-Trials** thread, not to this repo. CLAUDE.md's standing
+  ban on China-hosted providers (DeepSeek/Qwen/GLM/Kimi/MiniMax) for private
+  material is unchanged, and applies to the whole context sent, not just the
+  file being discussed. An external model is a pure recipient: no shell, no
+  filesystem, no network, no GitHub or Supabase tools. Synthetic or public
+  material only, checked locally before it is sent. Privacy settings alone do
+  not make a provider safe.
 
 ### The next safe step
 
@@ -363,7 +373,8 @@ They do not carry forward.
 this file for three days is empty, both projects are level, and nothing left in
 the list tests what that tests. Resist adding backend work in front of it; the
 reason it keeps getting deferred is that it is the only item that cannot be
-done alone.
+done alone — and phase ②, now that it exists, is the most tempting way yet to
+keep deferring it.
 
 Worth knowing before touching `tests/e2e/`: Codex's `dc354ec` added
 `tests/e2e/anonymousSession.js`, which caches an anonymous refresh token so the
@@ -395,11 +406,33 @@ regression.
    is recorded where it belongs — see the Edge Function table in Current State
    for why the set deploys together.
 
-   **Proposed, NOT STARTED: independent-AI-counterparty simulation.**
-   Implementation and the account/session architecture are **TBD with Claude in
-   phase ②** and deliberately undecided here. Do not design it in this file.
-   It is not a substitute for #1 — a simulated counterparty cannot test
-   misunderstanding, correction or dispute between two real people.
+   **Phase ② — counterparty simulation: first slice built 2026-10-12,
+   `npm run sim:counterparty`.** The architecture question it was opened to
+   answer is settled, and the answer is that it needed no architecture: **a
+   second party already costs one invite token and nothing else.** A guest has
+   no `auth.users` row, no password and no mailbox — `hirer_email` is typed by
+   them and recorded unverified — so extra counterparties need no accounts, no
+   email service, and no further operator threads. `scripts/sim-counterparty.mjs`
+   runs two of them, with different self-claimed identities, against E2E.
+
+   What it adds beyond `api-e2e.mjs` (which is slice 1, one happy path): the
+   counterparty is a **policy handed the delivery that returns a verdict**, so
+   the script does not know in advance how many events a run produces, and the
+   `performance.rejected` → re-assert → accept path is now exercised end to end
+   — 7 acts, independently recomputed by `verify-chain.mjs`, 29 checks, 0
+   failed. Credential isolation is structural: `counterparty()` closes over its
+   own guest token and the owner's is not in scope, so a policy has nothing to
+   overreach with.
+
+   Still open, deliberately: the policies are two hand-written functions, not
+   models. Pointing a model at them is Model-Trials' subject, and nothing in
+   this repo sends anything to one.
+
+   **It is not a substitute for #1 and does not shorten it.** A simulated
+   counterparty shares our assumptions by construction: it cannot misread a
+   screen, type the wrong address, or change its mind for a reason we failed to
+   anticipate. Every verdict in that script was written by the person who wrote
+   the thing being judged.
 
 3. **Cancellation: build only the withdraw-before-acceptance half.** Decided
    2026-09-25, still not implemented. Voiding an *accepted* agreement remains
