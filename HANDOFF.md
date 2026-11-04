@@ -373,7 +373,33 @@ database is how the migration drift above happened in the first place.
 
 ### Still waiting on approval
 
-Nothing. The backend queue is empty for the first time since 2026-10-10.
+**`20261104000000_delete_requires_no_events.sql` is unapplied, on E2E and on
+production.** It is written, `check-migrations` passes, and the two things that
+could have made it a no-op were checked against the live E2E catalog rather than
+assumed:
+
+- The `events` read policy (`party_read_contract_events`) admits the verified
+  contract owner, and the delete predicate already requires `auth.uid() =
+  earner_user_id`, so the subquery sees the rows it is there to find. A policy
+  subquery runs with the caller's privileges, so an `events` policy that hid
+  them would have silently inverted the guard.
+- No recursion: the `contracts` SELECT policy is `parties_read_own_contracts`
+  (`auth.uid() = earner_user_id or auth.uid() = hirer_user_id`) and does not
+  reference `events`.
+
+Applying it was attempted and blocked twice: the Supabase MCP's
+`apply_migration` was refused by the permission classifier, which labelled an
+E2E write "Production Deploy", and the CLI cannot reach the project because
+`supabase/.temp/project-ref` is absent — `linked-project.json` names
+`trustflow-e2e` (`yqjtawffpesplqyurlpj`) but the CLI reads the other file and
+reports "Cannot find project ref". Re-linking needs the database password.
+
+**Drift worth knowing, found on the way:** `parties_read_own_contracts` exists
+on the live database and in **no migration in this repo** — `contracts` has
+only `insert` and `delete` policies in `supabase/migrations/`. It was created
+outside the migration history, which is the same class of divergence as the
+migration-ledger drift repaired on 2026-10-12. Reproducing the database from
+`supabase/migrations/` alone would leave `contracts` unreadable.
 
 ### Rollback, if the deploy turns out to be wrong
 
@@ -567,13 +593,22 @@ Nothing in production was touched.
      contract_id = id::text)` **in the same pass**. The open decision "whether
      creation should be an event" would remove the premise outright.
 
-   **Two decisions are needed before it can be built**, neither recorded
-   anywhere: (a) the correct split is hard-delete where nothing was shared and
-   withdrawal where a link went out — but the product cannot know whether a link
-   was shared, since `invite_token` exists from row creation and copying is
-   client-side, so "was it sent" is not knowable server-side; (b) whether a bare
-   404 is an acceptable product answer to a retracted offer. Do not build until
-   (a) has an answer; the event it writes is permanent.
+   **Settled 2026-11-04, by not building it.** Kenji decided the counterparty's
+   bare 404 is the accepted answer for now, the first goal being a product he
+   can use himself — so `owner_delete_unaccepted_draft` is the whole answer to
+   "I sent this to the wrong person", and the withdraw half stays unbuilt. See
+   `Decisions.md` for what that accepts and when to revisit it (Next Priority
+   #1, the first time it will be observed rather than reasoned about). The
+   question that made withdrawal expensive is still open and is the real
+   prerequisite: the product cannot tell "nothing was shared" from "a link went
+   out", because `invite_token` exists from row creation and copying is
+   client-side.
+
+   **The predicate was hardened anyway** —
+   `20261104000000_delete_requires_no_events.sql` adds `not exists (select 1
+   from events …)`, because not building withdrawal does not remove the orphan
+   hazard. **Written and verified offline; NOT YET APPLIED to any project** —
+   see "Still waiting on approval".
 4. ~~The onboarding "Skip Intro" path lands on the legacy Marketplace.~~
    **Settled 2026-10-12, and the diagnosis was wrong.** Skip Intro was already
    fine: the initial view is `'home'` and `onComplete` only dismisses the

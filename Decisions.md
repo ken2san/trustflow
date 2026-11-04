@@ -1,6 +1,6 @@
 # TrustFlow — Architecture Decisions
 
-_Last updated: 2026-09-29_
+_Last updated: 2026-11-04_
 
 > This file records significant design decisions and the reasoning behind them.
 > AI agents must read this before proposing changes to established patterns.
@@ -120,6 +120,40 @@ different evidence, not just different buttons.
 
 Do not record that any of these is the chosen model. Do not wire a cancel button
 before the semantics are decided, because the event it writes is permanent.
+
+**Decided 2026-11-04 — the counterparty's 404 is the accepted answer, for now.**
+Kenji's instruction, given the first goal is a product he can use himself: if
+withdrawal is costly to specify, a retracted offer may leave the counterparty
+with the bare `not_found` that `validate-invite-token` already returns. So the
+withdraw half stays unbuilt, and `owner_delete_unaccepted_draft` is the whole
+answer to "I sent this to the wrong person".
+
+What that accepts, stated so it can be revisited rather than rediscovered: a
+counterparty who was sent a link, opened it, and had not yet accepted gets a
+404 indistinguishable from a mistyped URL, and nothing anywhere records that an
+offer was made. **Revisit when a real second party is confused by it** — which
+is Next Priority #1, and is the first time this will be observed rather than
+reasoned about.
+
+**The question that made withdrawal expensive is still unanswered**, and is why
+it was not simply built: the correct split is hard delete where nothing was
+shared and withdrawal where a link went out, but the product cannot tell those
+apart. `invite_token` exists from the moment the row is created — the row is
+what the link lives on — and copying the link is client-side, so "was it sent"
+is not knowable server-side. Answering that is the real prerequisite, not
+choosing between withdrawal semantics.
+
+**Decided in the same breath: the delete predicate is hardened anyway**
+(`20261104000000_delete_requires_no_events.sql`). Not building withdrawal does
+not make the hazard go away. `log-event` has no acceptance check and
+`derive_contract_state()` does not move a contract out of `AWAITING_ACCEPTANCE`,
+so an event-bearing deletable contract is reachable today; `events.contract_id`
+is text with no foreign key and `delete on events` is revoked from
+`authenticated`, so deleting such a contract leaves permanent undeletable
+orphan rows. The predicate now also requires `not exists (select 1 from events
+…)`. It changes nothing about which contracts are deletable today — all of them
+have zero events — and makes that equivalence structural instead of a property
+of which code paths happen to be called.
 
 ---
 
