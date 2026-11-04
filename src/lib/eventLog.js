@@ -213,11 +213,16 @@ export class EventReadError extends Error {
  * total order and no page boundary can repeat or skip a row in a table at rest.
  * A table at rest is the part that is not guaranteed: this log is appended to
  * while it is being read — both parties act on one contract and the client
- * subscribes to inserts — and under descending order an insert between two
- * pages shifts every later offset by one and drops a row. Appended rows land
- * past the tail of an ascending read, where at worst they are missed by this
- * call and arrive over the subscription instead. `guest-contract-events`
- * already read ascending for the same reason.
+ * subscribes to inserts. Under DESCENDING order an insert lands at offset 0 and
+ * pushes every existing row one offset later, so the last row of the page just
+ * read reappears at the start of the next one. Nothing is lost (no row moves to
+ * a lower offset, and events can never be deleted), but a duplicated row is
+ * read as two events with the same prev_event_hash, and the second copy's link
+ * does not match the first copy's hash: a CHAIN_LINK_BROKEN false alarm on an
+ * untouched chain, which is the same harm the 200-row cap caused. Ascending
+ * puts appended rows past the tail, where at worst this call misses them and
+ * the subscription delivers them. `guest-contract-events` already read
+ * ascending.
  *
  * @param {string} contractId
  * @returns {Promise<Array<object>>}

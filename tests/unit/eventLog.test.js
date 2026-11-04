@@ -304,12 +304,13 @@ describe('fetchContractEvents', () => {
     expect(range).toHaveBeenCalledTimes(1)
   })
 
-  it('reads oldest-first, so a concurrent insert cannot shift a later offset', async () => {
+  it('reads oldest-first, so a concurrent insert cannot disturb a later offset', async () => {
     range.mockResolvedValueOnce({ data: rows(1), error: null })
 
     await fetchContractEvents('c-1')
 
-    // Descending would put new rows at offset 0 and slide every page after it.
+    // Descending would put an inserted row at offset 0 and push every existing
+    // row one offset later, re-reading the previous page's last row.
     expect(orderCalls).toEqual([
       ['created_at', { ascending: true }],
       ['id', { ascending: true }],

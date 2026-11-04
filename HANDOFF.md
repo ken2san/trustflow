@@ -62,11 +62,19 @@ before touching anything in the evidence model.
   contract, flagged on the guest side and complete on the owner's; left as is,
   since the two documents are deliberately different.
 - **A failed read is no longer reported as an empty log** (`dd47f41`). `ea2d3e5`
-  introduced one defect and left another: offset pagination ordered *descending*
-  drops a row when an event is inserted between two pages, which this log does
-  routinely (two parties on one contract, client subscribed to inserts), and
-  returning `[]` on failure made "could not be read" identical to "has no
-  events" — which three of the five callers render straight onto the screen.
+  introduced one defect and left another. Offset pagination ordered *descending*
+  **re-reads a row** when an event is inserted between two pages, which this log
+  does routinely (two parties on one contract, client subscribed to inserts): the
+  insert takes offset 0 and pushes every existing row one offset later, so the
+  page just read ends where the next one begins. Nothing is lost — no row moves
+  to a lower offset and events cannot be deleted — but the duplicate is read as
+  two events sharing one `prev_event_hash`, and the second copy's link does not
+  match the first's hash, so the document reports CHAIN_LINK_BROKEN on an
+  untouched chain. Same harm as the 200-row cap, reached a different way. (This
+  was first written up here, and in `dd47f41`'s message, as a dropped row; the
+  direction was wrong, the defect and the fix are not.) Separately, returning
+  `[]` on failure made "could not be read" identical to "has no events" — which
+  three of the five callers render straight onto the screen.
   `fetchContractEvents` now reads ascending and throws `EventReadError`; each
   caller answers for its own case. A partial result behind a flag was rejected:
   the one caller that forgets the flag shows an incomplete evidence record as a
