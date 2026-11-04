@@ -373,8 +373,8 @@ database is how the migration drift above happened in the first place.
 
 ### Still waiting on approval
 
-**`20261104000000_delete_requires_no_events.sql` is unapplied, on E2E and on
-production.** It is written, `check-migrations` passes, and the two things that
+**`20261104204009_delete_requires_no_events.sql` is applied on E2E and
+**unapplied on production**, which needs its own approval. The two things that
 could have made it a no-op were checked against the live E2E catalog rather than
 assumed:
 
@@ -387,12 +387,22 @@ assumed:
   (`auth.uid() = earner_user_id or auth.uid() = hirer_user_id`) and does not
   reference `events`.
 
-Applying it was attempted and blocked twice: the Supabase MCP's
-`apply_migration` was refused by the permission classifier, which labelled an
-E2E write "Production Deploy", and the CLI cannot reach the project because
-`supabase/.temp/project-ref` is absent — `linked-project.json` names
-`trustflow-e2e` (`yqjtawffpesplqyurlpj`) but the CLI reads the other file and
-reports "Cannot find project ref". Re-linking needs the database password.
+Applied to E2E through the Supabase MCP and verified by reading the policy back
+out of `pg_policy`. The first attempt was refused by the permission classifier,
+which labelled an E2E write "Production Deploy"; a retry with Kenji present
+raised a confirmation instead and succeeded. **The CLI route remains broken and
+is worth fixing before it is needed under pressure:** `supabase/.temp/project-ref`
+is absent, so `supabase db push` reports "Cannot find project ref" even though
+`linked-project.json` names `trustflow-e2e` (`yqjtawffpesplqyurlpj`). Re-linking
+needs the database password.
+
+**The MCP route writes its own ledger version, and that caused drift in the same
+breath as the fix.** The migration was applied as `20261104204009` while the
+repository file was `20261104000000` — same name, different version, which is
+exactly the divergence repaired on 2026-10-12. Repaired by renaming the file to
+the applied version rather than editing the database ledger; both ledgers now
+stand at **35**. Anyone applying through the MCP must do this check: read
+`supabase_migrations.schema_migrations` afterwards and make the filename match.
 
 **Drift worth knowing, found on the way:** `parties_read_own_contracts` exists
 on the live database and in **no migration in this repo** — `contracts` has
@@ -605,9 +615,9 @@ Nothing in production was touched.
    client-side.
 
    **The predicate was hardened anyway** —
-   `20261104000000_delete_requires_no_events.sql` adds `not exists (select 1
+   `20261104204009_delete_requires_no_events.sql` adds `not exists (select 1
    from events …)`, because not building withdrawal does not remove the orphan
-   hazard. **Written and verified offline; NOT YET APPLIED to any project** —
+   hazard. **Applied and verified on E2E; production still needs approval** —
    see "Still waiting on approval".
 4. ~~The onboarding "Skip Intro" path lands on the legacy Marketplace.~~
    **Settled 2026-10-12, and the diagnosis was wrong.** Skip Intro was already
