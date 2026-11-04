@@ -608,12 +608,36 @@ mid-animation:
    method will keep producing: a frame shows an affordance, the reviewer
    supplies a plausible reason it must fail, and only the code settles it.
 
-Lower confidence, from frames only and worth one DOM check each: the header
-shows a "Sign in" button and an account avatar simultaneously on every screen,
-including a guest's record of agreement, so no screen says which account is
-acting; "Unlock Chat at Level 2" overlaps the notification bell in every single
-frame; and the failed-load card prints the raw server message ("server
-exploded") straight to the user.
+Three more came from the frames and were then checked in source. The first is
+the strongest find of the pass:
+
+3. **Every screen displays a fabricated identity as the current user.** The
+   header avatar is `USER_PROFILE` (`App.jsx:1659`), which is a hardcoded
+   fixture in `src/lib/constants.js:4`: *Felix, Product Designer, Tokyo, level
+   42, reliability 99, 42 completed jobs*. It renders on every screen —
+   including a guest's record of agreement — beside a "Sign in" button, whether
+   signed in, signed out, or reading someone else's agreement, and clicking it
+   opens a Trust Passport for a person who does not exist. This is the
+   2026-10-11 "no sign of which account you were acting as" defect, still open
+   and worse than recorded: it does not merely omit the acting account, it
+   asserts the wrong one, on the screens whose entire value is saying who did
+   what. **Not fixed here** — the minimal fix is not obvious (hiding it leaves
+   the signed-in case wrong too; the honest fix is removing the mock profile
+   chrome, which also owns the Trust Passport entry point and the `userLevel`
+   gamification), and that is a product decision, not a cleanup.
+
+4. **The notification bell carries a permanent unread dot.** `App.jsx:1653`
+   renders the rose dot unconditionally, with no count or condition behind it,
+   beside a bell that is disabled below level 2. A badge that is always on
+   trains the reader to ignore badges.
+
+5. **The failed-load card prints the raw server message** (`ContractsHomeView.jsx:254`
+   renders `{error}` as-is — "server exploded" in the stub, a PostgREST string
+   in production). Low severity and possibly deliberate for diagnosis, but it
+   is backend text shown to a user.
+
+Also real but cosmetic: "Unlock Chat at Level 2" (`App.jsx:1656`) sits below the
+bell inside the fixed-height nav and collides with it in every frame.
 
 **What this settles.** The method works and is cheap, but not as a blanket
 config change — the value came from choosing a handful of screens, and the one
@@ -740,8 +764,10 @@ screen claims is true in the system, which an image can never answer.
 
 6. **Act on the visual-review pass** (see the measured section above, dated
    2026-11-04). The contrast fix is done (`3005bd0`) and the "+ New contract"
-   candidate was checked and withdrawn. What remains: DOM-check the three
-   lower-confidence header findings. Only then
+   candidate was checked and withdrawn. What remains is findings 3-5, all now
+   confirmed in source: the mock `USER_PROFILE` identity in the header is a
+   product decision and the largest of them; the always-on bell badge and the
+   raw error text are small. Only then
    consider making the capture repeatable — and if it is made repeatable, the
    `auth/v1/signup` stub comes first, or every run keeps minting anonymous
    users in E2E.
