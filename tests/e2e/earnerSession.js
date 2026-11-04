@@ -9,7 +9,7 @@
 // whole run normally costs one grant rather than five. The file holds a live
 // access token, so it is gitignored alongside the anonymous fixture.
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, open, rm, stat } from 'node:fs/promises';
 import {
   SUPABASE_URL, SUPABASE_KEY, EARNER_EMAIL, EARNER_PASSWORD,
 } from './liveEnv.js';
@@ -18,11 +18,64 @@ import { fileURLToPath } from 'node:url';
 
 const CACHE = process.env.TF_TEST_EARNER_SESSION
   ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '.earner-session.json');
+const LOCK_FILE = `${CACHE}.lock`;
+const LOCK_TIMEOUT_MS = 30_000;
+const STALE_LOCK_MS = 60_000;
 
 /** Re-grant this far before the token actually expires. */
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 let inFlight = null;
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function acquireSessionLock() {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      const lock = await open(LOCK_FILE, 'wx');
+      try {
+        await lock.writeFile(JSON.stringify({ pid: process.pid, created_at: Date.now() }));
+        return lock;
+      } catch (error) {
+        await lock.close();
+        await rm(LOCK_FILE, { force: true });
+        throw error;
+      }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+
+      try {
+        let ownerState = 'unknown';
+        try {
+          const { pid } = JSON.parse(await readFile(LOCK_FILE, 'utf8'));
+          if (Number.isSafeInteger(pid) && pid > 0) {
+            try {
+              process.kill(pid, 0);
+              ownerState = 'alive';
+            } catch (ownerError) {
+              ownerState = ownerError?.code === 'ESRCH' ? 'dead' : 'alive';
+            }
+          }
+        } catch { /* incomplete lock metadata falls back to its age */ }
+
+        if (ownerState === 'dead') {
+          await rm(LOCK_FILE, { force: true });
+        } else if (ownerState === 'unknown') {
+          const { mtimeMs } = await stat(LOCK_FILE);
+          if (Date.now() - mtimeMs > STALE_LOCK_MS) await rm(LOCK_FILE, { force: true });
+        }
+      } catch (lockError) {
+        if (lockError?.code !== 'ENOENT') throw lockError;
+      }
+
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for Earner session cache lock: ${LOCK_FILE}`);
+      }
+      await wait(100);
+    }
+  }
+}
 
 function unexpired(session) {
   if (!session?.access_token || !session?.expires_at) return false;
@@ -52,22 +105,30 @@ export async function getEarnerSession(request) {
   const [url, key, email, password] = [SUPABASE_URL, SUPABASE_KEY, EARNER_EMAIL, EARNER_PASSWORD];
 
   inFlight ??= (async () => {
+    const lock = await acquireSessionLock();
     try {
-      const cached = JSON.parse(await readFile(CACHE, 'utf8'));
-      if (unexpired(cached) && await stillLive(request, cached, url, key)) return cached;
-    } catch { /* no cache, unreadable, or unreachable */ }
+      // `inFlight` coordinates only this worker. Re-read after locking because
+      // another worker may have populated the shared cache while we waited.
+      try {
+        const cached = JSON.parse(await readFile(CACHE, 'utf8'));
+        if (unexpired(cached) && await stillLive(request, cached, url, key)) return cached;
+      } catch { /* no cache, unreadable, or unreachable */ }
 
-    const response = await request.fetch(`${url}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: { apikey: key, 'Content-Type': 'application/json' },
-      data: { email, password },
-    });
-    const session = await response.json();
-    if (response.status() !== 200) {
-      throw new Error(`earner sign-in failed (${response.status()}): ${JSON.stringify(session)}`);
+      const response = await request.fetch(`${url}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: { apikey: key, 'Content-Type': 'application/json' },
+        data: { email, password },
+      });
+      const session = await response.json();
+      if (response.status() !== 200) {
+        throw new Error(`earner sign-in failed (${response.status()}): ${JSON.stringify(session)}`);
+      }
+      await writeFile(CACHE, JSON.stringify(session, null, 2));
+      return session;
+    } finally {
+      await lock.close();
+      await rm(LOCK_FILE, { force: true });
     }
-    await writeFile(CACHE, JSON.stringify(session, null, 2));
-    return session;
   })();
 
   const session = await inFlight;
