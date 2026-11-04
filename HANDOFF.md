@@ -47,6 +47,13 @@ before touching anything in the evidence model.
   `performance.rejected` returning to `TERMS_ACCEPTED`. `SETTLED`, `DELIVERED` and
   `CANCELLED` are **not reachable** — money moves outside TrustFlow by design, and
   cancellation is undecided.
+- **The export reads the whole chain** (`ea2d3e5`, unpushed). `fetchContractEvents`
+  capped at the newest 200 rows — not a prefix of the chain, so past 200 events
+  the export reported `CHAIN_LINK_BROKEN` over an intact stored chain, and below
+  that threshold it was silently short. Now paginated, with `id` breaking a
+  `created_at` tie so `range()` cannot skip or repeat a row. Found by Codex's
+  diagnostic test, which tests the builder on truncated input and so still
+  passes unchanged.
 - Both parties can download the record, and they get **different documents**: the
   owner a self-contained re-verifiable audit trail, the guest a server-verified
   record that does not invite recomputation. Do not converge them — see
@@ -390,9 +397,9 @@ production deployment, repo exposure, or data-disclosure approval.
   sensitive material. No external API call has been made by this TrustFlow work
   as of the handoff; the permission does not require spending the credit.
 
-The independent-counterparty E2E simulation is committed locally as
-`2691c67`, tests verified (19/19 scenario, 29/29 chain, 373 unit tests);
-it remains **unpushed** and does not authorize any additional production write.
+The independent-counterparty E2E simulation is `2691c67`, tests verified
+(19/19 scenario, 29/29 chain, 373 unit tests), **pushed** — along with
+everything through `b79c008` — and it authorizes no additional production write.
 
 ### The next safe step
 
