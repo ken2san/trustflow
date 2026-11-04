@@ -1,16 +1,31 @@
-import { describe, it, expect, vi } from 'vitest'
-import { createEvent, logEvent, GENESIS_HASH, EVENT_TYPES } from '../../src/lib/eventLog.js'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createEvent, logEvent, fetchContractEvents, EventReadError, GENESIS_HASH, EVENT_TYPES } from '../../src/lib/eventLog.js'
 
 // A stand-in for supabase.functions.invoke, so the request logEvent builds can
 // be inspected without a live client. The default mock reports success.
 const invoke = vi.fn()
+
+// A stand-in for one PostgREST query chain. `range` is what the test drives;
+// `order` only records its arguments, because the ordering fetchContractEvents
+// asks for is itself part of what these tests assert.
+const range = vi.fn()
+const orderCalls = []
+const query = {
+  select: () => query,
+  eq: () => query,
+  order: (column, opts) => { orderCalls.push([column, opts]); return query },
+  range: (...args) => range(...args),
+}
 
 vi.mock('../../src/lib/supabase.js', async (importOriginal) => ({
   // The real invokeErrorReason, not a stand-in: it is what turns the
   // function's own refusal into the reason logEvent reports, so a mock of it
   // would test the mock. Only the client itself is replaced.
   ...(await importOriginal()),
-  supabase: { functions: { invoke: (...args) => invoke(...args) } },
+  supabase: {
+    functions: { invoke: (...args) => invoke(...args) },
+    from: () => query,
+  },
 }))
 vi.mock('../../src/lib/guestSession.js', () => ({
   getGuestAccessToken: vi.fn(() => null),
@@ -246,5 +261,82 @@ describe('logEvent request contract', () => {
 
   it('GENESIS_HASH is a stable, non-empty sentinel distinguishable from a real hash', () => {
     expect(GENESIS_HASH).toBe('GENESIS')
+  })
+})
+
+
+// ── fetchContractEvents ───────────────────────────────────────────────────────
+// Guard: the read behind every agreement screen and every owner export. Its two
+// failure modes are both silent, which is why they are asserted here: a short
+// read presents an incomplete evidence record as a complete one, and an empty
+// return on a failed read presents an unread log as an empty one.
+
+describe('fetchContractEvents', () => {
+  const rows = (n, offset = 0) => Array.from({ length: n }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(offset + i + 1).padStart(12, '0')}`,
+    type: 'contract.initiated',
+    contract_id: 'c-1',
+  }))
+
+  beforeEach(() => {
+    range.mockReset()
+    orderCalls.length = 0
+  })
+
+  it('pages until a short page, and returns every row', async () => {
+    range
+      .mockResolvedValueOnce({ data: rows(200), error: null })
+      .mockResolvedValueOnce({ data: rows(5, 200), error: null })
+
+    const out = await fetchContractEvents('c-1')
+
+    expect(out).toHaveLength(205)
+    expect(range.mock.calls).toEqual([[0, 199], [200, 399]])
+    // Every id distinct: a page boundary that repeated or skipped a row would
+    // show up here rather than in a count alone.
+    expect(new Set(out.map(r => r.id)).size).toBe(205)
+  })
+
+  it('stops after one page when the contract has fewer events than a page', async () => {
+    range.mockResolvedValueOnce({ data: rows(6), error: null })
+
+    expect(await fetchContractEvents('c-1')).toHaveLength(6)
+    expect(range).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads oldest-first, so a concurrent insert cannot shift a later offset', async () => {
+    range.mockResolvedValueOnce({ data: rows(1), error: null })
+
+    await fetchContractEvents('c-1')
+
+    // Descending would put new rows at offset 0 and slide every page after it.
+    expect(orderCalls).toEqual([
+      ['created_at', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+  })
+
+  it('throws rather than returning the rows it did read', async () => {
+    range
+      .mockResolvedValueOnce({ data: rows(200), error: null })
+      .mockResolvedValueOnce({ data: null, error: { message: 'network down' } })
+
+    await expect(fetchContractEvents('c-1')).rejects.toBeInstanceOf(EventReadError)
+  })
+
+  it('throws rather than returning [] when the very first page fails', async () => {
+    range.mockResolvedValueOnce({ data: null, error: { message: 'network down' } })
+
+    // The distinction this guards: [] here would be indistinguishable from a
+    // contract with no events, and would render as one.
+    const err = await fetchContractEvents('c-1').catch(e => e)
+    expect(err).toBeInstanceOf(EventReadError)
+    expect(err.message).toBe('network down')
+    expect(err.contractId).toBe('c-1')
+  })
+
+  it('returns [] without querying when there is no contract id', async () => {
+    expect(await fetchContractEvents('')).toEqual([])
+    expect(range).not.toHaveBeenCalled()
   })
 })

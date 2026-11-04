@@ -463,7 +463,16 @@ const App = () => {
     };
 
     const load = async () => {
-      const remote = await fetchContractEvents(contractId);
+      // Merges into whatever is already on screen, so a failed read leaves the
+      // previous events in place rather than replacing them with nothing. The
+      // subscription below is the other way these arrive.
+      let remote;
+      try {
+        remote = await fetchContractEvents(contractId);
+      } catch (err) {
+        console.warn('[TrustFlow] contract events fetch failed:', err);
+        return;
+      }
       if (cancelled || remote.length === 0) return;
       mergeEvents(remote);
       const initiated = remote.find(e => e.type === EVENT_TYPES.CONTRACT_INITIATED);
@@ -922,7 +931,17 @@ const App = () => {
       // event rows, and therefore only this side can be offered an export.
       source: 'owner' });
     setView('agreement');
-    const rows = await fetchContractEvents(contract.id);
+    let rows;
+    try {
+      rows = await fetchContractEvents(contract.id);
+    } catch (err) {
+      // An unreadable log is not an empty one. Saying nothing here would show
+      // the owner an agreement with no history, which is the same screen a
+      // brand-new contract gets.
+      console.warn('[TrustFlow] contract events fetch failed:', err);
+      setAgreementError('The history of this agreement could not be read. Nothing has been lost — try opening it again.');
+      return;
+    }
     setAgreement(prev => (prev?.contract?.id === contract.id
       ? { ...prev, events: shapeOwnerEvents(rows, contract) }
       : prev));
@@ -1009,10 +1028,11 @@ const App = () => {
   const exportAgreementRecord = useCallback(async () => {
     const contract = agreement?.contract;
     if (!contract?.id) return;
+    // A read failure throws EventReadError of its own, so reaching the next
+    // line means the log really is empty rather than unread.
     const rows = await fetchContractEvents(contract.id);
-    // An export with nothing in it would still look like a signed record. If
-    // the rows could not be read, say so instead of producing one.
-    if (rows.length === 0) throw new Error('no readable events for this contract');
+    // An export with nothing in it would still look like a signed record.
+    if (rows.length === 0) throw new Error('no events to export for this contract');
     await downloadAuditTrail({
       contractId: contract.id,
       dodHash: rows.find(ev => ev.dod_hash)?.dod_hash ?? null,
@@ -1067,10 +1087,17 @@ const App = () => {
           ? 'Only the owner of this agreement can re-issue access.'
           : 'Access could not be re-issued. Try again in a moment.');
     }
-    const rows = await fetchContractEvents(contract.id);
-    setAgreement(prev => (prev?.contract?.id === contract.id
-      ? { ...prev, events: shapeOwnerEvents(rows, contract) }
-      : prev));
+    // The re-issue itself already succeeded, so a failed re-read must not be
+    // reported as a failed re-issue: return the link and leave the events as
+    // they were.
+    try {
+      const rows = await fetchContractEvents(contract.id);
+      setAgreement(prev => (prev?.contract?.id === contract.id
+        ? { ...prev, events: shapeOwnerEvents(rows, contract) }
+        : prev));
+    } catch (err) {
+      console.warn('[TrustFlow] contract events fetch failed:', err);
+    }
     return guestAccessUrlFor(token);
   }, [agreement, shapeOwnerEvents]);
 
@@ -1096,7 +1123,18 @@ const App = () => {
     const { contracts } = await listContracts();
     const fresh = contracts.find(c => c.id === contract.id);
     if (fresh) {
-      const rows = await fetchContractEvents(contract.id);
+      // The event is already written at this point, so a failed re-read is a
+      // stale screen, not a failed action — and saying nothing would be the
+      // worst of the three, since the party would look for the event they just
+      // recorded and not find it.
+      let rows;
+      try {
+        rows = await fetchContractEvents(contract.id);
+      } catch (err) {
+        console.warn('[TrustFlow] contract events fetch failed:', err);
+        setAgreementError('Your action was recorded, but this screen could not be refreshed. Reopen the agreement to see it.');
+        return;
+      }
       // Merged into what is already open, not rebuilt from the parts this
       // function happens to know about. Rebuilding dropped `source`, and the
       // screen decides from that alone whether to offer the export, the

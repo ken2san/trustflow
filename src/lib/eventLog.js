@@ -177,18 +177,51 @@ export async function logEvent({ type, contractId, actorId, payload = {}, idempo
 const EVENT_PAGE_SIZE = 200
 
 /**
- * Read every event for a contract, newest first.
- * Returns [] in local/mock mode or on query failure.
+ * A read of the event log that did not complete.
+ *
+ * Its own type because the one thing a caller must never do is mistake it for
+ * an empty log: "this contract has no events" and "this contract's events could
+ * not be read" look identical as an empty array, and the second rendered as the
+ * first is a screen telling the owner their record is gone.
+ */
+export class EventReadError extends Error {
+  constructor(message, { contractId, pagesRead } = {}) {
+    super(message)
+    this.name = 'EventReadError'
+    this.contractId = contractId
+    this.pagesRead = pagesRead
+  }
+}
+
+/**
+ * Read every event for a contract, oldest first.
+ *
+ * Returns [] in local/mock mode, and for a contract that genuinely has no
+ * events. **Throws EventReadError if the read fails** — it does not return a
+ * short array, a partial one, or an empty one. A partial result behind a flag
+ * was considered and rejected: it obliges every caller to check the flag, and
+ * the one caller that forgets presents an incomplete evidence record as a
+ * complete one.
  *
  * Paginated rather than capped. A single capped read used to return the newest
  * 200 rows, which is not a prefix of the chain: the oldest exported event then
  * points at a predecessor the export cannot see, and the audit document reports
- * CHAIN_LINK_BROKEN on a stored chain that is intact. For an evidence trail a
- * false alarm is as damaging as a missed one, and a silently short export is
- * worse than both, so completeness wins over bounding the read.
+ * CHAIN_LINK_BROKEN on a stored chain that is intact.
+ *
+ * Ordered ASCENDING, which is what makes offset pagination safe here. `id` is
+ * the primary key (20260313000000_events_table.sql), so `created_at, id` is a
+ * total order and no page boundary can repeat or skip a row in a table at rest.
+ * A table at rest is the part that is not guaranteed: this log is appended to
+ * while it is being read — both parties act on one contract and the client
+ * subscribes to inserts — and under descending order an insert between two
+ * pages shifts every later offset by one and drops a row. Appended rows land
+ * past the tail of an ascending read, where at worst they are missed by this
+ * call and arrive over the subscription instead. `guest-contract-events`
+ * already read ascending for the same reason.
  *
  * @param {string} contractId
  * @returns {Promise<Array<object>>}
+ * @throws {EventReadError}
  */
 export async function fetchContractEvents(contractId) {
   if (!supabase || !contractId) return []
@@ -200,13 +233,18 @@ export async function fetchContractEvents(contractId) {
       .from('events')
       .select('*')
       .eq('contract_id', contractId)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
       .range(rows.length, rows.length + EVENT_PAGE_SIZE - 1)
 
     if (error) {
-      console.warn('[TrustFlow] contract events fetch failed:', error.message)
-      return []
+      // No retry. A failure here is reported to the person, who can ask again
+      // with full knowledge that the first attempt failed; a silent retry
+      // inside the read would make a degraded connection look like a slow one.
+      throw new EventReadError(error.message, {
+        contractId,
+        pagesRead: Math.ceil(rows.length / EVENT_PAGE_SIZE),
+      })
     }
 
     const page = data || []
