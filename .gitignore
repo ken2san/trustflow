@@ -101,3 +101,6 @@ tests/e2e/.anon-fixture.json
 
 # Cached verified-Earner session for the E2E suites (holds a live token)
 tests/e2e/.earner-session.json
+# Its cross-worker lock. Removed in a finally, so it is only ever left behind
+# by a run that died holding it — which is exactly when it must not be staged.
+tests/e2e/.earner-session.json.lock
