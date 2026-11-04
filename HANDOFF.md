@@ -47,7 +47,7 @@ before touching anything in the evidence model.
   `performance.rejected` returning to `TERMS_ACCEPTED`. `SETTLED`, `DELIVERED` and
   `CANCELLED` are **not reachable** — money moves outside TrustFlow by design, and
   cancellation is undecided.
-- **The export reads the whole chain** (`ea2d3e5`, unpushed). `fetchContractEvents`
+- **The export reads the whole chain** (`ea2d3e5` + `dd47f41`, unpushed). `fetchContractEvents`
   capped at the newest 200 rows — not a prefix of the chain, so past 200 events
   the export reported `CHAIN_LINK_BROKEN` over an intact stored chain, and below
   that threshold it was silently short. Now paginated, with `id` breaking a
@@ -61,6 +61,17 @@ before touching anything in the evidence model.
   shows. Past 500 events the two sides therefore see different amounts of one
   contract, flagged on the guest side and complete on the owner's; left as is,
   since the two documents are deliberately different.
+- **A failed read is no longer reported as an empty log** (`dd47f41`). `ea2d3e5`
+  introduced one defect and left another: offset pagination ordered *descending*
+  drops a row when an event is inserted between two pages, which this log does
+  routinely (two parties on one contract, client subscribed to inserts), and
+  returning `[]` on failure made "could not be read" identical to "has no
+  events" — which three of the five callers render straight onto the screen.
+  `fetchContractEvents` now reads ascending and throws `EventReadError`; each
+  caller answers for its own case. A partial result behind a flag was rejected:
+  the one caller that forgets the flag shows an incomplete evidence record as a
+  complete one. Raised by Codex's review, which is what the auditor role is for.
+  Covered by six unit tests in `tests/unit/eventLog.test.js`.
 - Both parties can download the record, and they get **different documents**: the
   owner a self-contained re-verifiable audit trail, the guest a server-verified
   record that does not invite recomputation. Do not converge them — see
@@ -314,9 +325,12 @@ database is how the migration drift above happened in the first place.
   not change the product. "Read-only" was the wrong word for it, though —
   Codex's value today came from *writing* a diagnostic test that found a real
   defect (`0ca97ab`, which caught the 200-row export bug fixed in `ea2d3e5`).
-  The boundary is a path, not a verb: **Codex writes only `tests/` and
-  `scripts/`; Claude writes only `src/` and `supabase/`.** Paths cannot be
-  misread the way "auditor" was.
+  The boundary is a path, not a verb: **Codex writes `tests/e2e/` and
+  `scripts/`; Claude writes `src/`, `supabase/` and `tests/unit/`.** Paths
+  cannot be misread the way "auditor" was. The unit-test half of that line was
+  corrected within the hour it was written: the first version gave Codex all of
+  `tests/`, which would have stopped the builder from testing its own change,
+  and a partition that forbids that buys nothing.
 - **Codex runs no git commands at all** — not `add`, `commit`, `push` or
   `stash`. `.git` is read-only in its sandbox, so every git call raises a
   privilege-escalation prompt, and on 2026-11-04 one whole Codex run plus a
@@ -499,9 +513,46 @@ regression.
    anticipate. Every verdict in that script was written by the person who wrote
    the thing being judged.
 
-3. **Cancellation: build only the withdraw-before-acceptance half.** Decided
-   2026-09-25, still not implemented. Voiding an *accepted* agreement remains
-   undecided. Needs `derive_contract_state()` to project the withdrawal.
+3. **Cancellation: the withdraw-before-acceptance half is underspecified, and
+   the delete feature did not replace it.** Decided 2026-09-25, still not
+   implemented; voiding an *accepted* agreement remains undecided. On
+   2026-11-04 this session proposed dropping the item as redundant against
+   `owner_delete_unaccepted_draft`, and a `skeptic` pass refuted it. What that
+   established, each fact checked in code afterwards:
+
+   - The delete predicate is `auth.uid() = earner_user_id and state =
+     'AWAITING_ACCEPTANCE' and invite_token_used_at is null`
+     (`20260929000200_delete_unaccepted_drafts.sql:36-39`), and
+     `invite_token_used_at` is written only by `accept_invitation()`
+     (`20260929000000_invite_token_uuid.sql:198`). `validate-invite-token`
+     reads it and writes nothing. **So a contract whose link has been sent and
+     opened, and is being read right now, is fully deletable** — and
+     `ContractsHomeView` shows the trash icon on the same condition as "Copy
+     invite link", next to it. The counterparty's next load is a bare 404,
+     indistinguishable from a mistyped URL, with no record that an offer existed.
+   - That migration's own comment (`:10-14`) already drew this line, four days
+     *after* the 2026-09-25 decision: it says it is **not** the withdraw
+     feature, and is only for a "never-sent-or-never-opened draft". But
+     never-sent and never-opened are statements of intent — **the predicate
+     tests neither**, and an earlier version of this file repeated the intent as
+     if it were the guarantee.
+   - The relationship is the reverse of the proposal: **the delete policy is
+     safe only while #3 does not exist.** `events.contract_id` is text with no
+     foreign key (`20260313000000_events_table.sql:104`) and `delete on events`
+     is revoked from `authenticated` (`20260924000002_events_lockdown.sql:17`),
+     so a withdrawal event on a still-`AWAITING_ACCEPTANCE` contract plus a
+     delete leaves permanent, undeletable orphan rows. Whoever builds #3 must
+     tighten the predicate with `not exists (select 1 from events where
+     contract_id = id::text)` **in the same pass**. The open decision "whether
+     creation should be an event" would remove the premise outright.
+
+   **Two decisions are needed before it can be built**, neither recorded
+   anywhere: (a) the correct split is hard-delete where nothing was shared and
+   withdrawal where a link went out — but the product cannot know whether a link
+   was shared, since `invite_token` exists from row creation and copying is
+   client-side, so "was it sent" is not knowable server-side; (b) whether a bare
+   404 is an acceptable product answer to a retracted offer. Do not build until
+   (a) has an answer; the event it writes is permanent.
 4. ~~The onboarding "Skip Intro" path lands on the legacy Marketplace.~~
    **Settled 2026-10-12, and the diagnosis was wrong.** Skip Intro was already
    fine: the initial view is `'home'` and `onComplete` only dismisses the
