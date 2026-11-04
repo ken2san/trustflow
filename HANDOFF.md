@@ -53,7 +53,14 @@ before touching anything in the evidence model.
   that threshold it was silently short. Now paginated, with `id` breaking a
   `created_at` tie so `range()` cannot skip or repeat a row. Found by Codex's
   diagnostic test, which tests the builder on truncated input and so still
-  passes unchanged.
+  passes unchanged. **The guest path never had this defect**: the owner read was
+  the odd one out, and `guest-contract-events` already held the pattern the
+  frontend lacked — it orders *ascending*, so its `MAX_EVENTS = 500` cap takes a
+  genuine prefix of the chain rather than a window, and it returns a `truncated`
+  flag that `guestRecordExport` carries into the record and `GuestEvidenceView`
+  shows. Past 500 events the two sides therefore see different amounts of one
+  contract, flagged on the guest side and complete on the owner's; left as is,
+  since the two documents are deliberately different.
 - Both parties can download the record, and they get **different documents**: the
   owner a self-contained re-verifiable audit trail, the guest a server-verified
   record that does not invite recomputation. Do not converge them — see
