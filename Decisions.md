@@ -144,7 +144,8 @@ is not knowable server-side. Answering that is the real prerequisite, not
 choosing between withdrawal semantics.
 
 **Decided in the same breath: the delete predicate is hardened anyway**
-(`20261104204009_delete_requires_no_events.sql`). Not building withdrawal does
+(`20261104204009_delete_requires_no_events.sql`, applied to both projects
+2026-11-04). Not building withdrawal does
 not make the hazard go away. `log-event` has no acceptance check and
 `derive_contract_state()` does not move a contract out of `AWAITING_ACCEPTANCE`,
 so an event-bearing deletable contract is reachable today; `events.contract_id`
