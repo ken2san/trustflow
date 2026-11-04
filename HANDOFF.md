@@ -133,9 +133,8 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**, **pushed through `b41f7fd`** (2026-11-04, approved): the
-  eleven commits of the resumed session went out in one push, which also
-  deployed the frontend. Check for later local-only work with
+- Branch **`main`**, **pushed through `c75873f`** (2026-11-04, approved twice:
+  eleven commits, then three more), each push also deploying the frontend. Check for later local-only work with
   `git rev-list --count origin/main..main` rather than reading a number here —
   a number written in this file goes stale on the commit that writes it.
   **A push to `main` is a production frontend deploy**, and that approval is
@@ -374,7 +373,21 @@ database is how the migration drift above happened in the first place.
 ### Still waiting on approval
 
 **`20261104204009_delete_requires_no_events.sql` is applied on E2E and
-**unapplied on production**, which needs its own approval. The two things that
+**unapplied on production**. Kenji approved the production apply on 2026-11-04
+and it could not be carried out: `apply_migration` against
+`fqgpzhwvvfsxswlnbbgg` was refused twice by the permission classifier as a
+"Production Deploy", with no confirmation offered, where the same call against
+E2E raised a confirmation and went through. The refusal is correct about what
+the call is, so it was not re-routed through `execute_sql` — a different door to
+the same effect removes the review, not the risk. **The migration ledgers are
+therefore NOT level: 35 on E2E, 34 on production**, which is the condition
+2026-10-12 was spent repairing, now entered deliberately and with a note rather
+than by accident. Production's `owner_delete_unaccepted_draft` still lacks the
+events guard. Routes, in preference order: run `supabase link --project-ref
+fqgpzhwvvfsxswlnbbgg` and `supabase db push` (a Bash rule can be scoped by
+command prefix, which an `mcp__` rule cannot); or paste the migration into
+production's SQL Editor. Recorded before the apply, for comparison after:
+contracts 1321, events 2396, ledger tip 20261011235959. The two things that
 could have made it a no-op were checked against the live E2E catalog rather than
 assumed:
 
@@ -617,8 +630,8 @@ Nothing in production was touched.
    **The predicate was hardened anyway** —
    `20261104204009_delete_requires_no_events.sql` adds `not exists (select 1
    from events …)`, because not building withdrawal does not remove the orphan
-   hazard. **Applied and verified on E2E; production still needs approval** —
-   see "Still waiting on approval".
+   hazard. **Applied and verified on E2E; approved for production but blocked
+   there** — see "Still waiting on approval".
 4. ~~The onboarding "Skip Intro" path lands on the legacy Marketplace.~~
    **Settled 2026-10-12, and the diagnosis was wrong.** Skip Intro was already
    fine: the initial view is `'home'` and `onComplete` only dismisses the
