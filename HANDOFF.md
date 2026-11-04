@@ -1,19 +1,19 @@
 # TrustFlow — AI Session Handoff
 
-_Last updated: 2026-10-12 (migration-history drift repaired; both migration
-ledgers level at 34; all four Edge Functions now identical on production and
-E2E; everything pushed through `545526c`. The backend queue is empty)_
+_Last updated: 2026-11-04 (the hold is lifted; development resumes. Migration
+ledgers still level at 34 and all four Edge Functions still identical on
+production and E2E, unchanged since `545526c`. The backend queue is empty)_
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
 > architectural decisions; if this file contradicts it, `Decisions.md` wins.
 
-> **ON HOLD since 2026-11-04 — do not start the next item.** The user put new
-> TrustFlow development on hold (incident load and decision load), in favour of
-> `~/dotfiles` and Drive Photos; work resumes only on an explicit instruction, so
-> read the Next Priority list below as a queue, not as a task you may pick up.
-> `project-trustflow-lab` is for verification only: ownership, experiment design
-> and the decision to adopt any result stay in **this** repository.
+> **Development resumed 2026-11-04**, by explicit instruction, after a hold of
+> the same day for incident and decision load. The Next Priority list is a queue
+> to work again, not a queue on hold — but the approvals spent on 2026-10-12 did
+> not come back with it: see "Not approved" before any push, deploy or production
+> write. `project-trustflow-lab` is for verification only: ownership, experiment
+> design and the decision to adopt any result stay in **this** repository.
 
 ---
 
