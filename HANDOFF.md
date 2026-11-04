@@ -8,6 +8,13 @@ E2E; everything pushed through `545526c`. The backend queue is empty)_
 > what each past session did. `Decisions.md` is the source of truth for
 > architectural decisions; if this file contradicts it, `Decisions.md` wins.
 
+> **ON HOLD since 2026-11-04 — do not start the next item.** The user put new
+> TrustFlow development on hold (incident load and decision load), in favour of
+> `~/dotfiles` and Drive Photos; work resumes only on an explicit instruction, so
+> read the Next Priority list below as a queue, not as a task you may pick up.
+> `project-trustflow-lab` is for verification only: ownership, experiment design
+> and the decision to adopt any result stay in **this** repository.
+
 ---
 
 ## What TrustFlow is
