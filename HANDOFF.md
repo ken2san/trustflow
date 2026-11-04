@@ -309,14 +309,38 @@ database is how the migration drift above happened in the first place.
 - **Kenji → ADA (orchestrator) → the assigned agent.** Direct instructions to an
   agent are avoided; when one happens anyway, it is mirrored back to ADA so the
   orchestrator's picture stays whole.
-- **Claude = Builder. Codex = Auditor (read-only).** The roles were stated
-  backwards once and real edits were made under the wrong one, so: an auditor
-  reports, it does not write.
-- **One owner at a time for the working tree and for each database.** This was
-  exercised for real on 2026-10-12: Codex's three E2E test files sat unstaged
-  in the tree for most of a day of Claude's work, through several commits, and
-  were committed by Codex itself (`dc354ec`). Nobody merged another agent's
-  work for them, and nothing was lost.
+- **Claude = Builder. Codex = Auditor.** The roles were stated backwards once
+  and real edits were made under the wrong one, so: an auditor reports, it does
+  not change the product. "Read-only" was the wrong word for it, though —
+  Codex's value today came from *writing* a diagnostic test that found a real
+  defect (`0ca97ab`, which caught the 200-row export bug fixed in `ea2d3e5`).
+  The boundary is a path, not a verb: **Codex writes only `tests/` and
+  `scripts/`; Claude writes only `src/` and `supabase/`.** Paths cannot be
+  misread the way "auditor" was.
+- **Codex runs no git commands at all** — not `add`, `commit`, `push` or
+  `stash`. `.git` is read-only in its sandbox, so every git call raises a
+  privilege-escalation prompt, and on 2026-11-04 one whole Codex run plus a
+  1m18s approval stall went to committing a single test file while the review
+  it had been asked for never started. Claude commits Codex's files instead,
+  **verbatim** — reviewing them, never editing them. That keeps what the
+  one-owner rule was protecting (no lost work, no double edit) without making a
+  commit cost a run. It replaces the 2026-10-12 arrangement, under which Codex
+  committed `dc354ec` itself; that worked, but only because nothing needed the
+  run back.
+- **One job per Codex run, and front-load the spec.** A cheap tier that is
+  handed two jobs spends the run on the cheaper one. Pair the job with the
+  evidence it needs — file paths, the exact ordering, the callers — rather than
+  letting it iterate live, which is where its budget actually goes.
+- **Design judgement goes to the `skeptic` subagent, not to Codex.** Codex
+  audits code it can read; whether a *decision* is right is a different
+  question, and `.claude/agents/skeptic.md` exists for it. A `fork` is not a
+  substitute: it inherits this session's model and context, so it cannot
+  disagree independently.
+- **One owner at a time for each database.** The working tree is partitioned by
+  path (above), so the real contention is the database: Claude is the only
+  caller of `supabase db push` and the only one to apply a migration. Codex may
+  read E2E and run tests against it. The migration drift of 2026-10-12 is what
+  this prevents.
 - **Every push, every deploy and every production write is individually
   approved.** Approval for one does not carry to the next, and approval in E2E
   never implies approval in production.
