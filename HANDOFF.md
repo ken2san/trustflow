@@ -597,11 +597,16 @@ mid-animation:
    the distinction it was protecting. Author-blind by construction: whoever
    wrote that comment knows the line is there.
 
-2. **The signed-out contracts screen still offers "+ New contract".** An
-   unverified Earner cannot persist a contract at all (`invite-persistence.spec.js:91`
-   asserts exactly that), so the primary call to action on that screen leads to
-   work that cannot be saved. Candidate, not confirmed — what the button
-   actually does when signed out has not been traced.
+2. ~~The signed-out contracts screen still offers "+ New contract".~~
+   **Checked and withdrawn.** The reasoning was that an unverified Earner
+   cannot persist a contract (`invite-persistence.spec.js:91` asserts exactly
+   that), so the primary call to action led to work that could not be saved.
+   It does not: `handleSendInvite` (`App.jsx:1242`) tests `isEarnerVerified()`
+   and, when false, requests an OTP to the address already in the form and
+   persists after `handleVerifyEarnerCode`. Sign-in happens inline, at the one
+   moment it is needed. Recorded because it is the shape of false positive this
+   method will keep producing: a frame shows an affordance, the reviewer
+   supplies a plausible reason it must fail, and only the code settles it.
 
 Lower confidence, from frames only and worth one DOM check each: the header
 shows a "Sign in" button and an account avatar simultaneously on every screen,
@@ -734,9 +739,9 @@ screen claims is true in the system, which an image can never answer.
    identity/trust entry for why the current minimal model may already be enough.
 
 6. **Act on the visual-review pass** (see the measured section above, dated
-   2026-11-04). In order, cheapest first: fix the contrast on
-   `GuestEvidenceView.jsx:203-214`; check what "+ New contract" does when
-   signed out; DOM-check the three lower-confidence header findings. Only then
+   2026-11-04). The contrast fix is done (`3005bd0`) and the "+ New contract"
+   candidate was checked and withdrawn. What remains: DOM-check the three
+   lower-confidence header findings. Only then
    consider making the capture repeatable — and if it is made repeatable, the
    `auth/v1/signup` stub comes first, or every run keeps minting anonymous
    users in E2E.
