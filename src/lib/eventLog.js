@@ -174,9 +174,18 @@ export async function logEvent({ type, contractId, actorId, payload = {}, idempo
   return data.event
 }
 
+const EVENT_PAGE_SIZE = 200
+
 /**
- * Read latest events for a contract.
+ * Read every event for a contract, newest first.
  * Returns [] in local/mock mode or on query failure.
+ *
+ * Paginated rather than capped. A single capped read used to return the newest
+ * 200 rows, which is not a prefix of the chain: the oldest exported event then
+ * points at a predecessor the export cannot see, and the audit document reports
+ * CHAIN_LINK_BROKEN on a stored chain that is intact. For an evidence trail a
+ * false alarm is as damaging as a missed one, and a silently short export is
+ * worse than both, so completeness wins over bounding the read.
  *
  * @param {string} contractId
  * @returns {Promise<Array<object>>}
@@ -184,19 +193,27 @@ export async function logEvent({ type, contractId, actorId, payload = {}, idempo
 export async function fetchContractEvents(contractId) {
   if (!supabase || !contractId) return []
 
-  const { data, error } = await supabase
-    .from('events')
-    .select('*')
-    .eq('contract_id', contractId)
-    .order('created_at', { ascending: false })
-    .limit(200)
+  const rows = []
 
-  if (error) {
-    console.warn('[TrustFlow] contract events fetch failed:', error.message)
-    return []
+  for (;;) {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .eq('contract_id', contractId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(rows.length, rows.length + EVENT_PAGE_SIZE - 1)
+
+    if (error) {
+      console.warn('[TrustFlow] contract events fetch failed:', error.message)
+      return []
+    }
+
+    const page = data || []
+    rows.push(...page)
+
+    if (page.length < EVENT_PAGE_SIZE) return rows
   }
-
-  return data || []
 }
 
 /**
