@@ -145,8 +145,8 @@ What the run did **not** cover is Next Priority #1.
   `invite-persistence.spec.js` — were held unstaged for most of 2026-10-12 and
   are now **committed by Codex itself as `dc354ec`**, so the ownership lock on
   them is released.
-- Build ✓ 0 errors. Unit tests **373 passing across 17 files** (`npm test`,
-  measured 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
+- Build ✓ 0 errors. Unit tests **381 passing across 18 files** (`npm test`,
+  measured 2026-11-04; was 373/17 on 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
   `npm run test:api` (E2E project only) → **20 checks, 0 failed**, and
   `scripts/verify-chain.mjs` recomputed that run's chain independently — 4
   events, 17 checks, `CHAIN VERIFIED`.
@@ -465,11 +465,26 @@ keep deferring it.
 
 Worth knowing before touching `tests/e2e/`: Codex's `dc354ec` added
 `tests/e2e/anonymousSession.js`, which caches an anonymous refresh token so the
-suite stops burning the 30/hour per-IP signup cap. Its two focused specs pass
-**2/2 under `--workers=1`**. They are **not known to pass in parallel** — there
-is an unresolved `earnerSession` contention between workers, so run that file
-serially until someone fixes it rather than reading a parallel failure as a
-regression.
+suite stops burning the 30/hour per-IP signup cap.
+
+This file used to warn that its two specs were "not known to pass in parallel"
+because of an unresolved `earnerSession` contention. **That symptom did not
+reproduce** (Codex, 2026-11-04): before any change the two specs passed 2/2
+both serially and at `--workers=2`. So do not run them serially on account of
+that warning — it was the strongest statement the evidence supported at the
+time, not a measured failure.
+
+What was real, and is now fixed in `e132137`: `getEarnerSession`'s `inFlight`
+promise coordinates **one worker only**, so two workers could each miss the
+cache, each spend a password grant, and each write the shared file. It now
+takes an exclusive lock around read-grant-write and re-reads the cache after
+acquiring it, with stale locks cleared by pid liveness and then by file age.
+`tests/unit/earnerSession.test.js` is the regression test, and it spawns two
+real child processes, because an in-process mock cannot exercise a file lock.
+After the change: `--workers=1` 2/2, `--workers=2` 2/2.
+
+That run left **6 test contracts with acceptance events in the E2E project**.
+Nothing in production was touched.
 
 ## Next Priority (in order)
 
