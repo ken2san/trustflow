@@ -199,24 +199,31 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
             one person; whoever held it gave a name when accepting. TrustFlow
             never checked that the two are the same person, so it does not say
             "accepted as", which reads as an established identity. */}
+        {/* Readable, not de-emphasised. These two lines were text-xs on
+            slate-700/slate-500 against a near-black panel — under 2:1, where
+            4.5:1 is the floor — so the one fact a dispute turns on was the
+            least legible thing on the page while an "acceptance recorded"
+            toast was the brightest. A reader who cannot make out that the
+            invited address and the accepting address differ is not being told
+            the distinction the wording above was written to preserve. */}
         {identity ? (
-          <dl className="text-xs text-slate-600 space-y-0.5 pt-1">
+          <dl className="text-sm text-slate-300 space-y-0.5 pt-1">
             {identity.invited_recipient && (
               <div className="flex gap-2">
-                <dt className="text-slate-700">Invitation sent to</dt>
-                <dd className="text-slate-500">{identity.invited_recipient}</dd>
+                <dt className="text-slate-400">Invitation sent to</dt>
+                <dd className="text-slate-200">{identity.invited_recipient}</dd>
               </div>
             )}
             {identity.claimed_identity && (
               <div className="flex gap-2">
-                <dt className="text-slate-700">Accepted using that invitation, giving</dt>
-                <dd className="text-slate-500">{identity.claimed_identity}</dd>
+                <dt className="text-slate-400">Accepted using that invitation, giving</dt>
+                <dd className="text-slate-200">{identity.claimed_identity}</dd>
               </div>
             )}
           </dl>
         ) : (
           contract.hirer_email && (
-            <p className="text-xs text-slate-600">
+            <p className="text-sm text-slate-300">
               Accepted using the invitation, giving {contract.hirer_email}
             </p>
           )
