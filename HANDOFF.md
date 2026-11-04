@@ -47,7 +47,7 @@ before touching anything in the evidence model.
   `performance.rejected` returning to `TERMS_ACCEPTED`. `SETTLED`, `DELIVERED` and
   `CANCELLED` are **not reachable** — money moves outside TrustFlow by design, and
   cancellation is undecided.
-- **The export reads the whole chain** (`ea2d3e5` + `dd47f41`, unpushed). `fetchContractEvents`
+- **The export reads the whole chain** (`ea2d3e5` + `dd47f41`). `fetchContractEvents`
   capped at the newest 200 rows — not a prefix of the chain, so past 200 events
   the export reported `CHAIN_LINK_BROKEN` over an intact stored chain, and below
   that threshold it was silently short. Now paginated, with `id` breaking a
@@ -133,18 +133,16 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**, **pushed through `545526c`** (2026-10-12): the nineteen
-  commits held back since `1930d20` went out in one push, which also deployed
-  the frontend. Check for later local-only work with
+- Branch **`main`**, **pushed through `b41f7fd`** (2026-11-04, approved): the
+  eleven commits of the resumed session went out in one push, which also
+  deployed the frontend. Check for later local-only work with
   `git rev-list --count origin/main..main` rather than reading a number here —
   a number written in this file goes stale on the commit that writes it.
-  **A push to `main` is a production frontend deploy** (see below) — that is
-  why those commits were held until the backend caught up, and it is still true
-  of the next one. **Working tree is clean.** Codex's three E2E test files —
-  `tests/e2e/anonymousSession.js` (new), `event-ingestion.spec.js`,
-  `invite-persistence.spec.js` — were held unstaged for most of 2026-10-12 and
-  are now **committed by Codex itself as `dc354ec`**, so the ownership lock on
-  them is released.
+  **A push to `main` is a production frontend deploy**, and that approval is
+  spent: the next push needs its own. **Working tree is clean.** No agent is
+  holding a file; the tree is partitioned by path (see Ownership and locks),
+  and Codex's work from 2026-11-04 is committed verbatim in `0ca97ab` and
+  `e132137`.
 - Build ✓ 0 errors. Unit tests **381 passing across 18 files** (`npm test`,
   measured 2026-11-04; was 373/17 on 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
   `npm run test:api` (E2E project only) → **20 checks, 0 failed**, and
