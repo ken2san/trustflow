@@ -62,6 +62,33 @@ function modernEvent({
 const build = (events) => buildAuditDocument({ contractId: CONTRACT, dodHash: 'dod', events })
 
 describe('audit document verification', () => {
+  it('reports a broken chain when an intact 201-event history is truncated to its newest 200 rows', async () => {
+    let prevHash = 'GENESIS'
+    const events = []
+    for (let i = 0; i < 201; i += 1) {
+      const event = attestedEvent({
+        id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`,
+        type: 'contract.initiated', actorId: 'earner-uuid',
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
+        prevHash,
+      })
+      events.push(event)
+      prevHash = event.event_hash
+    }
+
+    const complete = (await build(events)).trustflow_audit_trail
+    expect(complete.integrity_status).toBe('VERIFIED')
+
+    // fetchContractEvents returns the newest 200 rows first. The omitted first
+    // row leaves the first exported event pointing at a predecessor the export
+    // cannot see, although the full stored chain is intact.
+    const newest200 = events.slice(1).reverse()
+    const truncated = (await build(newest200)).trustflow_audit_trail
+    expect(truncated.integrity_status).toBe('CHAIN_LINK_BROKEN')
+    expect(truncated.events).toHaveLength(200)
+    expect(truncated.events[0]._export_verification.chain_link_match).toBe(false)
+  })
+
   it('verifies a server-attested chain', async () => {
     const a = attestedEvent({
       id: '11111111-1111-4111-8111-111111111111', type: 'contract.initiated',
