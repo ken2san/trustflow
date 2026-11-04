@@ -540,6 +540,83 @@ After the change: `--workers=1` 2/2, `--workers=2` 2/2.
 That run left **6 test contracts with acceptance events in the E2E project**.
 Nothing in production was touched.
 
+### Visual review of the existing E2E suite — measured, 2026-11-04
+
+The question was whether an agent can catch the kind of UI wrongness a human
+sees instantly. The idea was that `tests/e2e` already walks the app into every
+state it will ever need and then throws away every frame, so the expensive part
+is paid for. Codex reviewed the idea adversarially and was right on two counts;
+the corrected version was then run, and it found something on its first pass.
+
+**The suite is not 114 states.** `npx playwright test --list` reports **119**
+cases in 13 files (114 `test()` declarations plus loop-registered ones). They
+divide as: **34** that drive the real app, **17** legacy mock screens
+(`app.spec.js`, `contract-flow.spec.js`), **1** config guard, **67** API-only
+with no browser at all. A realistic review set is of the order of a dozen
+screens, not a hundred.
+
+**Four spec files are stub-closed** — `agreement-export`, `agreement-record-ui`,
+`contracts-home`, `earner-signin` fulfil `rest/v1/*`, `auth/v1/otp|verify` and
+the Edge Functions from `page.route`, so no contract or event is written. The
+other two UI files (`invite-persistence`, `guest-evidence`) use real sessions
+and do write.
+
+**"Stub-closed" still is not write-free, and this was measured.** Every app
+load calls `ensureActorIdentity()` → `signInAnonymously()` (`src/lib/identity.js:22`)
+unless a session exists, and nothing stubs `auth/v1/signup`. Running the four
+files took `auth.users` on E2E from 57 anonymous rows to **87 — one per test**,
+plus 1 contract from the three live-session tests. A full 119-case run would
+add roughly 50 more anonymous users on top of its ~68 contracts. Closing this
+needs one shared route stub in `tests/e2e/`, which is Codex's path.
+
+**Cost, measured rather than estimated.** 30 tests with `--trace on` (CLI flag
+only — `playwright.config.js` was not changed and nothing was committed to it):
+**14.8s wall, 30/30 passed, 15 MB of traces**, from which 54 frames were
+extracted at 1.3 MB total. Tracing the whole suite is still the wrong default,
+but for a chosen subset it is close to free.
+
+**Caveat found in the doing:** the last screencast frame is not reliably the
+state the test asserted — `contracts-home`'s "opening a contract" ends on the
+list, not the agreement screen it verified. Frame-picking needs to follow the
+trace's action boundaries, or the tests need explicit screenshots. This is the
+extraction work Codex said would remain, and it is real.
+
+#### What the first pass found
+
+Two of these are verified in source, not inferred from a frame that might be
+mid-animation:
+
+1. **The acceptance-identity block is rendered at roughly invisible contrast.**
+   `GuestEvidenceView.jsx:203-214`: `text-xs` with `dt text-slate-700` and
+   `dd text-slate-500` on a near-black background. The two lines carrying the
+   single most legally significant fact on the page — that the invitation went
+   to one address and someone else's address accepted it — are the least
+   readable thing on screen, while a green "Your acceptance has been recorded"
+   toast is the brightest. The code comment directly above them explains, well,
+   why the wording avoids claiming a verified identity; the styling then buries
+   the distinction it was protecting. Author-blind by construction: whoever
+   wrote that comment knows the line is there.
+
+2. **The signed-out contracts screen still offers "+ New contract".** An
+   unverified Earner cannot persist a contract at all (`invite-persistence.spec.js:91`
+   asserts exactly that), so the primary call to action on that screen leads to
+   work that cannot be saved. Candidate, not confirmed — what the button
+   actually does when signed out has not been traced.
+
+Lower confidence, from frames only and worth one DOM check each: the header
+shows a "Sign in" button and an account avatar simultaneously on every screen,
+including a guest's record of agreement, so no screen says which account is
+acting; "Unlock Chat at Level 2" overlaps the notification bell in every single
+frame; and the failed-load card prints the raw server message ("server
+exploded") straight to the user.
+
+**What this settles.** The method works and is cheap, but not as a blanket
+config change — the value came from choosing a handful of screens, and the one
+real finding came from a contrast judgement no assertion in the suite was ever
+going to make. Codex's two-stage framing is the right one: stage ① asks whether
+the screen can be read, blind, with no repository; stage ② asks whether what the
+screen claims is true in the system, which an image can never answer.
+
 ## Next Priority (in order)
 
 1. **A real second human.** The dogfood proved the mechanism (see "Where the
@@ -655,6 +732,14 @@ Nothing in production was touched.
    (not in this repo) still calls for. Trust Score / Trust Passport remain out
    of scope; do not build them speculatively — see `Decisions.md`'s
    identity/trust entry for why the current minimal model may already be enough.
+
+6. **Act on the visual-review pass** (see the measured section above, dated
+   2026-11-04). In order, cheapest first: fix the contrast on
+   `GuestEvidenceView.jsx:203-214`; check what "+ New contract" does when
+   signed out; DOM-check the three lower-confidence header findings. Only then
+   consider making the capture repeatable — and if it is made repeatable, the
+   `auth/v1/signup` stub comes first, or every run keeps minting anonymous
+   users in E2E.
 
 ## Open Decisions
 
