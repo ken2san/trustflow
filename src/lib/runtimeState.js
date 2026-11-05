@@ -155,16 +155,14 @@ export function cloudSafeSubset(snapshot) {
  * by default and nobody has to notice. So this names what MAY be restored:
  *
  *   home   — re-fetches its own contracts from the server.
- *   wallet — reads only the local ledger and the profile counters, both of
- *            which the snapshot carries or the app recomputes.
  *
- * Everything else falls back to 'home', which is also where the legacy
- * Marketplace / five-step ContractView surface stops being somewhere a reload
- * can strand you. Those screens run on local mock state and are reachable on
- * purpose from the command palette's "(legacy)" entries; being returned to one
- * by a restore is not the same thing as choosing it.
+ * `wallet` was on this list until 2026-11-05. It was the one legacy screen a
+ * restore could land on, which made it an entry point no button removal could
+ * close: the reputation layer is being removed (Decisions.md), and a stored
+ * snapshot would have kept reopening it. Everything else already fell back to
+ * 'home', and now so does that.
  */
-export const RESTORABLE_VIEWS = new Set(['home', 'wallet'])
+export const RESTORABLE_VIEWS = new Set(['home'])
 
 /** The view to open after a restore: the snapshot's, if it is one we may trust. */
 export function restorableView(view) {

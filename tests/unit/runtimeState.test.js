@@ -369,14 +369,15 @@ describe('which view a restored snapshot may land on', () => {
     expect(restorableView('home')).toBe('home')
   })
 
-  it('restores the wallet, which needs nothing the snapshot does not carry', () => {
-    expect(restorableView('wallet')).toBe('wallet')
+  it('no longer restores the wallet, the one legacy screen a reload could land on', () => {
+    // 'wallet' was restorable until 2026-11-05 because it needed nothing the
+    // snapshot did not carry. That made it an entry into the reputation layer
+    // that removing a button could not close: a stored snapshot would keep
+    // reopening it. The layer is being removed (Decisions.md), so it is out.
+    expect(restorableView('wallet')).toBe('home')
   })
 
   it('does not return the user to the legacy marketplace or command center', () => {
-    // Reachable on purpose from the command palette's "(legacy)" entries; being
-    // put back there by a reload is not the same as choosing it. This is the
-    // defect in HANDOFF.md's Next Priority #4.
     expect(restorableView('marketplace')).toBe('home')
     expect(restorableView('command-center')).toBe('home')
   })
@@ -402,7 +403,7 @@ describe('which view a restored snapshot may land on', () => {
   it('allowlists, so a view added to App.jsx is not restorable by default', () => {
     // The point of the shape above, applied to the view name: a denylist would
     // admit whatever is added next without anyone having to decide.
-    expect([...RESTORABLE_VIEWS].sort()).toEqual(['home', 'wallet'])
+    expect([...RESTORABLE_VIEWS].sort()).toEqual(['home'])
   })
 
   it('keeps view in the cloud-safe shape — this is about which values, not whether', () => {

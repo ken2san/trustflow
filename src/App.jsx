@@ -1291,19 +1291,16 @@ const App = () => {
   const earliestDeadline = todayLocalISO();
   const deadlineIsPast = Boolean(byocForm.deadline) && byocForm.deadline < earliestDeadline;
 
-  // Marketplace and Command Center are no longer in the primary navigation.
-  // They are not deleted, and the palette is where they remain reachable —
-  // deliberately, so removing them from the main path does not mean losing the
-  // ability to look at them while they are being reconsidered.
+  // The palette used to be where the legacy surface stayed reachable after it
+  // left the primary nav — Marketplace, Command Center, Wallet, Trust Passport
+  // and Chat each had an entry here, described as deliberate. That surface is
+  // being removed (Decisions.md, 2026-11-05), so these are the doors being
+  // closed first: the views still exist in the tree at this commit and are now
+  // unreachable, which is what the next step measures.
   const commands = useMemo(() => [
       { id: 'home', label: 'Go to Contracts', icon: LayoutGrid, action: () => setView('home') },
       { id: 'new-contract', label: 'New contract', icon: UserPlus, action: () => handleBYOCStart() },
-      { id: 'wallet', label: 'Open Wallet', icon: Wallet, action: () => setView('wallet') },
-      { id: 'marketplace', label: 'Open Marketplace (legacy)', icon: LayoutGrid, action: () => setView('marketplace') },
-      { id: 'command-center', label: 'Open Command Center (legacy)', icon: Layers, action: () => setView('command-center') },
-      { id: 'profile', label: 'View Trust Passport', icon: User, action: () => handleViewProfile(USER_PROFILE) },
       { id: 'switch', label: `Switch to ${mode === 'earner' ? 'Hirer' : 'Earner'} Mode`, icon: RefreshCw, action: toggleMode },
-      { id: 'chat', label: 'Toggle Chat', icon: MessageSquare, action: () => setIsChatOpen(prev => !prev) },
   ], [mode, handleBYOCStart]);
 
   const activeOperations = useMemo(() => {
@@ -1544,7 +1541,10 @@ const App = () => {
               >
                 {otpStage === 'busy' ? 'Working…' : inviteLink ? 'Create another' : 'Send Invite'}
               </button>
-              <button onClick={handleBYOCSubmit} className="flex-1 py-4 rounded-2xl bg-white text-[#020617] font-black hover:bg-indigo-400 hover:text-white transition-all text-sm">Start Myself →</button>
+              {/* "Start Myself →" stood here and ran handleBYOCSubmit, which
+                  routes to the legacy scoping/ContractView flow — a door into
+                  the removed surface inside a modal the evidence path needs.
+                  Send Invite above is the one that creates a real contract. */}
             </div>
           </div>
         </div>
@@ -1596,28 +1596,8 @@ const App = () => {
             </button>
           )}
           <button onClick={toggleMode} className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 hover:bg-white/5 transition-all"><div className={`w-2 h-2 rounded-full ${mode === 'earner' ? 'bg-indigo-500' : 'bg-emerald-500'}`} /><span className="text-xs font-bold uppercase tracking-wider text-slate-300">Switch to {mode === 'earner' ? 'Hire' : 'Work'}</span><RefreshCw className="w-3 h-3 text-slate-500" /></button>
-          {/* Wallet button: only enabled if unlocked */}
-          <div className={`hidden sm:flex flex-col items-center gap-1 bg-white/[0.03] px-4 py-2 rounded-full border border-white/5 transition-colors ${unlockedFeatures.includes('wallet') ? 'cursor-pointer hover:bg-white/10' : 'opacity-40 cursor-not-allowed'}`}
-            onClick={e => {
-              if (unlockedFeatures.includes('wallet')) {
-                setView('wallet');
-              } else {
-                e.preventDefault();
-                addToast('Locked', 'Wallet unlocks at Level 1.', 'warning');
-              }
-            }}
-            title={unlockedFeatures.includes('wallet') ? 'Open Wallet' : 'Unlock at Level 1'}>
-            <div className="flex items-center gap-3">
-              <Coins className="w-3.5 h-3.5 text-amber-500" />
-              <span className="font-mono font-bold text-xs">{formatNumber(uiProfile.points ?? 0)}</span>
-              {!unlockedFeatures.includes('wallet') && (
-                <Lock className="w-4 h-4 text-slate-400 ml-2" />
-              )}
-            </div>
-            {!unlockedFeatures.includes('wallet') && (
-              <span className="text-[10px] text-slate-400 mt-1">Unlock Wallet at Level 1</span>
-            )}
-          </div>
+          {/* The TrustPoints coin pill stood here and opened the Wallet. Both
+              go with the reputation layer. */}
           {/* Command Center is no longer in the primary navigation — it was a
               second dashboard competing with the Contracts home. The view still
               exists; ⌘K reaches it. */}
@@ -1915,44 +1895,15 @@ const App = () => {
             <div className="p-4 border-t border-white/5 bg-[#020617]/50"><button onClick={triggerSmartContractUpdate} className="text-[10px] text-slate-500 hover:text-indigo-400 mb-2 w-full text-center uppercase tracking-widest font-bold opacity-50 hover:opacity-100 transition-opacity">[Dev: Simulate Scope Creep]</button><div className="flex items-center gap-2 bg-white/5 rounded-full px-4 py-2 border border-white/5"><input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="Type a message..." className="bg-transparent border-none outline-none text-white text-sm flex-1 placeholder:text-slate-500" /><button onClick={handleSendMessage} className="p-2 bg-indigo-600 rounded-full text-white hover:bg-indigo-500"><Send className="w-4 h-4" /></button></div></div>
           </div>
         )}
-        <button
-          onClick={e => {
-            if (userLevel >= 2) {
-              setIsChatOpen(!isChatOpen);
-            } else {
-              e.preventDefault();
-              addToast('Locked', 'Chat unlocks at Level 2.', 'warning');
-            }
-          }}
-          className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-transform active:scale-95 relative ${userLevel >= 2 ? 'bg-indigo-600 text-white hover:scale-110' : 'bg-slate-700 text-slate-400 opacity-50 cursor-not-allowed'}`}
-          title={userLevel >= 2 ? 'Open Chat' : 'Unlock at Level 2'}
-        >
-          <span className="relative w-full h-full flex items-center justify-center">
-            <MessageSquare className={`w-6 h-6 sm:w-7 sm:h-7 ${userLevel < 2 ? 'text-slate-400 opacity-60' : ''}`} />
-            {userLevel < 2 && (
-              <Lock className="absolute right-0 bottom-0 w-3 h-3 text-slate-400 z-10" />
-            )}
-          </span>
-        </button>
       </div>
 
-      <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A]/80 backdrop-blur-2xl border-t border-white/10 px-8 py-5 flex justify-between items-center z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
+      <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A]/80 backdrop-blur-2xl border-t border-white/10 px-8 py-5 flex justify-center items-center z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
         <button title="Contracts" className={`p-3 transition-all duration-300 ${view === 'home' ? 'text-indigo-400 scale-125 bg-indigo-500/10 rounded-2xl shadow-[0_0_20px_rgba(99,102,241,0.2)]' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => { setIsProfileOpen(false); setIsCommandOpen(false); setProfileData(null); setView('home'); }}><LayoutGrid className="w-6 h-6" /></button>
-        <button className={`p-3 transition-all duration-300 ${view === 'wallet' ? 'text-indigo-400 scale-125 bg-indigo-500/10 rounded-2xl shadow-[0_0_20px_rgba(99,102,241,0.2)]' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => { setIsProfileOpen(false); setIsCommandOpen(false); setProfileData(null); setView('wallet'); }}><Wallet className="w-6 h-6" /></button>
-        {/* Command Center icon (mobile only) */}
-
-        <button className="p-3 text-slate-500 inline-flex" onClick={() => { setIsCommandOpen(false); setView('home'); setProfileData(unifiedProfile); setIsProfileOpen(true); }}>
-          {/* Avatar icon for mobile bottom bar (same as header) */}
-          <span className="block w-6 h-6 rounded-full overflow-hidden border-2 border-indigo-400 bg-slate-800">
-            {USER_PROFILE.avatarUrl ? (
-              <img src={USER_PROFILE.avatarUrl} alt={USER_PROFILE.name} className="w-full h-full object-cover" />
-            ) : USER_PROFILE.name ? (
-              <span className="w-full h-full flex items-center justify-center text-xs font-bold text-indigo-300">{USER_PROFILE.name[0]}</span>
-            ) : (
-              <User className="w-4 h-4 text-slate-400" />
-            )}
-          </span>
-        </button>
+        {/* The Wallet button and the profile avatar stood here. The avatar was
+            the same hardcoded "F" the desktop header carried, and it survived
+            bd33c34 because that change only touched the header and every frame
+            reviewed for it was desktop-width — the mobile bar is sm:hidden.
+            Recorded as the method's blind spot in HANDOFF.md. */}
       </nav>
 
       <style>{`
