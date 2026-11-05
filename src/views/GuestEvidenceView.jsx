@@ -7,7 +7,6 @@
 // its own; it reports what the server verified, and is deliberate about not
 // overstating it (see the footnote about payload coverage).
 
-import React from 'react';
 import { ShieldCheck, ShieldAlert, Clock, AlertTriangle } from 'lucide-react';
 
 const TYPE_LABELS = {

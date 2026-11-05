@@ -18,7 +18,8 @@
     "check:sql-draft": "node scripts/check-sql-draft.mjs",
     "receipt": "node scripts/make-receipt.mjs",
     "verify:receipt": "node scripts/verify-receipt.mjs",
-    "sim:counterparty": "node scripts/sim-counterparty.mjs"
+    "sim:counterparty": "node scripts/sim-counterparty.mjs",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@stripe/react-stripe-js": "^6.4.0",
@@ -29,9 +30,14 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.58.2",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.19",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.14.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "vite": "^5.2.2",

@@ -54,21 +54,13 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { initialUIProfileStats, initialInternalProfileStats } from './lib/profileInitialData';
 import {
-  ShieldCheck, ArrowRight, Lock, Unlock, CheckCircle2, AlertCircle,
-  MessageSquare, Wallet, Coins, PlusCircle, Search, Sparkles, Zap,
-  ArrowLeft, ListChecks, Activity, TrendingUp, Globe, Award,
-  BadgeCheck, UploadCloud, X, Send, Paperclip, Fingerprint, Scale,
-  BrainCircuit, Target, UserCheck, LayoutGrid, CreditCard,
-  Loader2, Check, MousePointer2, FileSignature, Scan, Hash,
-  RefreshCw, QrCode, Briefcase, Users, ChevronRight, User, Gavel, AlertTriangle,
-  Command, Laptop, Wand2, MapPin, Calendar, Share2, Hexagon, BarChart4, Star,
-  Layers, UserPlus, LogIn, LogOut
+  ShieldCheck, CheckCircle2, Search, Activity, X, LayoutGrid, Loader2, RefreshCw, Briefcase, UserPlus, LogIn, LogOut
 } from 'lucide-react';
 // Returns a unified profile object merging static and dynamic user data
 // (moved below imports)
 
 // Centralized constants and mock data
-import { formatNumber, deriveLevel } from './lib/utils';
+import { deriveLevel } from './lib/utils';
 import { sha256, buildDodCanonical } from './lib/crypto.js';
 import { logEvent, EVENT_TYPES, fetchContractEvents, subscribeToContractEvents } from './lib/eventLog.js';
 import { downloadAuditTrail } from './lib/auditExport.js';
@@ -93,8 +85,6 @@ import { supabase, isSupabaseEnabled } from './lib/supabase.js';
    ======================================================================== */
 
 
-// useInterval moved to hooks/useInterval.js
-import useInterval from './hooks/useInterval';
 
 /* ========================================================================
    3. UI COMPONENTS (ATOMS & MOLECULES)
@@ -103,15 +93,9 @@ import useInterval from './hooks/useInterval';
 // NeuralBackground moved to components/ui/NeuralBackground.jsx
 import NeuralBackground from './components/ui/NeuralBackground';
 
-// SpotlightCard moved to components/ui/SpotlightCard.jsx
-import SpotlightCard from './components/ui/SpotlightCard';
-
-// HoldButton moved to components/ui/HoldButton.jsx
-import HoldButton from './components/ui/HoldButton';
 
 
-// ScrambleText moved to components/ui/ScrambleText.jsx
-import ScrambleText from './components/ui/ScrambleText';
+
 
 
 // ToastContainer moved to components/ui/ToastContainer.jsx
@@ -532,8 +516,6 @@ const App = () => {
     setTimeout(() => {
         setMode(prev => { const newMode = prev === 'earner' ? 'hirer' : 'earner'; setView('home'); return newMode; });
         setSelectedItem(null);
-        setAiSuggestions(null);
-        setProjectPrompt('');
         setStatus('idle');
         addToast('Mode Switched', `Active Interface: ${mode === 'earner' ? 'Client (Hirer)' : 'Professional (Earner)'}`);
     }, 800);

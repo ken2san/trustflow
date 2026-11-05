@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { ShieldCheck, ArrowRight, X, Star, Lock, CheckCircle2, User, AlertTriangle, Clock } from "lucide-react";
 
 const GAINS = [

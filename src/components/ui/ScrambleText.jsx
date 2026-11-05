@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import useInterval from "../../hooks/useInterval";
 
 const ScrambleText = ({ text, className, trigger }) => {
