@@ -611,7 +611,25 @@ mid-animation:
 Three more came from the frames and were then checked in source. The first is
 the strongest find of the pass:
 
-3. **Every screen displays a fabricated identity as the current user.** The
+3. **FIXED 2026-11-05.** The header avatar and the chat bell are gone from the
+   nav (`App.jsx`), on the same principle the Command Center left it: ⌘K still
+   reaches "View Trust Passport" and "Toggle Chat", so no view was removed. The
+   `app.spec.js` test that clicked the avatar now asserts it is absent and
+   opens the passport from the palette instead.
+
+   **Residue, deliberately left:** `ProfileModal.jsx:32-35` still renders
+   `unifiedProfile.name` — "Felix", role "Product Designer", with a hardcoded
+   `|| "Tokyo, Japan"` fallback — because `unifiedProfile` is
+   `{...USER_PROFILE, ...uiProfile}` and the eight real `uiProfile` numbers do
+   not cover the name, role, location, skills, reliability or completedJobs.
+   Behind ⌘K now rather than one click from every screen, but still fictional.
+   Removing it means deciding whether the Trust Passport exists at all, which
+   `Decisions.md` has deferred. Also still in the header and from the same
+   family, out of scope for this change: the coin pill and "Switch to Hire".
+
+   What it was:
+
+   **Every screen displayed a fabricated identity as the current user.** The
    header avatar is `USER_PROFILE` (`App.jsx:1659`), which is a hardcoded
    fixture in `src/lib/constants.js:4`: *Felix, Product Designer, Tokyo, level
    42, reliability 99, 42 completed jobs*. It renders on every screen —
@@ -626,18 +644,42 @@ the strongest find of the pass:
    chrome, which also owns the Trust Passport entry point and the `userLevel`
    gamification), and that is a product decision, not a cleanup.
 
-4. **The notification bell carries a permanent unread dot.** `App.jsx:1653`
-   renders the rose dot unconditionally, with no count or condition behind it,
-   beside a bell that is disabled below level 2. A badge that is always on
-   trains the reader to ignore badges.
+4. **FIXED 2026-11-05, with the bell.** It carried a permanent unread dot
+   rendered unconditionally, with no count or condition behind it, beside a
+   button disabled below level 2 that advertised "Unlock Chat at Level 2" in
+   text overlapping the icon it belonged to.
 
 5. **The failed-load card prints the raw server message** (`ContractsHomeView.jsx:254`
    renders `{error}` as-is — "server exploded" in the stub, a PostgREST string
    in production). Low severity and possibly deliberate for diagnosis, but it
    is backend text shown to a user.
 
-Also real but cosmetic: "Unlock Chat at Level 2" (`App.jsx:1656`) sits below the
-bell inside the fixed-height nav and collides with it in every frame.
+### The E2E suite was already red, and nothing said so
+
+Running the full suite to verify the nav change — the first full run in a long
+time — returned **108 passed, 11 failed**. Only one failure was the change
+(the avatar test, now rewritten). The other **ten fail at `0aa51ac` too**,
+verified by stashing and re-running:
+
+- **`contract-flow.spec.js`, all 9.** They wait for `Secure Funds in Escrow`,
+  which still exists in `ContractStep1.jsx:196` but is no longer reachable —
+  `contracts-home.spec.js:180` asserts in so many words that nothing routes
+  there any more. Stale tests for a retired flow, not a product regression,
+  the same shape as the "Net Liquidity" test noted in `app.spec.js`. They are
+  9 of the 17 legacy mock screens.
+- **`guest-evidence.spec.js:239`**, asserting the response does not contain the
+  string `invite_token`. It does — as a *value*:
+  `acceptance_identity.authentication_detail.credential: "invite_token"`, which
+  names the kind of credential used and leaks nothing. A substring check
+  written before that field existed.
+
+Not fixed here: deleting nine tests and loosening a leak assertion are each a
+decision, and neither is this change. But the standing fact is that a red
+suite was sitting there unnoticed, so **a green run cannot be assumed** — the
+last full run before this one appears to predate 2026-10.
+
+Also cosmetic and now gone with the bell: "Unlock Chat at Level 2" sat below it
+inside the fixed-height nav and collided with it in every frame.
 
 **What this settles.** The method works and is cheap, but not as a blanket
 config change — the value came from choosing a handful of screens, and the one
@@ -764,10 +806,10 @@ screen claims is true in the system, which an image can never answer.
 
 6. **Act on the visual-review pass** (see the measured section above, dated
    2026-11-04). The contrast fix is done (`3005bd0`) and the "+ New contract"
-   candidate was checked and withdrawn. What remains is findings 3-5, all now
-   confirmed in source: the mock `USER_PROFILE` identity in the header is a
-   product decision and the largest of them; the always-on bell badge and the
-   raw error text are small. Only then
+   candidate was checked and withdrawn, and findings 3 and 4 are fixed. What
+   remains from the pass: finding 5 (the raw server message), the Felix residue
+   inside the Trust Passport, and the ten pre-existing E2E failures above.
+   Only then
    consider making the capture repeatable — and if it is made repeatable, the
    `auth/v1/signup` stub comes first, or every run keeps minting anonymous
    users in E2E.

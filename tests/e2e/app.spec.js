@@ -65,10 +65,18 @@ test('can initiate contract and reach contract view', async ({ page }) => {
 
 // ── 5. Trust Passport modal ──────────────────────────────────────────────────
 
-test('Trust Passport modal opens from profile avatar', async ({ page }) => {
+test('Trust Passport is reachable, and no avatar claims to be the account', async ({ page }) => {
   await page.goto('/');
-  // Click the outer avatar div (has onClick) — span inside overflow-hidden can't be clicked directly
-  await page.locator('nav .w-9.h-9.rounded-full.cursor-pointer').click();
+
+  // The header avatar is gone. It rendered USER_PROFILE.name[0] — a hardcoded
+  // fixture, not the signed-in account — so it read "F" for everyone, on every
+  // screen, beside the Sign in button. Same treatment as Command Center above:
+  // the view stays, the palette reaches it, the nav does not assert an
+  // identity it never knew.
+  await expect(page.locator('nav .w-9.h-9.rounded-full.cursor-pointer')).toHaveCount(0);
+
+  await page.keyboard.press('Meta+k');
+  await page.getByText('View Trust Passport').click();
   await expect(page.locator('text=/Performance Metrics|Behavior Signals/i').first()).toBeVisible({ timeout: 5000 });
 });
 

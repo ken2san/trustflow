@@ -60,7 +60,7 @@ import {
   MessageSquare, Wallet, Coins, PlusCircle, Search, Sparkles, Zap,
   ArrowLeft, ListChecks, Activity, TrendingUp, Globe, Award,
   BadgeCheck, UploadCloud, X, Send, Paperclip, Fingerprint, Scale,
-  BrainCircuit, Target, UserCheck, LayoutGrid, Bell, CreditCard,
+  BrainCircuit, Target, UserCheck, LayoutGrid, CreditCard,
   Loader2, Check, MousePointer2, FileSignature, Scan, Hash,
   RefreshCw, QrCode, Briefcase, Users, ChevronRight, User, Gavel, AlertTriangle,
   Command, Laptop, Wand2, MapPin, Calendar, Share2, Hexagon, BarChart4, Star,
@@ -1629,45 +1629,23 @@ const App = () => {
             <Activity className="w-5 h-5" />
             {unreadCount > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-indigo-500 rounded-full text-[9px] font-black text-white flex items-center justify-center leading-none">{unreadCount > 99 ? '99+' : unreadCount}</span>}
           </button>
-          <div className="flex items-center gap-3 pl-2 border-l border-white/10">
-            {/* Chat button: only enabled if unlocked */}
-            <div className="flex flex-col items-center">
-              <button
-                className={`relative p-2 rounded-full transition-colors group ${userLevel >= 2 ? 'hover:bg-white/5' : 'opacity-40 cursor-not-allowed'}`}
-                onClick={e => {
-                  if (userLevel >= 2) {
-                    setIsChatOpen(true);
-                  } else {
-                    e.preventDefault();
-                    addToast('Locked', 'Chat unlocks at Level 2.', 'warning');
-                  }
-                }}
-                title={userLevel >= 2 ? 'Open Chat' : 'Unlock at Level 2'}
-              >
-                <Bell className="w-5 h-5 text-slate-400 group-hover:text-white transition-colors" />
-                {userLevel < 2 && (
-                  <span className="absolute -bottom-2 right-1 z-10 flex items-center">
-                    <Lock className="w-4 h-4 text-slate-400 drop-shadow" />
-                  </span>
-                )}
-                <span className="absolute top-2 right-2.5 w-1.5 h-1.5 bg-rose-500 rounded-full ring-2 ring-[#020617]" />
-              </button>
-              {userLevel < 2 && (
-                <span className="text-[10px] text-slate-400 mt-1">Unlock Chat at Level 2</span>
-              )}
-            </div>
-            <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 p-[1px] cursor-pointer hover:scale-105 transition-transform hidden sm:block" onClick={() => handleViewProfile(USER_PROFILE)}>
-              <div className="w-full h-full rounded-full bg-[#020617] flex items-center justify-center overflow-hidden">
-                {USER_PROFILE.avatarUrl ? (
-                  <img src={USER_PROFILE.avatarUrl} alt={USER_PROFILE.name} className="w-full h-full object-cover" />
-                ) : USER_PROFILE.name ? (
-                  <span className="w-full h-full flex items-center justify-center text-base font-bold text-indigo-300">{USER_PROFILE.name[0]}</span>
-                ) : (
-                  <User className="w-5 h-5 text-slate-300" />
-                )}
-              </div>
-            </div>
-          </div>
+          {/* The profile avatar and the chat bell used to sit here. Both are
+              gone, for the same reason the Command Center left the primary nav
+              above: ⌘K still reaches "View Trust Passport" and "Toggle Chat".
+
+              The avatar was not the signed-in account. It rendered
+              USER_PROFILE.name[0] — a hardcoded fixture, "Felix", from the
+              2026-02 marketplace prototype — so the letter was "F" for
+              everyone, on every screen, beside the Sign in button, signed in
+              or not, and for a guest reading someone else's record of
+              agreement. A product whose only claim is recording who did what
+              cannot assert the wrong account in its own header. That it merely
+              failed to name the acting account was the 2026-10-11 finding; it
+              was worse than that.
+
+              The bell went with it: its unread dot was unconditional, and it
+              was disabled below level 2 while advertising "Unlock Chat at
+              Level 2" in text that overlapped the icon it belonged to. */}
         </div>
       </nav>
 
