@@ -1,4 +1,3 @@
-import NegotiationChatView from './views/NegotiationChatView';
 
 /**
  * @typedef {Object} UIProfileStats
@@ -70,7 +69,6 @@ import {
 // (moved below imports)
 
 // Centralized constants and mock data
-import { USER_PROFILE, JOBS_DATA, TALENTS_DATA } from './lib/constants';
 import { formatNumber, deriveLevel } from './lib/utils';
 import { sha256, buildDodCanonical } from './lib/crypto.js';
 import { logEvent, EVENT_TYPES, fetchContractEvents, subscribeToContractEvents } from './lib/eventLog.js';
@@ -127,7 +125,6 @@ import ToastContainer from './components/ui/ToastContainer';
 
 
 // ProfileModal moved to components/modals/ProfileModal.jsx
-import ProfileModal from './components/modals/ProfileModal';
 
 // CommandPalette component for command modal
 import CommandPalette from './components/ui/CommandPalette.jsx';
@@ -136,11 +133,9 @@ import CommandPalette from './components/ui/CommandPalette.jsx';
 
 
 // DisputeModal moved to components/modals/DisputeModal.jsx
-import DisputeModal from './components/modals/DisputeModal';
 
 
 // PaymentModal moved to components/modals/PaymentModal.jsx
-import PaymentModal from './components/modals/PaymentModal';
 
 
 
@@ -150,16 +145,12 @@ import PaymentModal from './components/modals/PaymentModal';
 import OnboardingView from './views/OnboardingView';
 
 // MarketplaceView moved to views/MarketplaceView.jsx
-import MarketplaceView from './views/MarketplaceView';
 
 // ScopingView moved to views/ScopingView.jsx
-import ScopingView from './views/ScopingView';
 
 // ContractView moved to views/ContractView.jsx
-import ContractView from './views/ContractView';
 
 // WalletView moved to views/WalletView.jsx
-import WalletView from './views/WalletView';
 import GuestEvidenceView from './views/GuestEvidenceView';
 import ContractsHomeView from './views/ContractsHomeView';
 import SignInView from './views/SignInView';
@@ -167,10 +158,8 @@ import AgreementView from './views/AgreementView';
 import { performsHere } from './lib/contractStatus.js';
 
 // CommandCenterView moved to views/CommandCenterView.jsx
-import CommandCenterView from './views/CommandCenterView';
 
 // ProjectDetailView moved to views/ProjectDetailView.jsx
-import ProjectDetailView from './views/ProjectDetailView';
 
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
@@ -347,8 +336,6 @@ const App = () => {
 
   const [messages, setMessages] = useState([{ id: 1, sender: 'ai', text: 'Protocol initialized. DoD generated based on risk profile.', time: '10:00', type: 'text' }, { id: 2, sender: 'client', text: 'Looking forward to the design system!', time: '10:05', type: 'text' }]);
   const [inputText, setInputText] = useState('');
-  const [projectPrompt, setProjectPrompt] = useState('');
-  const [aiSuggestions, setAiSuggestions] = useState(null);
   const chatEndRef = useRef(null);
 
   useEffect(() => { const handleKeyDown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setIsCommandOpen(prev => !prev); } }; window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown); }, []);
@@ -581,34 +568,6 @@ const App = () => {
     }, 800);
   };
 
-  const handleSelect = (item) => { setSelectedItem(item); setIsProfileOpen(false); setView('scoping'); };
-  // Always show the current unified profile for the main user
-  const handleViewProfile = (data) => {
-    if (data && data.id === USER_PROFILE.id) {
-      setProfileData(unifiedProfile);
-    } else {
-      setProfileData(data);
-    }
-    setIsProfileOpen(true);
-  };
-  const handleAIArchitectSubmit = () => {
-    setStatus('processing');
-    setTimeout(() => {
-      const tokens = (projectPrompt.match(/(?:[A-Z][a-zA-Z]+|[a-z]{5,})/g) || [])
-        .filter((w, i, a) => a.indexOf(w) === i)
-        .slice(0, 4);
-      const dod = tokens.length >= 2
-        ? tokens.map(t => t.charAt(0).toUpperCase() + t.slice(1) + ' — delivered and approved by both parties')
-        : ['Deliverable matches the agreed scope', 'Reviewed and signed off by both parties', 'No unresolved objections at handoff'];
-      setAiSuggestions({
-        summary: 'Criteria extracted from your description. Review each item before locking terms.',
-        dod,
-        budget: 'Confirm budget before proceeding.',
-        candidates: TALENTS_DATA,
-      });
-      setStatus('idle');
-    }, 1500);
-  };
   // BiometricModal removed: go directly to contract view
   //
   // Shared by every "start a contract" entry point (ScopingView's AI-architect
@@ -1324,16 +1283,6 @@ const App = () => {
 
 
   // Unified profile object merging static and dynamic user data.
-  // useMemo (not useCallback wrapping a call) — the previous version called
-  // the useCallback-memoized function on every render regardless of whether
-  // its deps changed, so it produced a fresh object reference every render
-  // anyway, defeating referential-equality memoization in consumers like
-  // CommandCenterView.
-  const unifiedProfile = useMemo(() => ({
-    ...USER_PROFILE,
-    ...uiProfile,
-    badActorFlags,
-  }), [uiProfile, badActorFlags]);
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 font-sans selection:bg-indigo-500/30 overflow-x-hidden relative">
@@ -1342,16 +1291,6 @@ const App = () => {
       {!hasOnboarded && <OnboardingView onComplete={handleOnboardingComplete} />}
 
       <ToastContainer toasts={toasts} removeToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
-      <PaymentModal
-        isOpen={isPaymentModalOpen}
-        onClose={() => setIsPaymentModalOpen(false)}
-        onSuccess={handlePaymentSuccess}
-        contractId={selectedItem ? String(selectedItem.id ?? '') : ''}
-        amountJpy={selectedItem?.totalPoints ?? 0}
-        projectName={selectedItem?.title ?? 'Contract'}
-      />
-      {/* BiometricModal removed for MVP slimdown */}
-      <DisputeModal isOpen={isDisputeOpen} onClose={() => setIsDisputeOpen(false)} onResolve={handleDisputeResolve} auditData={selectedItem ? { contractId: String(selectedItem.id ?? ''), dodHash, events: contractEvents, meta: { title: selectedItem.title ?? '' } } : null} />
       {isCommandOpen && (
         <>
           {/* Overlay for command palette modal: semi-transparent, blur, background visible */}
@@ -1363,7 +1302,6 @@ const App = () => {
           </div>
         </>
       )}
-      <ProfileModal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} profile={profileData} addToast={addToast} contractHistory={contractHistory} />
 
       {/* Activity Log Panel */}
       {showActivityLog && (
@@ -1682,51 +1620,8 @@ const App = () => {
             onSignIn={() => setView('signin')}
           />
         )}
-        {view === 'marketplace' && <MarketplaceView mode={mode} jobs={JOBS_DATA} talents={TALENTS_DATA} onViewDetails={item => { setProjectDetail(item); setView('project-detail'); }} projectPrompt={projectPrompt} setProjectPrompt={setProjectPrompt} handleAIArchitectSubmit={handleAIArchitectSubmit} aiSuggestions={aiSuggestions} scrambleTrigger={scrambleTrigger} formatNumber={formatNumber} onBYOC={handleBYOCStart} onHire={talent => { addToast('Contract Initiated', 'Contract flow started.'); beginContract(talent); }} />}
-        {/* Shared chat state for negotiation stream */}
-        {view === 'project-detail' && projectDetail && (
-          <ProjectDetailView
-            project={projectDetail}
-            negotiationHistory={[]}
-            onAgreement={() => {
-              beginContract(projectDetail); // also sets view='contract', step=1 (Commitment Locked)
-              setChatLocked(true); // Lock chat after contract initiation
-              addToast('Commitment Locked', 'Contract flow started.');
-            }}
-            onBack={() => setView('home')}
-            onOpenChat={() => setView('negotiation-chat')}
-            messages={negotiationMessages}
-            agreed={negotiationAgreed}
-            setAgreed={setNegotiationAgreed}
-            acceptanceProtocol={acceptanceProtocol}
-            setAcceptanceProtocol={setAcceptanceProtocol}
-            chatLocked={chatLocked}
-          />
-        )}
-        {view === 'negotiation-chat' && (
-          <NegotiationChatView
-            messages={negotiationMessages}
-            setMessages={setNegotiationMessages}
-            agreed={negotiationAgreed}
-            setAgreed={setNegotiationAgreed}
-            acceptanceProtocol={acceptanceProtocol}
-            setAcceptanceProtocol={setAcceptanceProtocol}
-            chatLocked={chatLocked}
-            onBack={(next, evidence) => {
-              if (next === 'scoping') {
-                // Ensure selectedItem is set from projectDetail if not already
-                if (!selectedItem && projectDetail) {
-                  setSelectedItem(projectDetail);
-                }
-                // Optionally, store evidence/messages for later use
-                setView('scoping');
-              } else {
-                setView('project-detail');
-              }
-            }}
-          />
-        )}
-        {/* ScopingView removed from contract flow. */}
+        {/* marketplace, project-detail and negotiation-chat rendered here.
+            Removed with the legacy surface — Decisions.md, 2026-11-05. */}
         {view === 'invite' && inviteLoading && (
           <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-slate-500">
             <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
@@ -1825,8 +1720,7 @@ const App = () => {
             onBack={() => setView('invite-accepted')}
           />
         )}
-        {view === 'scoping' && selectedItem && <ScopingView selectedItem={selectedItem} onBack={() => { setIsRehire(false); setView('home'); setSelectedItem(null); }} onInitiate={() => { setIsRehire(false); initiateContract(); }} scrambleTrigger={scrambleTrigger} formatNumber={formatNumber} isRehire={isRehire} />}
-        {view === 'contract' && selectedItem && <ContractView step={step} handleNextStep={handleNextStep} handleReject={handleReject} onOpenDispute={handleOpenDispute} isUploading={isUploading} uploadProgress={uploadProgress} handleFileUpload={handleFileUpload} status={status} formatNumber={formatNumber} userStats={uiProfile} setUserStats={setUIProfile} addToast={addToast} triggerLevelUp={triggerLevelUp} triggerParamUp={triggerParamUp} mode={mode} onRehire={handleRehire} contractEvents={contractEvents} dodHash={dodHash} contractId={String(selectedItem?.id ?? 'mock')} contractAmount={selectedItem?.totalPoints ?? 0} onContractCancel={handleContractCancel} onBack={() => { setView('home'); setSelectedItem(null); }} guestName={guestName} />}
+        {/* scoping and the five-step ContractView rendered here. */}
               {/* Global Level Up/Param Up Animation */}
               {showLevelUp && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none">
@@ -1845,57 +1739,9 @@ const App = () => {
                   <div className="text-3xl font-black text-indigo-300 drop-shadow animate-pop-fade">+1 PARAMETER</div>
                 </div>
               )}
-        {view === 'wallet' && <WalletView onBack={() => setView('home')} trustPointsLedger={trustPointsLedger} trustScore={uiProfile.trustScore ?? 0} contractsCompleted={uiProfile.completedContracts ?? 0} formatNumber={formatNumber} />}
-        {view === 'command-center' && (
-          <CommandCenterView
-            activeOperations={activeOperations}
-            missionLogs={contractHistory}
-            onOperationClick={op => {
-              if (selectedItem && String(op.id) === String(selectedItem.id)) {
-                setView('contract');
-              } else {
-                setSelectedItem(op);
-                let stepNum = 1;
-                if (op.progress >= 80) stepNum = 4;
-                else if (op.progress >= 60) stepNum = 3;
-                else if (op.progress >= 40) stepNum = 2;
-                setStep(stepNum);
-                setView('contract');
-              }
-            }}
-            strategy={strategy}
-            onStrategyChange={setStrategy}
-            unifiedProfile={unifiedProfile || { level: 1, badges: [], trustScore: 0, avgRating: 0, skillEndorsements: {}, repeatClients: 0, responseSpeed: '', reliability: 0 }}
-            onViewProfile={() => {
-              setProfileData(unifiedProfile);
-              setIsProfileOpen(true);
-            }}
-            setUIProfile={setUIProfile}
-          />
-        )}
+        {/* wallet and command-center rendered here. */}
 
       </main>
-
-      {/* Floating Chat Overlay */}
-      <div className="fixed bottom-24 sm:bottom-6 right-6 z-[60] flex flex-col items-end gap-4">
-        {/* Show chat only if unlocked */}
-        {isChatOpen && unlockedFeatures.includes('chat') && (
-          <div className="w-80 sm:w-96 h-[500px] bg-[#0f172a]/95 backdrop-blur-xl border border-white/10 rounded-[32px] shadow-2xl flex flex-col overflow-hidden animate-fade-in-up">
-            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]"><div className="flex items-center gap-3"><div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center"><BrainCircuit className="w-5 h-5 text-white" /></div><div><p className="font-black text-white text-sm">Context Chat</p><p className="text-[10px] font-emerald-400 font-bold uppercase tracking-widest">Online</p></div></div><button onClick={() => setIsChatOpen(false)} className="p-2 hover:bg-white/10 rounded-full text-slate-400"><X className="w-5 h-5" /></button></div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {messages.map(msg => (
-                <div key={msg.id} className={`flex ${msg.sender === 'me' ? 'justify-end' : 'justify-start'}`}>
-                  {msg.type === 'contract_update' ? (
-                    <div className="max-w-[90%] w-full bg-indigo-900/40 border border-indigo-500/30 p-5 rounded-[24px] rounded-bl-none"><div className="flex items-center gap-2 mb-3 text-indigo-300"><FileSignature className="w-4 h-4" /><span className="text-[10px] font-black uppercase tracking-widest">Smart Contract Proposal</span></div><h4 className="font-bold text-white mb-2">{msg.data.title}</h4><ul className="space-y-1 mb-4">{msg.data.changes.map((change, i) => (<li key={i} className="text-xs text-slate-300 flex items-center gap-2"><div className="w-1 h-1 bg-emerald-400 rounded-full" /> {change}</li>))}</ul><div className="flex justify-between items-end mb-4 pt-3 border-t border-white/10"><span className="text-[10px] font-bold text-slate-500 uppercase">Cost Impact</span><span className="text-lg font-black text-white">+{formatNumber(msg.data.additionalCost)} PTS</span></div><div className="flex gap-2"><button className="flex-1 py-2 bg-white/10 rounded-xl text-xs font-bold text-slate-400 hover:text-white">Reject</button><button onClick={() => acceptContractUpdate(msg.data)} className="flex-1 py-2 bg-indigo-600 rounded-xl text-xs font-bold text-white hover:bg-indigo-500">Accept Update</button></div></div>
-                  ) : (<div className={`max-w-[80%] p-4 rounded-2xl text-xs sm:text-sm font-medium leading-relaxed ${msg.sender === 'me' ? 'bg-indigo-600 text-white rounded-br-none' : msg.sender === 'ai' ? 'bg-indigo-900/30 border border-indigo-500/30 text-indigo-200 rounded-bl-none' : 'bg-white/10 text-slate-200 rounded-bl-none'}`}>{msg.sender === 'ai' && <p className="text-[8px] font-black uppercase tracking-widest text-indigo-400 mb-1">AI System Log</p>}{msg.text}<p className="text-[9px] opacity-50 mt-2 text-right">{msg.time}</p></div>)}
-                </div>
-              ))}
-              <div ref={chatEndRef} />
-            </div>
-            <div className="p-4 border-t border-white/5 bg-[#020617]/50"><button onClick={triggerSmartContractUpdate} className="text-[10px] text-slate-500 hover:text-indigo-400 mb-2 w-full text-center uppercase tracking-widest font-bold opacity-50 hover:opacity-100 transition-opacity">[Dev: Simulate Scope Creep]</button><div className="flex items-center gap-2 bg-white/5 rounded-full px-4 py-2 border border-white/5"><input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="Type a message..." className="bg-transparent border-none outline-none text-white text-sm flex-1 placeholder:text-slate-500" /><button onClick={handleSendMessage} className="p-2 bg-indigo-600 rounded-full text-white hover:bg-indigo-500"><Send className="w-4 h-4" /></button></div></div>
-          </div>
-        )}
-      </div>
 
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A]/80 backdrop-blur-2xl border-t border-white/10 px-8 py-5 flex justify-center items-center z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
         <button title="Contracts" className={`p-3 transition-all duration-300 ${view === 'home' ? 'text-indigo-400 scale-125 bg-indigo-500/10 rounded-2xl shadow-[0_0_20px_rgba(99,102,241,0.2)]' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => { setIsProfileOpen(false); setIsCommandOpen(false); setProfileData(null); setView('home'); }}><LayoutGrid className="w-6 h-6" /></button>
