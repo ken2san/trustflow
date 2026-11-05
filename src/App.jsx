@@ -53,7 +53,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { initialUIProfileStats, initialInternalProfileStats } from './lib/profileInitialData';
-import { FEATURE_UNLOCKS } from './lib/featureUnlocks';
 import {
   ShieldCheck, ArrowRight, Lock, Unlock, CheckCircle2, AlertCircle,
   MessageSquare, Wallet, Coins, PlusCircle, Search, Sparkles, Zap,
@@ -195,15 +194,6 @@ const App = () => {
     'Dark Mode Tokens',
     'Atomic Design Compliance'
   ]);
-  // Centralized chat lock state
-  const [chatLocked, setChatLocked] = useState(false);
-    // Negotiation chat state (shared for evidence/dispute)
-    const [negotiationMessages, setNegotiationMessages] = useState([
-      { sender: "client", text: "Thank you for your interest. Our initial budget is 3,000,000 for the full design system.", time: "09:00" },
-      { sender: "me", text: "Thank you. Can you clarify the scope for dark mode and atomic design compliance?", time: "09:02" },
-      { sender: "client", text: "Dark mode should cover all screens. Atomic design compliance is required for component structure.", time: "09:05", important: true },
-    ]);
-    const [negotiationAgreed, setNegotiationAgreed] = useState(false);
   // Animation state for level/parameter up
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [showParamUp, setShowParamUp] = useState(false);
@@ -261,25 +251,10 @@ const App = () => {
   // Internal profile state
   const [internalProfile, setInternalProfile] = useState(initialInternalProfileStats);
 
-  // --- Feature Unlock Progress State ---
-  // Option 1: Just use level from uiProfile, but allow for future extensibility
-  const userLevel = uiProfile.level || 1;
-  // Compute unlocked features (flattened array of feature keys)
-  const unlockedFeatures = FEATURE_UNLOCKS
-    .filter(fu => fu.level <= userLevel)
-    .flatMap(fu => fu.features.map(f => f.key));
-  // Compute locked features (flattened array of {key, label, level})
-  const lockedFeatures = FEATURE_UNLOCKS
-    .filter(fu => fu.level > userLevel)
-    .flatMap(fu => fu.features.map(f => ({ ...f, level: fu.level })));
-
   const [selectedItem, setSelectedItem] = useState(null);
   const [status, setStatus] = useState('idle');
-  // Add projectDetail state for Project Detail & Negotiation flow
-  const [projectDetail, setProjectDetail] = useState(null);
   const lastActionTime = useRef(0); // Safety guard for global transitions
 
-  const [isChatOpen, setIsChatOpen] = useState(false);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [scrambleTrigger, setScrambleTrigger] = useState(0);
@@ -331,12 +306,8 @@ const App = () => {
 
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
-  const [trustPointsLedger, setTrustPointsLedger] = useState([]);
   const [activePaymentIntentId, setActivePaymentIntentId] = useState(null);
 
-  const [messages, setMessages] = useState([{ id: 1, sender: 'ai', text: 'Protocol initialized. DoD generated based on risk profile.', time: '10:00', type: 'text' }, { id: 2, sender: 'client', text: 'Looking forward to the design system!', time: '10:05', type: 'text' }]);
-  const [inputText, setInputText] = useState('');
-  const chatEndRef = useRef(null);
 
   useEffect(() => { const handleKeyDown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setIsCommandOpen(prev => !prev); } }; window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown); }, []);
 
@@ -1239,10 +1210,6 @@ const App = () => {
     setOtpStage(ok ? 'idle' : 'code');
   }, [byocForm, otpCode, persistContractAndLink]);
 
-  const triggerSmartContractUpdate = () => { const userMsg = { id: Date.now(), sender: 'me', text: 'Additional requirements for dark mode have come up. Can we increase the budget?', time: 'Now', type: 'text' }; setMessages(prev => [...prev, userMsg]); setTimeout(() => { const aiProposal = { id: Date.now() + 1, sender: 'ai', type: 'contract_update', data: { title: 'Scope Expansion Detected', changes: ['Add: Dark Mode Variants (+12 Screens)', 'Timeline: +2 Days'], additionalCost: 50000, newTotal: selectedItem ? selectedItem.totalPoints + 50000 : 50000 }, time: 'Now' }; setMessages(prev => [...prev, aiProposal]); }, 1500); };
-  const acceptContractUpdate = (updateData) => { if (selectedItem) { setSelectedItem(prev => ({ ...prev, totalPoints: updateData.newTotal, acceptanceCriteria: [...prev.acceptanceCriteria, "Dark Mode Variants Completed"] })); } setScrambleTrigger(prev => prev + 1); setMessages(prev => [...prev, { id: Date.now(), sender: 'system', text: `Contract updated. Budget increased by ${formatNumber(updateData.additionalCost)} PTS.`, time: 'Now', type: 'text' }]); addToast('Smart Contract Updated', 'New budget locked in escrow.', 'success'); };
-  const handleSendMessage = () => { if (!inputText.trim()) return; setMessages([...messages, { id: Date.now(), sender: 'me', text: inputText, time: 'Now', type: 'text' }]); setInputText(''); setTimeout(() => { setMessages(prev => [...prev, { id: Date.now()+1, sender: 'ai', text: 'Context updated. Evidence logged.', time: 'Now', type: 'text' }]); }, 1000); };
-  useEffect(() => { if (isChatOpen && chatEndRef.current) { chatEndRef.current.scrollIntoView({ behavior: "smooth" }); } }, [messages, isChatOpen]);
 
   // The deadline is optional, so an empty one is not an error — only a date
   // that has already passed is. Both values are YYYY-MM-DD, which compares
