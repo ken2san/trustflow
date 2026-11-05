@@ -375,9 +375,18 @@ removed code:
   was that the screen presented numbers whose provenance was a local counter as
   though they were findings. Anything rebuilt has to answer "which events is
   this computed from" before it renders.
-- **`trustpoints_ledger` exists in migrations and nothing in `src/` ever wrote
-  to it.** The table is not dropped by this decision — DB changes are a separate
-  approval — but it has never held product data.
+- **`trustpoints_ledger` is written by the server, not by `src/`.** The older
+  status line below said only that nothing in `src/` writes it, which is true
+  and misleading: `capture-payment/index.ts:172,183` and
+  `cancel-payment/index.ts:128` insert into it, and `evidence-core.spec.js:96`
+  calls `capture-payment` directly. So the points ledger has a live server-side
+  writer with no UI in front of it, and removing the UI layer does not retire
+  it. The table is not dropped by this decision — DB changes are a separate
+  approval — but what the backend still does must be decided separately from
+  what the screens do.
+- **`PaymentModal` is already dead code**: `setIsPaymentModalOpen(true)` appears
+  nowhere in `src/`, only the close path and the render. It goes with the rest,
+  but it was never reachable.
 
 **What this does not decide**: whether `uiProfile`'s eight fields stay in
 `CLOUD_SAFE_SHAPE` and the `runtime_snapshots` table. That touches the database
