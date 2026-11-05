@@ -1,6 +1,6 @@
 # TrustFlow — Architecture Decisions
 
-_Last updated: 2026-11-04_
+_Last updated: 2026-11-05_
 
 > This file records significant design decisions and the reasoning behind them.
 > AI agents must read this before proposing changes to established patterns.
@@ -324,6 +324,67 @@ delivery.
 
 ## Decision Log
 
+### [2026-11-05] — The reputation and escrow layer is removed, not deferred
+
+**Decision**: the legacy local contract flow and the reputation surface built
+on it leave the product. That is: the mock marketplace, `ContractStep1-5` and
+`handleNextStep`, points and staking, the tier gates, blind rating, `WalletView`
+and the Trust Passport (`ProfileModal`). What stays is the evidence path and
+nothing else — contracts home → agreement → record of agreement → signed-record
+export → guest evidence view.
+
+**Why now, and why removal rather than deferral.** The first goal is whether the
+owner can actually use this; everything else is downstream of that. Three things
+made deferral the wrong shape:
+
+1. **It was not idle code, it was asserting things.** The header avatar rendered
+   `USER_PROFILE.name[0]` — a hardcoded fixture, "Felix", from the 2026-02
+   marketplace prototype (`34f9b9f`) — on every screen including a guest's
+   record of agreement, so the app named the wrong account in a product whose
+   only claim is recording who did what. `ProfileModal.jsx:10` fires a toast
+   saying "Trust Passport downloaded as PDF" and downloads nothing. The modal
+   clamps the displayed trust score with `Math.max(70, …)`, so it is
+   structurally incapable of showing a low one. A screen that cannot express a
+   bad result is not a deferred feature; it is a claim.
+
+2. **The numbers behind it are not evidence and never were.** `runtimeState.js`
+   says so itself of the eight `uiProfile` counters: "mock Trust Ladder
+   counters, not evidence of anything". They are written by
+   `ContractView.jsx:141` (staking) and `:188` (blind rating) — the legacy flow
+   — and are derived from the event chain nowhere. Keeping the passport while
+   removing the flow would leave a screen of numbers nothing writes.
+
+3. **The seam is not where the feature names are.** Writers, readers and the
+   `CLOUD_SAFE_SHAPE` sync cross every "feature" boundary, which is why the
+   removal is sequenced entry-first (see `HANDOFF.md`) rather than
+   feature-by-feature.
+
+**What is deliberately preserved here, because the code will not be.** If a
+reputation layer is ever built again, start from these rather than from the
+removed code:
+
+- **Non-redeemability is binding, not a preference.** Redeemable points trigger
+  前払式支払手段 registration. See the 2026-05-27 entry below; that constraint
+  survives this removal.
+- **The unit trust accumulates on is an email address**, not an account — see
+  the 2026-09-27 open question. A guest has no `auth.users` row and the address
+  is self-claimed, so any future score is a score about an identifier, not a
+  person.
+- **A score must be derivable from the event chain, or it must not be shown.**
+  The failure recorded above was not that the numbers were small or fake; it
+  was that the screen presented numbers whose provenance was a local counter as
+  though they were findings. Anything rebuilt has to answer "which events is
+  this computed from" before it renders.
+- **`trustpoints_ledger` exists in migrations and nothing in `src/` ever wrote
+  to it.** The table is not dropped by this decision — DB changes are a separate
+  approval — but it has never held product data.
+
+**What this does not decide**: whether `uiProfile`'s eight fields stay in
+`CLOUD_SAFE_SHAPE` and the `runtime_snapshots` table. That touches the database
+and needs its own approval.
+
+---
+
 ### [2026-09-29] — An export is built from rows that can be re-verified
 
 **Invariant**: an evidence export is always built from the raw `events` rows, never
@@ -577,11 +638,13 @@ built so far, not an extension of it — the day this is built is the day the
 
 ### [2026-05-27] — Reputation layer: TrustPoints (non-redeemable)
 
-**Status: not part of the evidence core, and not on the DB-backed flow.**
-`src/lib/trustpoints.js`, `WalletView` and `ProfileModal` operate on local mock
-profile state; the `trustpoints_ledger` table exists in migrations but nothing in
-`src/` writes to it. Non-redeemability stands and is binding if a reputation
-layer is ever wired — it is a regulatory constraint, not a feature preference.
+**Status: superseded 2026-11-05 — the layer is being removed from the product.**
+See the 2026-11-05 entry at the top of this log. `src/lib/trustpoints.js`,
+`WalletView` and `ProfileModal` operated on local mock profile state; the
+`trustpoints_ledger` table exists in migrations but nothing in `src/` ever wrote
+to it. **Non-redeemability stands and is binding if a reputation layer is ever
+wired again** — it is a regulatory constraint, not a feature preference, and it
+outlives the code below.
 
 **Decision**: TrustPoints are a non-redeemable reputation score. They cannot be converted to cash or fiat equivalents. Earned through good behavior; spent on platform benefits (fee discounts, priority arbitration).
 
