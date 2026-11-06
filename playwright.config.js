@@ -37,5 +37,26 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'chromium-mobile-ui',
+      // Only these four UI-focused suites plus the accessibility checks run at
+      // phone width. `grep` narrows mixed files to cases whose network calls
+      // are stubbed, so the mobile project cannot duplicate the live API tests.
+      testMatch: [
+        '**/contracts-home.spec.js',
+        '**/agreement-record-ui.spec.js',
+        '**/agreement-export.spec.js',
+        '**/earner-signin.spec.js',
+        '**/visual-accessibility.spec.js',
+      ],
+      // A denylist, not an allowlist. Codex's first version listed every
+      // included test title in one regex, which fails silently in the worst
+      // direction: add a test and it is simply not covered at phone width,
+      // with nothing to notice. Naming the five live-session cases instead
+      // means a newly added test is covered by default, and if it turns out
+      // to need a real account it fails loudly rather than vanishing.
+      grepInvert: /listContracts scoping|a returning Earner with a restored session|signing out clears the list|sign-in cannot create an account/,
+      use: { ...devices['Pixel 7'] },
+    },
   ],
 });
