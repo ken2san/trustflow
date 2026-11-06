@@ -842,7 +842,7 @@ review**, plus the gates:
 
 | | question it answers | how |
 |---|---|---|
-| **Blind subagent** | can a stranger read this screen, and what do they think it says? | `tests/e2e/guest-path-capture.spec.js` → `test-results/guest-path/`, then a **fresh subagent with no repository access** reads the images |
+| **Blind subagent** | can a stranger read this screen, and what do they think it says? | `npm run capture:guest` → `test-results/guest-path/` (seven screens, two widths, writes nothing), then a **fresh subagent with no repository access** reads the images |
 | **Codex** | is what the screen claims true in the system? | reads the code, one verdict per claim with `file:line`. **It does not write code** — see Ownership and locks |
 | **`skeptic` subagent** | is the decision right? | architecture, scope and product calls, where neither pixels nor code settle it |
 | **The gates** | did this break something measurable? | lint, build, unit, axe contrast, `check-migrations`, CI |
@@ -857,11 +857,16 @@ session had added minutes earlier, at 4.23:1.
 
 - **Verify every finding in source before acting.** The method produces false
   positives — one 2026-11-04 finding was withdrawn after the code settled it.
-- **A capture artefact is a finding about the camera.** `fullPage: true`
-  stitches a document taller than the viewport and puts a fixed header
-  mid-page; a shot taken during a fade-in reads as a contrast failure across
-  the whole screen. Both were reported as product defects before being fixed
-  in the spec.
+- **A capture artefact is a finding about the camera**, and this has now cost
+  three separate rounds in one day. `fullPage: true` stitches a document
+  taller than the viewport and puts the fixed header mid-page, which was
+  reported as a layout defect. A shot taken during the fade-in read as a
+  contrast failure across a whole screen. And the capture of the
+  terms_changed screen first decided *when* the owner edited the contract by
+  counting reads — the app reads the invitation more than once while loading,
+  so the guard never fired and the test recorded a successful acceptance,
+  which looked exactly like the product being broken. It flips a flag now.
+  **Before believing a finding, ask what the camera did.**
 - **A fixture that contradicts itself spends the reviewer on the fixture.**
 - **Do not tell the next reviewer what the last one found.** Repeating a
   conclusion back is not a second viewpoint.
