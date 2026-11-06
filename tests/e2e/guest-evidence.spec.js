@@ -323,13 +323,18 @@ test('a guest accepts an invite and can then read the record in the UI', async (
 
   // Stage 2: identity plus explicit consent.
   //
-  // The email is typed rather than left at its prefilled value on purpose. The
-  // field renders `guestEmail || invitedEmail`, but the submit button is gated
-  // on `guestEmail` alone, so accepting the address shown without editing it
-  // leaves the button disabled. That is a defect in the acceptance flow, noted
-  // separately; this test types a distinct address both to get past it and
-  // because accepting from a different address than the invite went to is the
-  // case worth exercising.
+  // A distinct address is typed because accepting from one the invitation did
+  // NOT go to is the case worth exercising — it is what makes the record carry
+  // two addresses, which is the distinction the whole identity section exists
+  // to preserve.
+  //
+  // This comment used to say something else: that the submit button was gated
+  // on `guestEmail` alone, so accepting the prefilled address left it
+  // permanently disabled, and that the defect was "noted separately". Both
+  // halves were false by 2026-11-06 — `acceptingEmail` at InviteView.jsx:174
+  // reads the prefilled value when nothing was typed, and no note existed
+  // anywhere. A comment is a claim about code; this one outlived the code it
+  // described and recorded a defect in the only place nobody looks.
   await page.getByPlaceholder('Your name or handle').fill('UI Guest');
   await page.getByPlaceholder(/Email address/i).fill('ui.actual@example.test');
   await page.getByRole('checkbox').check();
@@ -384,4 +389,113 @@ test('the response states whether payloads are covered by the hash', async ({ re
   // trail containing a pre-v3 event reports false, because its substance was
   // never attested.
   expect(body.chain.payload_covered_by_hash).toBe(true);
+});
+
+// ── Promoted from blind counterparty runs, 2026-11-06 ────────────────────────
+//
+// Each of these fixes a hole that every suite in this repository passed
+// through. They are here rather than in a new file because they need the same
+// acceptance machinery the tests above already have, and a second file would
+// have meant a second copy of it.
+
+test('a guest who navigates away can still reach the agreement they accepted', async ({ page, request }) => {
+  // THE DEFECT THIS PINS
+  // The credential issued at acceptance is stored in localStorage under the
+  // contract id. Every reader of it needed an id first, and nothing could ask
+  // which ids were present — so a guest who left the agreement screen had no
+  // route back, while their token sat in the browser for ninety days. The
+  // invitation link, revisited, told them their record was reachable from "the
+  // access link you were given when you accepted". No such link is given.
+  //
+  // Found by a blind counterparty asked to accept and then look for its own
+  // record. The first blind run declined, so it never reached this.
+  const { token, userId } = await signInEarner(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    prefer: 'return=representation',
+    body: {
+      earner_user_id: userId,
+      earner_display_name: 'Return Path Earner',
+      project_name: 'Return Path Probe',
+      dod: ['do the thing'],
+      amount_jpy: 20000,
+      currency: 'JPY',
+      invited_hirer_email: 'return.invited@example.test',
+    },
+  });
+  expect(created.status).toBe(201);
+  const contract = created.body[0];
+
+  await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
+  await page.goto(`/?token=${contract.invite_token}`);
+
+  await expect(page.getByText('Return Path Probe')).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: /Review Agreement|Continue|Accept/i }).first().click();
+  await page.getByPlaceholder('Your name or handle').fill('Return Path Guest');
+  await page.getByPlaceholder(/Email address/i).fill('return.actual@example.test');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: /I Agree/i }).click();
+  await expect(page.getByRole('heading', { name: /Agreement accepted/i, level: 2 }))
+    .toBeVisible({ timeout: 15_000 });
+
+  // Leaving the way a person leaves: a fresh load of the site, with no token
+  // in the URL. Everything the guest has is what the browser kept.
+  await page.goto('/');
+
+  // The agreement is offered, and the id is the one they accepted.
+  const offer = page.getByRole('button', { name: /Open the agreement you accepted/i });
+  await expect(offer).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(contract.id, { exact: true })).toBeVisible();
+
+  // And it opens, on the stored credential alone.
+  await offer.click();
+  await expect(page.getByText('Return Path Probe')).toBeVisible({ timeout: 15_000 });
+});
+
+test('declining records nothing and leaves the invitation usable', async ({ page, request }) => {
+  // THE DEFECT THIS PINS
+  // Declining cleared the URL and dropped the reader on the app's home screen
+  // with no acknowledgement — "断れたのか分からない" — and, for a browser
+  // holding a session, on the operator's own contract list. A refusal is not
+  // an act on the agreement, so nothing is written; the screen has to say so,
+  // and the invitation has to still work, because reconsidering is the common
+  // case and the link is the only way back.
+  const { token, userId } = await signInEarner(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    prefer: 'return=representation',
+    body: {
+      earner_user_id: userId,
+      earner_display_name: 'Decline Path Earner',
+      project_name: 'Decline Path Probe',
+      dod: ['do the thing'],
+      amount_jpy: 20000,
+      currency: 'JPY',
+      invited_hirer_email: 'decline.invited@example.test',
+    },
+  });
+  expect(created.status).toBe(201);
+  const contract = created.body[0];
+
+  await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
+  await page.goto(`/?token=${contract.invite_token}`);
+  await expect(page.getByText('Decline Path Probe')).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: /Not interested/i }).click();
+
+  // It says what did NOT happen, which is what the reader is uncertain about.
+  await expect(page.getByRole('heading', { name: /You did not accept/i })).toBeVisible();
+  await expect(page.getByText(/Nothing was recorded and nothing was sent/i)).toBeVisible();
+  await expect(page.getByText(/not told/i)).toBeVisible();
+
+  // The invitation really is unspent: the server still answers for it.
+  const stillOffered = await api(request, '/functions/v1/validate-invite-token', {
+    body: { invite_token: contract.invite_token },
+  });
+  expect(stillOffered.status).toBe(200);
+  expect(stillOffered.body.project_name).toBe('Decline Path Probe');
+
+  // And the reader can go back to the terms without reloading anything.
+  await page.getByRole('button', { name: /Look at the terms again/i }).click();
+  await expect(page.getByText('Decline Path Probe')).toBeVisible();
 });
