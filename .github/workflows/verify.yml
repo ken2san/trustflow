@@ -24,13 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Node 22.18+, not 20. scripts/verify-receipt.mjs imports
-      # supabase/functions/_shared/eventCanonical.ts directly, and only a Node
-      # that strips types can load it; on 20 the receipt verifier dies with
-      # ERR_UNKNOWN_FILE_EXTENSION. CI's first run found that, which is worth
-      # more than the green tick would have been — see HANDOFF.md, because the
-      # verifier's portability is a product question and pinning the runner
-      # here only stops it being a CI question.
+      # Node 22.18+, not 20. Four scripts import a .ts file from
+      # supabase/functions/_shared directly, and only a Node that strips types
+      # can load one. CI's first run found that, which is worth more than the
+      # green tick would have been. The pin is for CI; the third-party-facing
+      # script now states the requirement itself and exits 2 with it, rather
+      # than dying about file extensions — see HANDOFF.md.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -46,3 +45,12 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+
+      # Offline mode: reads supabase/migrations/ and nothing else — no network,
+      # no credentials. It guards the two migration faults this project has
+      # actually had, and until now ran only when someone remembered to run it,
+      # which is the failure mode this whole file exists for. The --live half,
+      # which compares the filenames against a project's recorded versions,
+      # stays out: it needs the CLI and a linked project, and that link is kept
+      # pointed at trustflow-e2e on purpose.
+      - run: node scripts/check-migrations.mjs

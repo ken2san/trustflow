@@ -156,8 +156,9 @@ What the run did **not** cover is Next Priority #1.
   for the current count — it runs two projects now, desktop and phone width.**
   `node scripts/check-migrations.mjs` → migrations OK.
 - **Gates that now run without being remembered**: `.github/workflows/verify.yml`
-  runs lint → build → unit on every push and PR, and
-  `.claude/hooks/pre-commit-verify.sh` runs the same three before any commit.
+  runs lint → build → unit → `check-migrations` (offline) on every push and PR,
+  and `.claude/hooks/pre-commit-verify.sh` runs the first three before any
+  commit.
   E2E is in neither: it writes to the live E2E project, so it stays a
   deliberate local action. **CI pins Node 22** — four scripts import a `.ts`
   file from `_shared` and will not run on Node 20. Of those,
@@ -1036,8 +1037,13 @@ carries the requirement:
   still undecided. See `Decisions.md`.
 - **Whether creation should be an event.** Unchanged — `createContract` still
   logs nothing; acceptance is still the chain's first event.
-- **Whether to run `scripts/check-migrations.mjs` in CI.** Unchanged — no
-  `.github/workflows` exists yet.
+- ~~Whether to run `scripts/check-migrations.mjs` in CI.~~ **Settled
+  2026-11-05: yes, offline mode only.** The premise that there was no workflow
+  expired the same day the workflow was added. The offline half reads
+  `supabase/migrations/` and nothing else, so it costs a second and can fail
+  only on a real ordering fault; `--live` stays out because it needs the CLI
+  and a linked project, and that link is deliberately kept on
+  `trustflow-e2e`.
 - **Whether to keep the two deleted functions' sources.** Unchanged.
 - **A small code-duplication nit from this session's ultrareview, not acted
   on**: `AgreementView` has three near-identical "expand a textarea, confirm or
