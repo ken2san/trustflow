@@ -224,6 +224,50 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   await shoot(page, '05-record', { full: true });
 });
 
+test('capture: the terms changed while the guest was reading', async ({ page }) => {
+  // The screen behind the guard added on 2026-11-05: the client re-reads the
+  // invitation immediately before accepting, and refuses when the terms moved.
+  // Captured because it is a screen a stranger meets at the worst moment —
+  // having decided to accept — and nothing else photographs it.
+  await page.route('**/auth/v1/**', route => json(
+    route, { error: 'capture_run_creates_no_account' }, 400));
+  await page.route('**/rest/v1/**', route => json(route, []));
+
+  // Driven by a flag the test flips, not by a call count: the number of reads
+  // the app makes before the guest clicks is not this test's business, and
+  // counting them made the fixture — not the product — decide the outcome.
+  let ownerHasEdited = false;
+  await page.route('**/functions/v1/validate-invite-token', route => {
+    return json(route, {
+      contract_id: CONTRACT_ID,
+      project_name: ACCEPTED.project_name,
+      dod: ACCEPTED.dod,
+      // The owner raises the price while the guest is reading.
+      amount_jpy: ownerHasEdited ? ACCEPTED.amount * 2 : ACCEPTED.amount,
+      currency: ACCEPTED.currency,
+      deadline: ACCEPTED.deadline,
+      earner_display_name: ACCEPTED.offered_by,
+      invited_hirer_email: INVITED,
+      performed_by: ACCEPTED.performed_by,
+      guest_access_token: 'stub-guest-token',
+    });
+  });
+
+  await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
+  await page.goto(`/?token=${INVITE_TOKEN}`);
+  await expect(page.getByText(ACCEPTED.project_name).first()).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'Review Agreement' }).click();
+  await page.getByPlaceholder('Your name or handle').fill('Guest');
+  await page.getByRole('checkbox').check();
+
+  ownerHasEdited = true;
+  await page.getByRole('button', { name: /I Agree/ }).click();
+
+  await expect(page.getByText(/terms changed/i)).toBeVisible({ timeout: 15_000 });
+  await shoot(page, '07-terms-changed');
+});
+
 test('capture: the invitation a guest cannot use', async ({ page }) => {
   // A stranger meeting a dead link is a first impression too, and it is the
   // state the owner's "delete an unaccepted draft" feature produces for them.

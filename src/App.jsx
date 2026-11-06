@@ -65,7 +65,7 @@ import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { ensureActorIdentity } from './lib/identity.js';
-import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsFingerprint } from './lib/contracts.js';
+import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
 import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
@@ -1226,14 +1226,18 @@ const App = () => {
               // saw and for the server to refuse a mismatch, which is an Edge
               // Function change and needs its own approval. Until then this is
               // a narrowing, not a guarantee — see HANDOFF.md.
+              const shownDigest = await shownTermsDigest(inviteData);
               const { invite: current } = await fetchInvite(raw);
-              if (current && shownTermsFingerprint(current) !== shownTermsFingerprint(inviteData)) {
+              if (current && (await shownTermsDigest(current)) !== shownDigest) {
                 setInviteTokenError('terms_changed');
                 setInviteData(null);
                 return;
               }
 
-              const { accepted, reason } = await acceptInvite(raw, email, name);
+              // The digest goes with the request as well: this check is a
+              // courtesy that gives a clear screen without consuming the
+              // invitation, while the server's own comparison is the guard.
+              const { accepted, reason } = await acceptInvite(raw, email, name, shownDigest);
               if (!accepted) {
                 setInviteTokenError(reason === 'already_used' ? 'already_used' : reason);
                 setInviteData(null);

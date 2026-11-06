@@ -30,6 +30,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
+import { shownTermsDigest } from '../_shared/shownTerms.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -66,7 +67,7 @@ serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
   try {
-    const { invite_token, accept, hirer_email, counterparty_name } = await req.json()
+    const { invite_token, accept, hirer_email, counterparty_name, shown_terms_digest } = await req.json()
     if (!invite_token || typeof invite_token !== 'string') {
       return json({ error: 'missing invite_token' }, 400)
     }
@@ -142,6 +143,26 @@ serve(async (req: Request) => {
       const known = STATUS_RESPONSES[context?.status]
       if (known) return json({ error: known.error }, known.status)
       if (context?.status !== 'ok') return json({ error: 'not_found' }, 404)
+
+      // Refuse an acceptance of terms the guest never saw.
+      //
+      // The snapshot below is built from the row just read, so without this a
+      // contract edited while the invitation sat on screen would be recorded
+      // as what the counterparty agreed to. The browser sends the digest of
+      // what it displayed and this recomputes it from the same row.
+      //
+      // Absent digest = older client, and those are let through: refusing them
+      // would break acceptance for anyone on a cached bundle. That leaves the
+      // window open for exactly those callers, which is a compatibility period
+      // and not a closed hole — it is closed by requiring the field once no
+      // client omits it. The field is caller-supplied and therefore not a
+      // security control; it protects an honest guest from an honest edit.
+      if (typeof shown_terms_digest === 'string' && shown_terms_digest.length > 0) {
+        const currentDigest = await shownTermsDigest(context.contract)
+        if (currentDigest !== shown_terms_digest) {
+          return json({ error: 'terms_changed' }, 409)
+        }
+      }
 
       // The deal as the server holds it, plus the identity this acceptance is
       // about to record. hirer_email is written and hashed in the same breath,

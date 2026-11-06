@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shownTermsFingerprint } from '../../src/lib/contracts.js'
+import { shownTermsDigest, shownTerms, SHOWN_TERMS_VERSION } from '../../supabase/functions/_shared/shownTerms.ts'
 
 // WHY THIS GUARD EXISTS
 // The acceptance request carries only the invite token. The server re-reads
@@ -27,20 +27,20 @@ const SHOWN = {
 }
 
 describe('the terms a guest was shown', () => {
-  it('matches a second read of an unchanged contract', () => {
-    expect(shownTermsFingerprint({ ...SHOWN }))
-      .toBe(shownTermsFingerprint({ ...SHOWN }))
+  it('matches a second read of an unchanged contract', async () => {
+    expect(await shownTermsDigest({ ...SHOWN }))
+      .toBe(await shownTermsDigest({ ...SHOWN }))
   })
 
-  it('ignores fields that are not terms', () => {
+  it('ignores fields that are not terms', async () => {
     // A re-read issues no new token and the address is not part of the deal,
     // so neither may make an unchanged agreement look edited — a false
     // refusal here blocks an acceptance that should have gone through.
-    expect(shownTermsFingerprint({
+    expect(await shownTermsDigest({
       ...SHOWN,
       guest_access_token: 'something-else',
       invited_hirer_email: 'someone.else@example.test',
-    })).toBe(shownTermsFingerprint(SHOWN))
+    })).toBe(await shownTermsDigest(SHOWN))
   })
 
   const edits = [
@@ -58,21 +58,63 @@ describe('the terms a guest was shown', () => {
   ]
 
   for (const [label, edit] of edits) {
-    it(`notices that ${label}`, () => {
-      expect(shownTermsFingerprint({ ...SHOWN, ...edit }))
-        .not.toBe(shownTermsFingerprint(SHOWN))
+    it(`notices that ${label}`, async () => {
+      expect(await shownTermsDigest({ ...SHOWN, ...edit }))
+        .not.toBe(await shownTermsDigest(SHOWN))
     })
   }
 
-  it('treats a missing invitation as nothing to compare', () => {
-    expect(shownTermsFingerprint(null)).toBeNull()
-    expect(shownTermsFingerprint(undefined)).toBeNull()
+  it('never lets a missing invitation match a real one', async () => {
+    // Both sides digest something rather than returning null, so a comparison
+    // cannot be satisfied by having no terms at all.
+    expect(await shownTermsDigest(null)).toBe(await shownTermsDigest(undefined))
+    expect(await shownTermsDigest(null)).not.toBe(await shownTermsDigest(SHOWN))
   })
 
-  it('does not equate an absent field with an empty one', () => {
-    // `{}` and `{ dod: [] }` describe different contracts, and a comparison
-    // that collapsed them would pass an edit through.
-    expect(shownTermsFingerprint({ ...SHOWN, dod: [] }))
-      .not.toBe(shownTermsFingerprint({ ...SHOWN, dod: null }))
+  it('treats an unset list of criteria and an empty one as the same contract', async () => {
+    // Deliberate, and the opposite of the obvious guess: buildAgreementSnapshot
+    // hashes `dod ?? []`, and the invitation renders both as nothing set. Two
+    // digests for one contract would refuse an acceptance nobody edited.
+    expect(await shownTermsDigest({ ...SHOWN, dod: [] }))
+      .toBe(await shownTermsDigest({ ...SHOWN, dod: null }))
+  })
+
+  it('reads the same default for performed_by as the invitation renders', async () => {
+    // InviteView treats an absent column as 'creator'. If the digest did not,
+    // every contract predating that column would fail its own comparison.
+    expect(await shownTermsDigest({ ...SHOWN, performed_by: undefined }))
+      .toBe(await shownTermsDigest({ ...SHOWN, performed_by: 'creator' }))
+  })
+
+  it('ignores anything the row carries beyond the terms', async () => {
+    // The browser digests the invitation response; the function digests the
+    // contract row it re-read. The two objects carry different extra columns,
+    // and a digest that noticed them would refuse every acceptance — the worst
+    // available failure, since it would look like tampering.
+    const asRowFromTheDatabase = {
+      ...SHOWN,
+      id: '11111111-1111-4111-8111-111111111111',
+      earner_user_id: 'a-uuid',
+      state: 'AWAITING_ACCEPTANCE',
+      invite_token_used_at: null,
+      row_version: 7,
+      created_at: '2026-11-01T00:00:00.000Z',
+    }
+    expect(await shownTermsDigest(asRowFromTheDatabase)).toBe(await shownTermsDigest(SHOWN))
+  })
+
+  it('states its version, so a change to the format cannot pass silently', async () => {
+    // Changing which fields are covered changes every digest; the version is
+    // what lets a deploy accept both for a while instead of refusing everyone.
+    expect(shownTerms(SHOWN).v).toBe(SHOWN_TERMS_VERSION)
+    expect(await shownTermsDigest({ ...SHOWN }))
+      .not.toBe(await sha256OfADifferentVersion(SHOWN))
   })
 })
+
+/** The same terms under a bumped version, to prove the version is covered. */
+async function sha256OfADifferentVersion(source) {
+  const { stableStringify, sha256Hex } =
+    await import('../../supabase/functions/_shared/eventCanonical.ts')
+  return sha256Hex(stableStringify({ ...shownTerms(source), v: SHOWN_TERMS_VERSION + 1 }))
+}
