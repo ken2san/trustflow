@@ -749,6 +749,19 @@ commit also carries the nine orphan-file deletions — a `git rm` left them
 staged and the next commit swept them up. The intended message for them is this
 section.
 
+**CI's first run found a product problem, not a CI problem.** `npm test` passed
+locally on Node 24 and failed on Node 20 with `ERR_UNKNOWN_FILE_EXTENSION`.
+Cause: `scripts/verify-receipt.mjs` imports
+`supabase/functions/_shared/eventCanonical.ts` directly, so it runs only on a
+Node that strips types natively (22.18+ / 24). That script is the one a third
+party is meant to run to verify a record independently — the whole evidence
+claim rests on someone else being able to execute it — and on an older Node it
+dies with a message about file extensions. The runner is pinned to 22 and
+`engines` now says `>=22.18`, which stops it being a CI failure; **it does not
+fix the portability of the verifier**, which is a product decision: either
+publish the requirement loudly, or stop importing a `.ts` file from the script
+third parties run. Nothing here chose between those.
+
 **Still open from this work:**
 
 - `guest-evidence.spec.js:239` asserts the response does not contain the string

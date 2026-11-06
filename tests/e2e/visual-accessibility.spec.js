@@ -159,10 +159,11 @@ async function finishFiniteAnimations(page) {
 }
 
 async function expectNoColorContrastViolations(page) {
-  const results = await new AxeBuilder({ page })
-    .include('main')
-    .withRules(['color-contrast'])
-    .analyze();
+  // The gate is color-contrast only. TF_AXE_ALL=1 runs every rule instead,
+  // for surveying how much more axe would catch before widening the gate.
+  let builder = new AxeBuilder({ page }).include('main');
+  if (!process.env.TF_AXE_ALL) builder = builder.withRules(['color-contrast']);
+  const results = await builder.analyze();
   const details = results.violations.map(violation => ({
     id: violation.id,
     description: violation.description,

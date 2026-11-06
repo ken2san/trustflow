@@ -24,9 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22.18+, not 20. scripts/verify-receipt.mjs imports
+      # supabase/functions/_shared/eventCanonical.ts directly, and only a Node
+      # that strips types can load it; on 20 the receipt verifier dies with
+      # ERR_UNKNOWN_FILE_EXTENSION. CI's first run found that, which is worth
+      # more than the green tick would have been — see HANDOFF.md, because the
+      # verifier's portability is a product question and pinning the runner
+      # here only stops it being a CI question.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
