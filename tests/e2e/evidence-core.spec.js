@@ -91,13 +91,16 @@ test('a unilateral assertion cannot reach settlement', async ({ request }) => {
     token: earnerToken, body: { type: 'performance.asserted', contract_id: contract.id },
   });
 
-  // The Hirer is the only party who may call capture, and even they cannot
-  // while the only thing that has happened is the Earner's own claim.
+  // This used to assert that capture-payment answered 409 from this state.
+  // The payment functions were retired on 2026-11-06 — settlement is out of
+  // scope and money moves outside TrustFlow (Decisions.md, Current scope) —
+  // so the guarantee moves rather than disappearing, and gets stronger: there
+  // is no settlement endpoint at all. Deleting the assertion instead would
+  // have removed the only check that a one-sided claim cannot settle anything.
   const capture = await api(request, '/functions/v1/capture-payment', {
     guestToken, body: { contractId: contract.id },
   });
-  expect(capture.status).toBe(409);
-  expect(capture.body.error).toContain('AWAITING_CONFIRMATION');
+  expect(capture.status, 'the retired endpoint must not come back').toBe(404);
   expect(await stateOf(request, contract, earnerToken)).not.toBe('SETTLED');
 });
 

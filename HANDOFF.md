@@ -1120,6 +1120,58 @@ token was accepted, and reaching it costs nothing from a project-wide mail
 quota that an earlier review had identified as drainable. Use this probe, not a
 real address, whenever this needs re-checking.
 
+### The payment surface is retired — 2026-11-06
+
+Approved and done. **Both projects now carry only the four evidence
+functions**: `log-event`, `validate-invite-token`, `guest-contract-events`,
+`reissue-guest-access`. There is no endpoint that can move, hold, capture or
+refund money, and no endpoint that can set `CANCELLED` or `SETTLED`.
+
+Inventory taken first, read-only: **0 transfers, 0 refunds, 0 `SETTLED`,
+0 `CANCELLED`, 0 rows in `trustpoints_ledger`**, one contract carrying a
+PaymentIntent (`IN_PROGRESS`, the owner's, September) and one payout profile.
+Nothing had to be unwound. E2E turned out never to have had
+`create-payment-intent` or `cancel-payment` at all.
+
+**The guarantee moved rather than being deleted.**
+`tests/e2e/evidence-core.spec.js` asserted that `capture-payment` answered 409
+from `AWAITING_CONFIRMATION` — the only check that a one-sided claim cannot
+settle anything. Deleting that assertion would have removed the check with the
+endpoint. It now asserts **404**, which is a stronger statement: there is no
+settlement endpoint, and a redeploy would fail this test.
+
+Removed with it: `src/lib/stripe.js` and its test — knip showed every export
+unused, and the app formats yen inline — and the `@stripe/react-stripe-js` /
+`@stripe/stripe-js` packages, which that file was the only reason to carry.
+
+**Deliberately left alone**: `earner_payout_profiles` (its row and default
+grants stay; with no function reading `stripe_connected_account_id` there is
+nothing to misdirect, and dropping the table is a separate approval),
+`trustpoints_ledger` (empty, and its history belongs to whoever decides the
+points model), the `SETTLED`/`CANCELLED` states in `derive_contract_state()`
+(existing rows must stay readable), and the cancellation semantics — stopping a
+dangerous writer and deciding what cancellation should mean are separate, and
+the second is still open.
+
+### Proposed completion line — awaiting confirmation
+
+Offered 2026-11-06 after the owner asked for a realistic finish and said
+testing had become too much of the work. **Completion = the owner can run one
+real transaction end to end using only this product.** Nothing is added beyond
+that.
+
+| | |
+|---|---|
+| Payment surface retired | **done, above** |
+| Cancellation (#3) | **declare out of v1** and record it. Deleting an unaccepted draft already exists; voiding an accepted agreement waits for a real need |
+| Invitation delivery | **manual URL is the finished state.** Email delivery is a separate product |
+| `App.jsx` decomposition (#5), visual-review follow-ups (#6) | **not completion conditions** — refactor and polish |
+| The acting counterparty (Next Priority #1) | **not a completion condition.** It raises quality after completion, it is not a prerequisite for it |
+| Production smoke check | keep — it is the cheap insurance for the class of defect that twice slipped past every suite today |
+
+Human testing is then done **once, as a through-run after completion**, by the
+owner's decision — not interleaved with development.
+
 ### The payment surface: what it actually does, measured — 2026-11-06
 
 Scope was clarified by the owner and recorded in `Decisions.md` under **Current
