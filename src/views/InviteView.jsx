@@ -87,7 +87,14 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       // or deleted before it was opened, and telling a stranger it was
       // "modified" when they simply pasted it twice is both wrong and alarming.
       : alreadyUsed
-      ? 'An invitation can only be accepted once. If that was you, your record of the agreement is reachable from the access link you were given when you accepted, not from this one. If it was not you, say so to whoever sent it before anything else happens.'
+      // Said "reachable from the access link you were given when you accepted".
+      // No such link is given — accepting shows a screen, not a URL — so the
+      // sentence sent a guest looking for something that does not exist. A
+      // blind counterparty did exactly that and could not tell whether its own
+      // record was lost (2026-11-06). The route that does exist is the device
+      // that accepted, which keeps the credential; the one that exists when
+      // that device is gone is a re-issue by the sender.
+      ? 'An invitation can only be accepted once. If that was you, open this site on the device you accepted on — it keeps your access and lists the agreement. From any other device, ask whoever invited you to re-send your access link. If it was not you, say so to them before anything else happens.'
       : cannotCheck
       ? 'Nothing was accepted, and nothing is wrong with the agreement. This page was loaded from an older version of TrustFlow than the one now running, so it could not confirm that the terms on screen are still the terms on offer. Reload the page and read them again.'
       : termsChanged

@@ -66,7 +66,7 @@ import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { currentActorIdentity, ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
-import { storeGuestAccessToken } from './lib/guestSession.js';
+import { storeGuestAccessToken, listGuestAgreementIds } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
@@ -499,6 +499,12 @@ const App = () => {
   }, []);
 
   /** Open a database-backed agreement as its owner. */
+  // Read on every render of the home view rather than held in state: the list
+  // changes when an acceptance writes a credential, and a stale copy would
+  // hide the agreement a guest has just joined — which is the exact failure
+  // this exists to fix.
+  const guestAgreementIds = view === 'home' ? listGuestAgreementIds() : [];
+
   const openContractFromHome = useCallback(async (contract) => {
     setAgreementError(null);
     setAgreement({ contract, events: [], role: performsHere(contract) ? 'performer' : 'receiver',
@@ -619,7 +625,9 @@ const App = () => {
         exported_by_role: agreement?.role ?? null,
       },
     });
-  }, [agreement]);
+    // Same reason as the guest export below: a download is invisible in-page.
+    addToast('Record saved to your downloads', 'success');
+  }, [agreement, addToast]);
 
   /**
    * Hand the counterparty the server-verified copy of their record.
@@ -635,7 +643,12 @@ const App = () => {
     const evidence = agreement?.evidence;
     if (!evidence) throw new Error('no evidence loaded for this agreement');
     await downloadGuestRecord(evidence);
-  }, [agreement]);
+    // A browser download gives no in-page signal, so pressing the button and
+    // pressing a dead button look identical. A blind counterparty pressed it
+    // and reported it did nothing, on the screen that had just told it the
+    // file was theirs to keep (2026-11-06).
+    addToast('Record saved to your downloads', 'success');
+  }, [agreement, addToast]);
 
   /**
    * Record a performance statement. The server decides whether this party may
@@ -1220,6 +1233,8 @@ const App = () => {
             authStatus={auth.status}
             authEmail={auth.email}
             onSignIn={() => setView('signin')}
+            guestAgreementIds={guestAgreementIds}
+            onOpenGuestAgreement={openAgreementAsGuest}
           />
         )}
         {/* marketplace, project-detail and negotiation-chat rendered here.

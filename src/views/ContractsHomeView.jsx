@@ -215,6 +215,10 @@ function Section({ title, count, children }) {
 export default function ContractsHomeView({
   contracts, loading, error, onOpenContract, onNewContract, onCopyInvite, onRetry,
   authStatus = 'anonymous', authEmail = null, onSignIn, onDeleteDraft,
+  // Agreements this browser accepted as an invited counterparty. They are not
+  // `contracts` — a guest has no account and RLS returns them nothing — so
+  // they arrive as bare ids from localStorage and are offered, not listed.
+  guestAgreementIds = [], onOpenGuestAgreement,
 }) {
   const [showCompleted, setShowCompleted] = React.useState(false);
   const { needsYou, inProgress, completed } = React.useMemo(
@@ -296,6 +300,42 @@ export default function ContractsHomeView({
             <LogIn className="w-4 h-4" /> Sign in
           </button>
         </div>
+      )}
+
+      {/* An invited counterparty has no account and therefore no list: every
+          query above returns them nothing, and before this block the only
+          route back to an agreement they had accepted was the original invite
+          link — which by then says "already accepted" and points at an access
+          link that is never issued. Their credential was in this browser the
+          whole time, for ninety days, with nothing able to ask for it.
+
+          Offered rather than listed, because the id is all that is kept. The
+          title, the amount and whether the token still works are the server's
+          to answer, and it answers when one is opened. */}
+      {guestAgreementIds.length > 0 && onOpenGuestAgreement && (
+        <section className="rounded-[28px] border border-white/5 bg-white/[0.02] px-6 py-5 space-y-3">
+          <h3 className="text-[11px] font-black tracking-[0.2em] text-slate-400 uppercase">
+            Accepted on this device
+          </h3>
+          <p className="text-xs text-slate-400">
+            Agreements you joined by invitation. They live in this browser, so
+            another device will not show them — ask whoever invited you to
+            re-send your access link if you need them there.
+          </p>
+          <ul className="space-y-2">
+            {guestAgreementIds.map(id => (
+              <li key={id}>
+                <button
+                  onClick={() => onOpenGuestAgreement(id)}
+                  className="w-full text-left px-4 py-3 rounded-2xl border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all"
+                >
+                  <span className="text-sm font-bold text-slate-200">Open the agreement you accepted</span>
+                  <span className="block text-[11px] text-slate-500 font-mono pt-0.5">{id}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {/* No button here: the header above already offers "New contract" and is
