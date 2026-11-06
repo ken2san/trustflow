@@ -1,8 +1,8 @@
 # TrustFlow — AI Session Handoff
 
-_Last updated: 2026-11-04 (the hold is lifted; development resumes. Migration
-ledgers still level at 34 and all four Edge Functions still identical on
-production and E2E, unchanged since `545526c`. The backend queue is empty)_
+_Last updated: 2026-11-05 (the legacy surface is removed and the project has a
+linter, CI and accessibility checks for the first time. Migration ledgers level
+at 35; no database or Edge Function changed today)_
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -133,8 +133,8 @@ What the run did **not** cover is Next Priority #1.
 
 ## Current State
 
-- Branch **`main`**, **pushed through `c75873f`** (2026-11-04, approved twice:
-  eleven commits, then three more), each push also deploying the frontend. Check for later local-only work with
+- Branch **`main`**, pushed through 2026-11-05's work, each push also deploying
+  the frontend. Check for later local-only work with
   `git rev-list --count origin/main..main` rather than reading a number here —
   a number written in this file goes stale on the commit that writes it.
   **A push to `main` is a production frontend deploy.** As of 2026-11-05 the
@@ -148,8 +148,17 @@ What the run did **not** cover is Next Priority #1.
   holding a file; the tree is partitioned by path (see Ownership and locks),
   and Codex's work from 2026-11-04 is committed verbatim in `0ca97ab` and
   `e132137`.
-- Build ✓ 0 errors. Unit tests **381 passing across 18 files** (`npm test`,
-  measured 2026-11-04; was 373/17 on 2026-10-12). `node scripts/check-migrations.mjs` → migrations OK.
+- Build ✓ 0 errors. **Lint ✓ 0 errors** (`npm run lint` — new on 2026-11-05;
+  warnings remain and are deliberate, see the removal section). Unit tests
+  **381 passing across 18 files** (`npm test`). **E2E: see the removal section
+  for the current count — it runs two projects now, desktop and phone width.**
+  `node scripts/check-migrations.mjs` → migrations OK.
+- **Gates that now run without being remembered**: `.github/workflows/verify.yml`
+  runs lint → build → unit on every push and PR, and
+  `.claude/hooks/pre-commit-verify.sh` runs the same three before any commit.
+  E2E is in neither: it writes to the live E2E project, so it stays a
+  deliberate local action. **CI pins Node 22** — `scripts/verify-receipt.mjs`
+  imports a `.ts` file and will not run on Node 20.
   `npm run test:api` (E2E project only) → **20 checks, 0 failed**, and
   `scripts/verify-chain.mjs` recomputed that run's chain independently — 4
   events, 17 checks, `CHAIN VERIFIED`.
@@ -704,10 +713,12 @@ after deleting sixteen files, and the five that stage 1 was predicted to break
 were exactly the five that broke.
 
 **Where it stands.** `App.jsx` 1976 → 1335 lines. Sixteen view/modal files and
-nine orphaned modules deleted. Full suite **135 passed, 1 failed, 1.1 minutes**
-across two projects, against 104 / 15 / 3.1 minutes that morning; 28 of the
-passes are at phone width and 3 are contrast checks that did not exist. The one
-failure is `guest-evidence.spec.js:239` and is unrelated — see below.
+nine orphaned modules deleted. Full suite **136 passed, 0 failed, 1.0 minute**
+across two projects, against **104 passed / 15 failed / 3.1 minutes** that
+morning; 28 of the passes are at phone width and 3 are contrast checks that did
+not exist. **This is the first green run in this file's memory** — ten of that
+morning's fifteen failures predated the day's work and nobody knew, because the
+last full run appears to predate October.
 
 **The tooling is the durable part.** Four tools went in, each bought by a
 failure that happened here on the day:
@@ -771,12 +782,15 @@ third parties run. Nothing here chose between those.
 
 **Still open from this work:**
 
-- `guest-evidence.spec.js:239` asserts the response does not contain the string
-  `invite_token`. It does, as a *value*:
-  `acceptance_identity.authentication_detail.credential: "invite_token"`, which
-  names the kind of credential and leaks nothing. The assertion is also
-  backwards as a leak check — a real token is a UUID and would not match. It
-  should test for a UUID-shaped token, not the field name.
+- ~~`guest-evidence.spec.js:239`~~ **Fixed.** It checked field *names* as
+  substrings, which is backwards for a leak test: `guest_access_token` as a
+  string would not appear even if the token did, and `invite_token` appears
+  legitimately as the *value* of `authentication_detail.credential`. So it
+  failed on a harmless identifier while being blind to an actual leak. It now
+  asserts on values — the real guest token, the real invite token, and any
+  UUID-shaped string beyond the contract, event and actor ids. Actor ids are
+  deliberately returned: `canonical.actor_id` is part of what an independent
+  verifier rehashes, so withholding it would make the record unverifiable.
 - **Stage 4, needing approval**: `uiProfile`'s eight counters now have no
   writer at all, yet still round-trip through `CLOUD_SAFE_SHAPE` into the
   `runtime_snapshots` table. `internalProfile`, `acceptanceProtocol`,
@@ -790,6 +804,24 @@ third parties run. Nothing here chose between those.
   the agreement being viewed — not to `selectedItem`.
 
 ## Next Priority (in order)
+
+0. **Stage 4 of the removal — needs approval, touches the database.** The eight
+   `uiProfile` counters have had no writer since 2026-11-05 (the blind-rating
+   and staking steps that wrote them are gone), yet they still round-trip
+   through `CLOUD_SAFE_SHAPE` into the `runtime_snapshots` table on every save.
+   `internalProfile`, `acceptanceProtocol`, `contractHistory` and `step` are in
+   the same position. Decide what the snapshot should still carry, then whether
+   stored rows are left alone — the migration's own design copies rather than
+   moves, so nothing is lost by leaving them. Separately and also undecided:
+   `capture-payment` and `cancel-payment` still write `trustpoints_ledger` and
+   `evidence-core.spec.js:96` calls one directly, so the points ledger has a
+   live server-side writer even though its UI is gone.
+
+   Cheap and unblocked next to it: **`scripts/verify-receipt.mjs` imports a
+   `.ts` file**, so it needs Node 22.18+ and dies on older ones with a message
+   about file extensions. It is the script a third party runs to verify a
+   record independently, which is the whole evidence claim, so either the
+   requirement is published loudly or the import goes.
 
 1. **A real second human.** The dogfood proved the mechanism (see "Where the
    product stands"); it did not test a stranger. Both addresses were one

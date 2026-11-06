@@ -259,8 +259,30 @@ test('internal event fields are omitted and payloads are allowlisted', async ({ 
   expect(serialized).not.toContain('guest-evidence-secret-key');
   expect(serialized).not.toContain('_actor_role');
   expect(serialized).not.toContain('server_recorded_at');
-  expect(serialized).not.toContain('guest_access_token');
-  expect(serialized).not.toContain('invite_token');
+
+  // Secrets are checked by VALUE, not by field name. Two name checks used to
+  // stand here and both were the wrong test. `guest_access_token` as a string
+  // would not appear even if the token itself did, since the response would
+  // carry the random value and not the key; and `invite_token` DOES appear, as
+  // the value of acceptance_identity.authentication_detail.credential, which
+  // names the kind of credential used and leaks nothing. So the pair failed on
+  // a harmless identifier while being blind to an actual leak.
+  expect(serialized, 'the guest credential was echoed back').not.toContain(guestToken);
+  if (contract.invite_token) {
+    expect(serialized, 'the invite token was echoed back').not.toContain(contract.invite_token);
+  }
+  // Nothing in this response should be a bare credential-shaped value beyond
+  // the identifiers it legitimately carries: the contract, each event, and
+  // each actor. Actor ids are deliberate — `canonical.actor_id` is part of
+  // what an independent verifier rehashes, so withholding it would make the
+  // record unverifiable, which is the opposite of the point.
+  const knownIds = new Set([
+    contract.id,
+    ...body.events.flatMap(e => [e.id, e.actor?.id, e.canonical?.actor_id, e.canonical?.contract_id]),
+  ].filter(Boolean));
+  const uuids = (serialized.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [])
+    .filter(u => !knownIds.has(u));
+  expect(uuids, `unexpected credential-shaped values: ${uuids.join(', ')}`).toEqual([]);
 
   const submitted = body.events.find(e => e.type === 'performance.asserted');
   expect(Object.keys(submitted.payload)).toEqual(['step']);
