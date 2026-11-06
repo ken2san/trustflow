@@ -248,6 +248,24 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
                 <dd className="text-slate-200">{identity.claimed_identity}</dd>
               </div>
             )}
+            {/* The first blind review called this "the most legally
+                significant line on the page" and said a reader can see THAT
+                the two differ but is told nothing about what that means
+                (2026-11-05, open until 2026-11-06). Naming the innocent
+                explanation is not a defence of it — it is the difference
+                between a reader drawing their own conclusion and the record
+                letting them. The record cannot say which happened, and this
+                does not pretend to. */}
+            {identity.invited_recipient && identity.claimed_identity
+              && identity.invited_recipient !== identity.claimed_identity && (
+              <p className="text-xs text-slate-400 pt-2 leading-relaxed">
+                These differ. That is not by itself a problem — an invitation
+                can be passed to a colleague, or someone can accept with a
+                different address of their own. TrustFlow checked neither
+                address and cannot say which happened, so it records both as
+                given and leaves the question to the people involved.
+              </p>
+            )}
           </dl>
         ) : (
           contract.hirer_email && (
@@ -291,9 +309,17 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             </span>
           )}
         </p>
+        {/* "Hash chain verified" said who-knows-who had verified it, and the
+            download note below then told the reader they could not check it
+            themselves — the contradiction three blind reviews kept circling.
+            The note was simply out of date: the exported record carries a
+            `canonical` block per act precisely so a reader can recompute
+            offline (src/lib/guestRecordExport.js:88). So the fix is not to
+            soften the claim; it is to say who checked, and to stop denying
+            that the reader can. */}
         <p className={chain.verified ? 'text-emerald-400' : 'text-slate-400'}>
           {chain.verified
-            ? 'Hash chain verified across every server-attested event.'
+            ? 'TrustFlow recomputed every server-attested event and the chain holds.'
             : 'No server-attested events to verify yet.'}
         </p>
       </div>
@@ -339,8 +365,13 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
               on a screen whose last finding was exactly this. */}
           <p className="text-xs text-slate-400">
             A copy of what is shown here, as a file you keep. Reading it needs
-            nothing from TrustFlow. It records what the server verified; it is
-            not a document you can re-verify yourself.
+            nothing from TrustFlow — and neither does checking it: each act
+            carries every input its hash was taken over, so you can recompute
+            the hashes and follow the chain yourself, without trusting the
+            verdicts in the file. The one thing you cannot check that way is
+            whether the detail text shown under each act is what was committed,
+            because the hash covers the whole payload and you are shown part
+            of it.
           </p>
         </div>
       )}

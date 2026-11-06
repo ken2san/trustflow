@@ -348,7 +348,12 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   await expect(page.getByText(/Record of agreement/i)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Agreement created')).toBeVisible();
   await expect(page.getByText('Terms accepted')).toBeVisible();
-  await expect(page.getByText(/Hash chain verified/i)).toBeVisible();
+  // Was /Hash chain verified/. That wording was the defect three blind reviews
+  // circled: it named no one as having verified, while the download note below
+  // it told the reader they could not check it themselves. The line now says
+  // who recomputed it, so the assertion follows — and it asserts the actor,
+  // which is the part that was missing, not the phrasing.
+  await expect(page.getByText(/TrustFlow recomputed every server-attested event/i)).toBeVisible();
   // The trail says who acted, in readable terms rather than raw ids. The name
   // also appears in the header ("… — with UI Flow Earner") and again on each
   // trail entry ("by UI Flow Earner"), so this is scoped to the trail list. It

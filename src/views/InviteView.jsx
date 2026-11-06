@@ -11,7 +11,11 @@ import { ShieldCheck, ArrowRight, X, Download, Lock, CheckCircle2, User, AlertTr
 const GAINS = [
   {
     icon: ShieldCheck,
-    title: "What you accept is recorded, not remembered.",
+    // "recorded, not remembered" was the first line a blind counterparty hit
+    // and it reported not understanding it (2026-11-06). It was a writer's
+    // phrase: the contrast it draws is with someone's memory of a verbal
+    // agreement, which nobody on this screen is thinking about yet.
+    title: "What you agree to is written down, and cannot be changed quietly.",
     // "cannot pass as the original" was too strong and Codex's audit said so:
     // the chain makes a later edit DETECTABLE when the record is checked, and
     // UPDATE/DELETE on events is revoked, but there is no third-party
@@ -19,7 +23,7 @@ const GAINS = [
     // operator of the server. Scoped to detection, which is what the code does
     // (log-event/index.ts:280-318, 20260927000000_agreement_snapshot.sql:48-75,
     // 20260313000000_events_table.sql:129-133).
-    body: "Accepting writes a timestamped record of these exact terms — the amount, the deadline and what counts as done. Each later step is hash-linked to the one before it, so anything edited afterwards shows up when the record is checked.",
+    body: "Accepting writes down these exact terms, with the time — the amount, the deadline and what counts as done. Every step after it is locked to the one before, so if anyone edits the record later, the change shows up when it is checked.",
   },
   {
     icon: Download,
@@ -206,7 +210,18 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
                 send-acceptance-email was deleted on 2026-09-26 and is not to
                 be redeployed. The record is downloadable instead, which is
                 true, and the link is what gets them back to it. */}
-            <p className="text-xs text-slate-400 px-2">Recorded with this agreement as your identifier. No acceptance email is sent — your copy is downloadable from the record, and this link is how you reach it again.</p>
+            {/* A blind counterparty read the prefilled value as an address of
+                someone else's about to be recorded as them: "私のメールでは
+                ない偽のものが私の識別子として記録される" (2026-11-06). The
+                field was always editable and the box always said what it was
+                for — but it never said whose address was already in it, or
+                that replacing it is normal. Saying so costs one line. */}
+            <p className="text-xs text-slate-400 px-2">
+              {invitedEmail && (guestEmail || invitedEmail) === invitedEmail
+                ? <>This is the address the invitation was sent to. <span className="text-slate-300">Change it if it is not yours</span> — whatever is here is recorded as who accepted.</>
+                : <>Recorded with this agreement as who accepted.</>}
+              {' '}No acceptance email is sent — your copy is downloadable from the record, and this link is how you reach it again.
+            </p>
           </div>
           {/* The terms again, at the moment of commitment.
               Rendered from the same `inviteData` the previous screen used and

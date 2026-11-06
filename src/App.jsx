@@ -53,7 +53,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  ShieldCheck, CheckCircle2, Search, Activity, X, LayoutGrid, Loader2, RefreshCw, Briefcase, UserPlus, LogIn, LogOut
+  ShieldCheck, CheckCircle2, Search, Activity, X, LayoutGrid, Loader2, RefreshCw, Briefcase, UserPlus, LogIn, LogOut, XCircle,
 } from 'lucide-react';
 // Returns a unified profile object merging static and dynamic user data
 // (moved below imports)
@@ -155,7 +155,7 @@ const todayLocalISO = () => new Date().toLocaleDateString('en-CA');
 // --- Main App Component ---
 
 /** @see onGuestSurface, below. */
-const GUEST_SURFACE_VIEWS = new Set(['invite', 'invite-accepted', 'guest-evidence']);
+const GUEST_SURFACE_VIEWS = new Set(['invite', 'invite-accepted', 'invite-declined', 'guest-evidence']);
 
 const App = () => {
   // The query string as the page was opened with, captured during the first
@@ -1305,10 +1305,51 @@ const App = () => {
               addToast('Agreement accepted', 'Your acceptance has been recorded.', 'success');
             }}
             onDecline={() => {
-              window.history.replaceState({}, '', window.location.pathname);
-              setView('home');
+              // Declining used to clear the URL and drop straight onto the
+              // app's home screen. A blind counterparty did exactly that and
+              // reported "断れたのか分からない" — no acknowledgement, and for
+              // a browser that happens to hold a session, the operator's own
+              // contract list (2026-11-06).
+              //
+              // Nothing is written: a refusal is not an act on the agreement,
+              // the invitation stays unconsumed, and recording "someone
+              // declined" would be an assertion nobody made. So the honest
+              // close is to say what did and did not happen, and to leave the
+              // link working — reconsidering is the common case, and this is
+              // the only way back.
+              // The URL and the loaded invitation are deliberately KEPT. The
+              // screen tells the reader the link still works, and clearing
+              // either would make that false — a reload would land on an app
+              // they have no account for.
+              setView('invite-declined');
             }}
           />
+        )}
+        {view === 'invite-declined' && (
+          <div className="max-w-lg mx-auto text-center space-y-6 py-20 animate-fade-in-up">
+            <div className="w-16 h-16 rounded-[20px] bg-white/5 border border-white/10 flex items-center justify-center mx-auto">
+              <XCircle className="w-8 h-8 text-slate-400" />
+            </div>
+            <h2 className="text-3xl font-black tracking-tighter text-white">You did not accept</h2>
+            {/* Says what did NOT happen, because that is what the reader is
+                uncertain about. A blind counterparty declined and could not
+                tell whether anything had been sent, recorded or used up. */}
+            <p className="text-slate-400 text-sm leading-relaxed">
+              Nothing was recorded and nothing was sent. The invitation has not
+              been used, so this link still works if you change your mind.
+            </p>
+            <p className="text-xs text-slate-400 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
+              Whoever sent it is <span className="text-slate-300">not told</span> that
+              you looked or that you declined — TrustFlow sends no mail. If you
+              want them to know, tell them the way they reached you.
+            </p>
+            <button
+              onClick={() => setView('invite')}
+              className="text-xs font-bold text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Look at the terms again
+            </button>
+          </div>
         )}
         {view === 'invite-accepted' && (
           <div className="max-w-lg mx-auto text-center space-y-6 py-20 animate-fade-in-up">
