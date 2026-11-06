@@ -688,6 +688,87 @@ going to make. Codex's two-stage framing is the right one: stage ① asks whethe
 the screen can be read, blind, with no repository; stage ② asks whether what the
 screen claims is true in the system, which an image can never answer.
 
+### The removal, and the tooling it forced — 2026-11-05
+
+The legacy surface is gone (Decisions.md, same date). It came out entry-first:
+close every door, measure, then delete what became unreachable. Both
+measurements held — the full suite returned the same 15 failures before and
+after deleting sixteen files, and the five that stage 1 was predicted to break
+were exactly the five that broke.
+
+**Where it stands.** `App.jsx` 1976 → 1335 lines. Sixteen view/modal files and
+nine orphaned modules deleted. Full suite **135 passed, 1 failed, 1.1 minutes**
+across two projects, against 104 / 15 / 3.1 minutes that morning; 28 of the
+passes are at phone width and 3 are contrast checks that did not exist. The one
+failure is `guest-evidence.spec.js:239` and is unrelated — see below.
+
+**The tooling is the durable part.** Four tools went in, each bought by a
+failure that happened here on the day:
+
+- **ESLint** (`eslint.config.js`) — the project had none. `no-undef` and
+  `no-unused-vars` are errors; the react-hooks rules and ESLint 10's newer
+  rules are warnings, so a failing lint run means something is broken rather
+  than something is unfashionable. It found a live bug within minutes:
+  `toggleMode`, the header's own button, still called two removed setters
+  inside a `setTimeout`, so the mode switched and then threw, stranding the
+  "Reconfiguring Interface…" overlay for ever. The E2E test for that button
+  passed. Errors went 84 → 0.
+- **knip** (`knip.json`) — orphan files and dependencies.
+- **axe-core** (`tests/e2e/visual-accessibility.spec.js`) — contrast.
+- **CI** (`.github/workflows/verify.yml`) plus lint and build added to the
+  existing pre-commit hook.
+
+**Three things to carry forward, each one paid for.**
+
+1. **A calibration that silences a true finding is worse than no tool.** There
+   was no `vite.config.js`, so `@vitejs/plugin-react` had never been applied
+   and esbuild was compiling JSX with the classic runtime — which is why every
+   component carried an `import React` that reads as unused. ESLint said those
+   imports were unused (true of the text, false of the build); knip said the
+   plugin was an unused dependency (true, and the actual cause). I put the
+   plugin in knip's `ignoreDependencies` because "a Vite project obviously uses
+   it", then followed ESLint and got `ReferenceError: React is not defined`.
+   Two tools agreed from opposite directions and I muted one. Fixed at the
+   cause in `3acd491`.
+2. **Out of the box, knip called every `supabase/functions/*.ts` unused.** They
+   are Deno edge functions nobody imports from the app, and they are what the
+   evidence trail runs on. Taking the first output at face value would have
+   deleted the backend. The `entry`/`ignore` config exists for that reason.
+   Three files it still reports are left alone deliberately, because each has a
+   decision behind it: `src/lib/tsa.js` (the RFC 3161 entry), `ModalDialog.jsx`
+   (the modal-system entry) and `src/i18n.js`. It agrees with Codex that
+   `src/lib/trustpoints.js` is not an orphan — `tests/unit` imports it.
+3. **A config can silently not do what it says.** The pre-commit hook's
+   `if: "Bash(git commit *)"` filter in `.claude/settings.json` does not work —
+   the hook fired on a Bash call with no git command in it. Nobody noticed for
+   as long as the hook only ran the unit suite, which always passed. It now
+   scopes itself by reading the tool payload on stdin.
+
+**Note on the history**: `3acd491`'s message is about the Vite config, but the
+commit also carries the nine orphan-file deletions — a `git rm` left them
+staged and the next commit swept them up. The intended message for them is this
+section.
+
+**Still open from this work:**
+
+- `guest-evidence.spec.js:239` asserts the response does not contain the string
+  `invite_token`. It does, as a *value*:
+  `acceptance_identity.authentication_detail.credential: "invite_token"`, which
+  names the kind of credential and leaks nothing. The assertion is also
+  backwards as a leak check — a real token is a UUID and would not match. It
+  should test for a UUID-shaped token, not the field name.
+- **Stage 4, needing approval**: `uiProfile`'s eight counters now have no
+  writer at all, yet still round-trip through `CLOUD_SAFE_SHAPE` into the
+  `runtime_snapshots` table. `internalProfile`, `acceptanceProtocol`,
+  `contractHistory` and `step` are in the same position. Nothing was changed in
+  the database.
+- The `capture-payment` and `cancel-payment` edge functions still write
+  `trustpoints_ledger`, and `evidence-core.spec.js:96` calls one directly. The
+  UI layer is gone; the server side is untouched and undecided.
+- Live notification of the counterparty acting was removed with the vestigial
+  subscription. If it is wanted it belongs on the agreement screen, keyed to
+  the agreement being viewed — not to `selectedItem`.
+
 ## Next Priority (in order)
 
 1. **A real second human.** The dogfood proved the mechanism (see "Where the
