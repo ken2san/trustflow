@@ -1009,6 +1009,86 @@ item here, because every priority judgement above is being made without it.
 5. **Leave anonymous sign-ins alone** until there is another way to create an
    account.
 
+### The CAPTCHA outage, and the frontend half a toggle silently required — 2026-11-06
+
+**This session recommended enabling CAPTCHA protection and called it "a
+dashboard change, ten minutes, zero code". That was false, and both reviewers
+had recommended the same thing.** Switching it on in production made every
+auth endpoint answer 400 `captcha_failed`, measured directly:
+
+```
+POST /auth/v1/signup -> captcha protection: request disallowed (no captcha_token found)
+POST /auth/v1/otp    -> captcha protection: request disallowed (no captcha_token found)
+```
+
+Sign-in is email OTP with no password, so that locked the only account out of
+its own project. The existing session survived because token refresh is not
+covered. Reverted within the hour, verified by re-probing both endpoints
+(`/auth/v1/otp` returning `otp_disabled` for an unregistered address is the
+healthy answer). **It is the lockout the `skeptic` pass had warned about, and
+we caused it ourselves while acting on that warning.**
+
+`tests/unit/earnerAuth.test.js` stayed green throughout, because it mocks the
+auth surface wholesale: a missing option in a call it stubs is invisible to it.
+That is the lasting lesson — a suite that mocks a boundary cannot test the
+contract across it.
+
+**What is and is not protected**, from Supabase's docs and confirmed by probe:
+CAPTCHA covers sign-in, sign-up and password reset. `updateUser({ email })` —
+how an anonymous session claims an address and becomes permanent here — goes
+to `/auth/v1/user` and is **not** covered. Had it been, the email-claim flow
+could not have worked at all, since `updateUser` takes no `captchaToken`.
+
+#### The frontend half, shipped in `73b2072`
+
+- `src/lib/captcha.js` — script loader and `captchaOptions(token)`. **No new
+  dependency**: the documented path is `@marsidev/react-turnstile`, but
+  `window.turnstile.render` is all that is needed and AGENTS.md requires
+  approval for a package.
+- `src/components/ui/CaptchaChallenge.jsx` — the widget, in the two places a
+  person is already filling in a form, and nowhere else.
+- **An unset `VITE_TURNSTILE_SITE_KEY` means one thing: this deployment has no
+  CAPTCHA, and nothing renders.** The first version defaulted to Cloudflare's
+  always-passes test key, which would have put a widget and the words "test
+  challenge key" on the live site and sent Supabase a token its secret cannot
+  verify. The test keys are kept only as a Set used to warn.
+- A failed challenge is reported as a failed challenge. The outage presented as
+  "Could not send the code", which is why the first hour went to the mail
+  quota rather than the bundle, so `captcha_failed` is now a distinct reason
+  from `unknown_email` and `rate_limited`.
+
+#### The anonymous session is now lazy, which is the real fix
+
+`ensureActorIdentity()` used to run on mount and mint an anonymous user on
+every session-less page view — **360 of production's 362 users, by anyone, for
+free, and an unauthenticated write into `auth.users`.** Supabase's own guide
+names this as the abuse to prevent. It is now split:
+
+- `currentActorIdentity()` reads an existing session and **creates nothing**;
+  used on load.
+- `ensureActorIdentity(captchaToken)` creates one, called only at the email
+  claim — which is also the only place a challenge can honestly appear.
+
+A visitor who only looks now creates nothing anywhere. What is lost is
+cross-device restore of `{hasOnboarded, mode, view}` for someone with no
+account, whose only restorable view is `home`.
+
+**Consequence worth remembering: this removes the only traffic log.** Anonymous
+user creation timestamps were the sole evidence of visits (Web Analytics is off
+and `auth.audit_log_entries` is empty). After this deploy, "has anyone been
+here" is unanswerable until Web Analytics is enabled.
+
+#### Deploy order, which is not free
+
+The frontend must be live **before** the toggle, or the outage repeats. The
+site key reaching the build was verified by fetching the deployed bundle rather
+than trusting the dashboard: `vu="0x4AAAAAAF2UdDbcQl6zNv0f"`, used as
+`sitekey: vu`. **Still unverified at the time of writing: whether
+`project-trustflow.vercel.app` is in the Turnstile widget's hostname
+allowlist.** That must be checked with CAPTCHA still OFF — the widget renders
+and its token is simply ignored — because finding it after the toggle opens the
+lockout window again.
+
 ### Stage 4b: the snapshot bound, drafted and tested, not applied
 
 `docs/proposals/20261106000000_runtime_snapshot_bounds.sql.draft` adds three
