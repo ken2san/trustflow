@@ -1,21 +1,28 @@
 import { useState } from "react";
-import { ShieldCheck, ArrowRight, X, Star, Lock, CheckCircle2, User, AlertTriangle, Clock } from "lucide-react";
+import { ShieldCheck, ArrowRight, X, Download, Lock, CheckCircle2, User, AlertTriangle, Clock } from "lucide-react";
 
+// Each of these says only what the system does. The three cards here used to
+// promise a Trust Passport that builds over time, records "you own
+// permanently", and an agreement locked "before any money moves" — none of
+// which this product has: the reputation layer was removed (Decisions.md,
+// 2026-11-05), a guest holds a link rather than an account, and money moves
+// outside TrustFlow entirely. This is the counterparty's first screen and the
+// first thing it does is make claims, so it is the last place to overstate.
 const GAINS = [
   {
     icon: ShieldCheck,
-    title: "You're protected from day one.",
-    body: "Every message is a timestamped record. If anything goes wrong, the evidence speaks for you — not the other person's version of events.",
+    title: "What you accept is recorded, not remembered.",
+    body: "Accepting writes a timestamped record of these exact terms — the amount, the deadline and what counts as done. Each later step is hash-linked to the one before it, so an edit afterwards cannot pass as the original.",
   },
   {
-    icon: Star,
-    title: "Every contract builds your Trust Passport.",
-    body: "Completed projects, on-time delivery, resolved disputes — all logged as tamper-evident records you own permanently.",
+    icon: Download,
+    title: "You get your own copy of the record.",
+    body: "Everything recorded against this agreement, downloadable as a file that is yours to keep. No account needed, and it does not depend on TrustFlow still being here to read it.",
   },
   {
     icon: Lock,
-    title: "The agreement is locked before any money moves.",
-    body: "What \"done\" means is agreed in writing before work starts. No more \"that's not what I asked for\" after delivery.",
+    title: "What \"done\" means is fixed before the work starts.",
+    body: "The completion criteria are part of what you are accepting, so neither side can quietly revise them later. Payment happens on whatever rail you both already use — TrustFlow records that it was reported, it does not hold the money.",
   },
 ];
 
@@ -157,8 +164,12 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           </button>
         </div>
 
+        {/* No account is created for a counterparty, and none is offered: the
+            link is the credential. Saying otherwise promised a sign-up that
+            does not exist. */}
         <p className="text-center text-xs text-slate-600 pb-4">
-          You can create a full account later to save your Trust Passport.
+          No account needed. This link is your access — keep it, and ask the
+          other party for a new one if you lose it.
         </p>
       </div>
     );

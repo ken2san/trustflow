@@ -638,15 +638,13 @@ the strongest find of the pass:
    `app.spec.js` test that clicked the avatar now asserts it is absent and
    opens the passport from the palette instead.
 
-   **Residue, deliberately left:** `ProfileModal.jsx:32-35` still renders
-   `unifiedProfile.name` — "Felix", role "Product Designer", with a hardcoded
-   `|| "Tokyo, Japan"` fallback — because `unifiedProfile` is
-   `{...USER_PROFILE, ...uiProfile}` and the eight real `uiProfile` numbers do
-   not cover the name, role, location, skills, reliability or completedJobs.
-   Behind ⌘K now rather than one click from every screen, but still fictional.
-   Removing it means deciding whether the Trust Passport exists at all, which
-   `Decisions.md` has deferred. Also still in the header and from the same
-   family, out of scope for this change: the coin pill and "Switch to Hire".
+   **The residue this section described is gone**, not by a decision about the
+   Trust Passport but because the removal took `ProfileModal.jsx` with it: no
+   screen renders "Felix" any more, and nothing reads `USER_PROFILE` beyond a
+   comment. `src/lib/trustpoints.js` and `deriveTrustLevel` in
+   `src/lib/utils.js` are still there with no caller in `src/`; so is "Switch
+   to Hire" in the header, which does work (`mode` has a real writer) but
+   switches between two views of the same screen. Checked 2026-11-05.
 
    What it was:
 
@@ -993,10 +991,19 @@ carries the requirement:
 6. **Act on the visual-review pass** (see the measured section above, dated
    2026-11-04). The contrast fix is done (`3005bd0`) and the "+ New contract"
    candidate was checked and withdrawn, and findings 3 and 4 are fixed. What
-   remains from the pass: the Felix residue inside the Trust Passport, which
-   needs the Trust Passport decision first. Finding 5 is settled (above), and
-   the ten pre-existing E2E failures are gone with the legacy surface — the
-   suite is green.
+   remains from the pass: nothing. Finding 5 is settled (above), the Felix
+   residue went with `ProfileModal.jsx`, and the ten pre-existing E2E failures
+   are gone with the legacy surface — the suite is green. **What the removal
+   did leave was a false promise on the counterparty's first screen**, found
+   while checking for Felix: `InviteView`'s three cards promised a Trust
+   Passport that "builds" with every contract, records "you own permanently",
+   and an agreement "locked before any money moves" — a removed feature, an
+   account a guest never gets, and money TrustFlow does not hold. Rewritten
+   2026-11-05 to what the system does: the terms are hash-bound at acceptance,
+   the record is downloadable and readable without TrustFlow, the completion
+   criteria cannot be revised quietly, and payment moves on the parties' own
+   rail. The "create a full account later" line is gone — the link is the
+   credential, and the screen now says so.
    Only then
    consider making the capture repeatable — and if it is made repeatable, the
    `auth/v1/signup` stub comes first, or every run keeps minting anonymous
