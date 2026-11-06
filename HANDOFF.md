@@ -966,7 +966,7 @@ outside the consent label, so it cannot be read as one of the terms.
 > were never shown. In a product whose whole claim is "this is what was agreed",
 > that is the claim failing.
 
-**Narrowed, not closed, in `0e6ac1f`.** The client re-reads the invitation
+**Narrowed, not closed, in `39a7849`.** The client re-reads the invitation
 immediately before accepting and refuses on any difference across the displayed
 terms (`shownTermsFingerprint`, 15 unit tests, one per field that can change).
 That shrinks the window from minutes to one round trip. **The real fix is for
