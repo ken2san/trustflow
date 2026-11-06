@@ -152,6 +152,9 @@ const todayLocalISO = () => new Date().toLocaleDateString('en-CA');
 
 // --- Main App Component ---
 
+/** @see onGuestSurface, below. */
+const GUEST_SURFACE_VIEWS = new Set(['invite', 'invite-accepted', 'guest-evidence']);
+
 const App = () => {
   // The query string as the page was opened with, captured during the first
   // render so that nothing below has to read it live.
@@ -389,6 +392,24 @@ const App = () => {
   // same millisecond used to share an id, so the first one's removal timeout
   // (filter(t => t.id !== id)) removed both, and duplicate React keys showed
   // up in ToastContainer/activity-log lists.
+  /**
+   * The screens a counterparty reaches by following a link.
+   *
+   * They have no account, no contracts of their own, and nothing to switch
+   * to. A blind review of these screens (2026-11-05) read the header's
+   * command bar, "Sign in", "SWITCH TO HIRE" and the activity badge as
+   * template filler, and "PROFESSIONAL" beside an invitation as a hint that
+   * the reader was the one being hired — which they were not. Chrome that
+   * belongs to the operator is not neutral on a stranger's screen: it
+   * describes a product they are not in, next to the one decision they came
+   * to make.
+   *
+   * The agreement screen is included only when it was opened with a guest
+   * credential; the owner's own view of the same screen keeps everything.
+   */
+  const onGuestSurface = GUEST_SURFACE_VIEWS.has(view)
+    || (view === 'agreement' && agreement?.source === 'guest');
+
   const addToast = useCallback((title, message, type = 'info') => { const id = crypto.randomUUID(); setToasts(prev => [...prev, { id, title, message, type }]); setActivityLog(prev => [{ id, title, message, type, timestamp: new Date() }, ...prev].slice(0, 50)); setUnreadCount(prev => prev + 1); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000); }, []);
 
   const toggleMode = () => {
@@ -1038,9 +1059,9 @@ const App = () => {
       <nav aria-label="Primary" className="fixed top-0 left-0 right-0 z-50 bg-[#020617]/80 backdrop-blur-xl border-b border-white/[0.05] px-6 py-4 flex justify-between items-center transition-all duration-300">
         <div className="flex items-center gap-4 cursor-pointer group" onClick={() => setView('home')}>
           <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg transition-colors ${mode === 'earner' ? 'bg-indigo-600' : 'bg-emerald-600'}`}>{mode === 'earner' ? <ShieldCheck className="text-white w-6 h-6" /> : <Briefcase className="text-white w-6 h-6" />}</div>
-          <div className="hidden sm:block"><span className="font-black text-xl tracking-tighter text-white block leading-none">TRUSTFLOW</span><span className="text-[9px] font-black text-slate-500 tracking-[0.3em] uppercase">{mode === 'earner' ? 'Professional' : 'Client Suite'}</span></div>
+          <div className="hidden sm:block"><span className="font-black text-xl tracking-tighter text-white block leading-none">TRUSTFLOW</span>{!onGuestSurface && <span className="text-[9px] font-black text-slate-500 tracking-[0.3em] uppercase">{mode === 'earner' ? 'Professional' : 'Client Suite'}</span>}</div>
         </div>
-        <div onClick={() => setIsCommandOpen(true)} className="hidden md:flex flex-1 max-w-md mx-6 items-center gap-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 px-4 py-2.5 rounded-xl cursor-pointer transition-all group"><Search className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" /><span className="text-sm text-slate-500 group-hover:text-slate-300 transition-colors">Type a command...</span><div className="ml-auto flex gap-1"><span className="text-[10px] font-mono text-slate-600 bg-white/5 px-1.5 py-0.5 rounded border border-white/5">⌘K</span></div></div>
+        {!onGuestSurface && <div onClick={() => setIsCommandOpen(true)} className="hidden md:flex flex-1 max-w-md mx-6 items-center gap-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 px-4 py-2.5 rounded-xl cursor-pointer transition-all group"><Search className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" /><span className="text-sm text-slate-500 group-hover:text-slate-300 transition-colors">Type a command...</span><div className="ml-auto flex gap-1"><span className="text-[10px] font-mono text-slate-600 bg-white/5 px-1.5 py-0.5 rounded border border-white/5">⌘K</span></div></div>}
         <div className="flex gap-4 items-center">
           {/* Whose contracts these are, shown rather than hidden in a tooltip.
               The address was only ever in `title`, so it took a hover to find
@@ -1051,7 +1072,7 @@ const App = () => {
               lose track of while holding two of them. The address is the part
               that must survive a narrow screen, so the word "Sign out" is what
               gives way, not the identity. */}
-          {auth.status === 'signed_in' ? (
+          {onGuestSurface ? null : auth.status === 'signed_in' ? (
             <div className="flex items-center gap-1 pl-3.5 pr-1 py-1 rounded-full border border-white/10">
               <span
                 className="text-xs font-bold text-slate-300 max-w-[120px] sm:max-w-[220px] truncate"
@@ -1077,20 +1098,20 @@ const App = () => {
               <LogIn className="w-3.5 h-3.5" /> Sign in
             </button>
           )}
-          <button onClick={toggleMode} className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 hover:bg-white/5 transition-all"><div className={`w-2 h-2 rounded-full ${mode === 'earner' ? 'bg-indigo-500' : 'bg-emerald-500'}`} /><span className="text-xs font-bold uppercase tracking-wider text-slate-300">Switch to {mode === 'earner' ? 'Hire' : 'Work'}</span><RefreshCw className="w-3 h-3 text-slate-500" /></button>
+          {!onGuestSurface && <button onClick={toggleMode} className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 hover:bg-white/5 transition-all"><div className={`w-2 h-2 rounded-full ${mode === 'earner' ? 'bg-indigo-500' : 'bg-emerald-500'}`} /><span className="text-xs font-bold uppercase tracking-wider text-slate-300">Switch to {mode === 'earner' ? 'Hire' : 'Work'}</span><RefreshCw className="w-3 h-3 text-slate-500" /></button>}
           {/* The TrustPoints coin pill stood here and opened the Wallet. Both
               go with the reputation layer. */}
           {/* Command Center is no longer in the primary navigation — it was a
               second dashboard competing with the Contracts home. The view still
               exists; ⌘K reaches it. */}
-          <button
+          {!onGuestSurface && <button
             className={`hidden sm:inline-flex p-2 ml-1 rounded-full border border-white/10 transition-colors relative ${showActivityLog ? 'bg-indigo-500/20 text-indigo-400' : 'text-slate-400 hover:text-indigo-300 hover:bg-white/10'}`}
             title="Activity Log"
             onClick={() => { setShowActivityLog(prev => !prev); setUnreadCount(0); }}
           >
             <Activity className="w-5 h-5" />
             {unreadCount > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-indigo-500 rounded-full text-[9px] font-black text-white flex items-center justify-center leading-none">{unreadCount > 99 ? '99+' : unreadCount}</span>}
-          </button>
+          </button>}
           {/* The profile avatar and the chat bell used to sit here. Both are
               gone, for the same reason the Command Center left the primary nav
               above: ⌘K still reaches "View Trust Passport" and "Toggle Chat".
