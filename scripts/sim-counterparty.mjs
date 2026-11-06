@@ -21,13 +21,18 @@
 // be registered, emailed, or added to a thread. Two counterparties run below
 // with different self-claimed identities to make that concrete.
 //
-// NOT asked, and NOT answered: whether a human who did not build this can use
-// it. A simulated counterparty shares our assumptions by construction. It
-// cannot misread a screen, type the wrong address, change its mind for a
-// reason we failed to anticipate, or give up. Every verdict below was written
-// by the same person who wrote the thing being judged. This is a protocol
-// exercise; the dogfood with a real second human is a different item and this
-// does not shorten it.
+// NOT asked, and NOT answered: what someone who did not build this would do
+// with it. The verdicts below are two hand-written functions, so they only
+// walk branches that were anticipated — that is the weakness, and it belongs
+// to the POLICIES, not to simulation.
+//
+// An earlier version of this comment said a simulated counterparty "cannot
+// misread a screen, type the wrong address, change its mind, or give up".
+// Retracted 2026-11-06: a counterparty that is a model rather than a fixed
+// function can do all four, and a sourced review found no basis for the
+// stronger claim. What stays unmeasured is how OFTEN real people do those
+// things — external validity, which an uncalibrated simulation does not give
+// and a single human does not give either. See HANDOFF.md, Next Priority #1.
 //
 // CREDENTIAL ISOLATION IS STRUCTURAL, NOT POLITE
 // `counterparty()` closes over its own guest token and is never passed the

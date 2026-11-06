@@ -15,8 +15,9 @@ until it is on, nothing records whether anyone visits, because the anonymous
 user per page view that used to serve as a visit log is deliberately gone;
 (2) the three payment Edge Functions, a September vintage still ACTIVE, plus
 `earner_payout_profiles`' unverified payout destination. Both need their own
-approval. Next Priority #1 — a real second human — is unchanged and untouched
-by any of this.
+approval. **Next Priority #1 was rewritten on 2026-11-06 and is no longer "a
+real second human"** — see that item, and do not re-raise arranging one as a
+required step.
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -563,12 +564,13 @@ everything through `b79c008` — and it authorizes no additional production writ
 
 ### The next safe step
 
-**Next Priority #1 — a real second human.** The backend queue that has filled
-this file for three days is empty, both projects are level, and nothing left in
-the list tests what that tests. Resist adding backend work in front of it; the
-reason it keeps getting deferred is that it is the only item that cannot be
-done alone — and phase ②, now that it exists, is the most tempting way yet to
-keep deferring it.
+**Next Priority #1 — repeatable two-party exploration without a real second
+human.** The backend queue that filled this file for three days is empty and
+both projects are level, so the gap left is what nobody has driven as an
+independent party. **Arranging a real person is not that step**, by the
+owner's explicit decision on 2026-11-06: waiting on human availability slows
+the loop far more than it buys, and he has hired testers before and found the
+cost-to-value poor. See the rewritten item for what replaces it.
 
 Worth knowing before touching `tests/e2e/`: Codex's `dc354ec` added
 `tests/e2e/anonymousSession.js`, which caches an anonymous refresh token so the
@@ -1249,9 +1251,17 @@ session had added minutes earlier, at 4.23:1.
 - **A fixture that contradicts itself spends the reviewer on the fixture.**
 - **Do not tell the next reviewer what the last one found.** Repeating a
   conclusion back is not a second viewpoint.
-- **None of it replaces a real second human.** A blind reviewer cannot change
-  its mind, mistype its own address, misunderstand and act on the
-  misunderstanding, or dispute anything. That is still #1.
+- **What this regime does NOT do is act.** A blind reviewer reads screens; it
+  does not mistype an address, double-submit, forward the link to someone
+  else, or dispute a delivery. That gap is closed by an acting counterparty
+  (Next Priority #1), not by finding a person.
+
+  The sentence that stood here — "a blind reviewer cannot change its mind,
+  misunderstand and act on the misunderstanding" — was **retracted
+  2026-11-06**. It asserted a limit of AI that research does not support:
+  behaviour of that kind is simulable, and the real residual is narrower (see
+  #1). The honest statement is that *this* regime does not do it, because
+  nothing here was built to act.
 
 ### The guest path is now captured as images, and a stranger read them — 2026-11-05
 
@@ -1559,19 +1569,53 @@ assertions described the old lie and were updated to the new truth.
    the import removed, and the failure path was exercised on Node 20 and 22.17.
    See the portability note in the removal section.
 
-1. **A real second human.** The dogfood proved the mechanism (see "Where the
-   product stands"); it did not test a stranger. Both addresses were one
-   operator in two browser profiles, and across all 86 accepted contracts
-   `hirer_user_id` is null with only `hirer_email` set — a guest never gets an
-   account row, and the address is the one they typed. So nothing yet has
-   tested usability for someone who did not build this, identity,
-   misunderstanding, correction or dispute. That is where `agreement_hash` and
-   the invited-versus-claimed distinction stop being plumbing and become the
-   product. It cannot be done alone.
+1. **Repeatable two-party exploration and regression, without a real second
+   human.** Rewritten 2026-11-06. It used to read "A real second human", and
+   that wording kept producing the same question at the top of every session —
+   *when do we arrange the second tester?* — which is **not the plan**.
 
-   Worth knowing before arranging it: **Send Invite produces a shareable URL
-   and sends no email.** Invitation delivery is manual, through whatever
-   channel the owner picks, and so is a re-issued access link.
+   **The owner's decision, stated plainly so it is not re-litigated:** waiting
+   on another person's availability slows the development loop far more than it
+   buys. He has hired testers before; the cost and time against the value was
+   poor, and the useful findings needed heavy distillation afterwards anyway.
+   A real person may be used when there is something only they can answer. **A
+   real person is never a required gate, and asking "when do we do the
+   second-human test" is the wrong question.**
+
+   **What the item actually is.** Nobody has yet driven this product as an
+   independent party who does not know how it is built. `sim:counterparty`
+   has two hand-written policies, so it only walks branches that were
+   anticipated. The work is to put an *acting* counterparty on the real guest
+   path — its own credential, its own browser context, no repository, no API
+   spec, no correct sequence — and to promote whatever it reproduces into the
+   deterministic suites.
+
+   **Scope, which is the part most likely to be got wrong.** Finding every
+   problem is explicitly out of scope and was ruled out by the owner. The test
+   is "if this turns out wrong, can we just do it again?" — only the No answers
+   count: a permanent record that says something false, money moving or being
+   refunded without both sides, being bound by terms never shown, a party
+   locked out of their own agreement, the wrong person recorded as a party.
+   Wording, spacing, colour, slowness and missing features are **discarded, not
+   reported**, because distilling noise is the labour that made human testing
+   poor value in the first place.
+
+   Sample personas, one irreversible failure each:
+   `docs/proposals/pseudo-testers.md`.
+
+   **What is honestly still unmeasured**, and what it is not: not "AI cannot
+   misunderstand or walk away" — that claim was retracted on 2026-11-06 after
+   a sourced review, because such behaviour is simulable. What is unmeasured is
+   **external validity**: how often real people in the target population
+   accept, misread or abandon. An uncalibrated simulation does not estimate
+   those frequencies, **and neither does one human**. So acceptance criteria
+   are set on system behaviour, authorization, the binding between consent and
+   record, and recovery — never on a synthetic acceptance rate. Any such rate
+   is labelled synthetic and never reported as a human estimate.
+
+   Worth knowing whenever an invitation is actually sent to someone: **Send
+   Invite produces a shareable URL and sends no email.** Delivery is manual,
+   through whatever channel the owner picks, and so is a re-issued access link.
 
 2. ~~Ship the re-issue work to production.~~ **Done 2026-10-12**: migration
    applied, all four Edge Functions deployed to both projects with identical
@@ -1601,11 +1645,16 @@ assertions described the old lie and were updated to the new truth.
    models. Pointing a model at them is Model-Trials' subject, and nothing in
    this repo sends anything to one.
 
-   **It is not a substitute for #1 and does not shorten it.** A simulated
-   counterparty shares our assumptions by construction: it cannot misread a
-   screen, type the wrong address, or change its mind for a reason we failed to
-   anticipate. Every verdict in that script was written by the person who wrote
-   the thing being judged.
+   **Its limit is narrower than this file used to claim.** The two policies
+   are hand-written by the person who wrote the thing being judged, so they
+   only walk branches that were anticipated — that is the real weakness, and
+   it is a property of *hand-written policies*, not of simulation.
+
+   The sentence that stood here — that a simulated counterparty "cannot
+   misread a screen, type the wrong address, or change its mind" — was
+   **retracted 2026-11-06**. A counterparty that is a model rather than a
+   fixed function can do all three. Replacing the policies with acting agents
+   is exactly what #1 now covers.
 
 3. **Cancellation: the withdraw-before-acceptance half is underspecified, and
    the delete feature did not replace it.** Decided 2026-09-25, still not
