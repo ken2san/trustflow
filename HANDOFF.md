@@ -832,6 +832,43 @@ carries the requirement:
   subscription. If it is wanted it belongs on the agreement screen, keyed to
   the agreement being viewed — not to `selectedItem`.
 
+## How this project tests without a second human
+
+Standing arrangement, re-confirmed by Kenji on 2026-11-05 after it was lost in
+a session reset. It is not an experiment and not a substitute for Next Priority
+#1 — it is how the cheap half of #1 gets done before a real person is spent on
+the expensive half. **Three viewpoints, none of which wrote the thing under
+review**, plus the gates:
+
+| | question it answers | how |
+|---|---|---|
+| **Blind subagent** | can a stranger read this screen, and what do they think it says? | `tests/e2e/guest-path-capture.spec.js` → `test-results/guest-path/`, then a **fresh subagent with no repository access** reads the images |
+| **Codex** | is what the screen claims true in the system? | reads the code, one verdict per claim with `file:line`. **It does not write code** — see Ownership and locks |
+| **`skeptic` subagent** | is the decision right? | architecture, scope and product calls, where neither pixels nor code settle it |
+| **The gates** | did this break something measurable? | lint, build, unit, axe contrast, `check-migrations`, CI |
+
+Each finds a class the others structurally cannot, and that is the whole
+argument for running all of them. On 2026-11-05: the blind pass found the
+opening screen read backwards while every test passed; Codex found a claim on
+that same screen overstated against the code; and axe rejected a hint line the
+session had added minutes earlier, at 4.23:1.
+
+**Rules this cost something to learn.**
+
+- **Verify every finding in source before acting.** The method produces false
+  positives — one 2026-11-04 finding was withdrawn after the code settled it.
+- **A capture artefact is a finding about the camera.** `fullPage: true`
+  stitches a document taller than the viewport and puts a fixed header
+  mid-page; a shot taken during a fade-in reads as a contrast failure across
+  the whole screen. Both were reported as product defects before being fixed
+  in the spec.
+- **A fixture that contradicts itself spends the reviewer on the fixture.**
+- **Do not tell the next reviewer what the last one found.** Repeating a
+  conclusion back is not a second viewpoint.
+- **None of it replaces a real second human.** A blind reviewer cannot change
+  its mind, mistype its own address, misunderstand and act on the
+  misunderstanding, or dispute anything. That is still #1.
+
 ### The guest path is now captured as images, and a stranger read them — 2026-11-05
 
 `tests/e2e/guest-path-capture.spec.js` photographs six boundaries of the
