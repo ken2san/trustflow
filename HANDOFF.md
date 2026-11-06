@@ -1106,6 +1106,68 @@ token was accepted, and reaching it costs nothing from a project-wide mail
 quota that an earlier review had identified as drainable. Use this probe, not a
 real address, whenever this needs re-checking.
 
+### A defect shipped to production, and the test that could not have caught it — 2026-11-06
+
+`20261106160059` gave `runtime_snapshots` one row per actor and the client
+moved to `upsert(..., { onConflict: 'actor_id' })` in the same breath.
+**`INSERT ... ON CONFLICT DO UPDATE` requires the UPDATE privilege, and this
+table had only ever granted INSERT and SELECT**, so every save after the first
+answered `permission denied for table runtime_snapshots`. Non-fatal — the
+local cache is written first — and completely silent, because
+`saveRuntimeSnapshot` reports a failed persist as a console warning.
+
+**Found by loading the deployed site and reading its console**, after the
+database said `savedAt` had not moved. Not by any test.
+
+**Why no test could have caught it.** The container check that verified the
+constraints runs every statement as `postgres`. Privileges do not exist for a
+superuser, so it was measuring the constraint layer in a world with no
+permission layer. This is the same shape as the CAPTCHA outage earlier the
+same day, where `earnerAuth`'s suite mocked the auth boundary and therefore
+could not see a missing option in the call it stubbed. **Both times the tests
+were green because of what they could not see**, and both times the thing that
+found it was exercising the real artefact.
+
+`scripts/`-adjacent fix: a second container check now creates the
+`authenticated` role, grants it exactly what the live projects grant, and acts
+as it with `set role`. It reproduces the defect before the fix and clears it
+after — and a superuser-only check can never do that.
+
+**Fixed by `20261106160737`, after review.** Codex found three things in the
+first draft of that fix and all three held:
+
+1. The comment said "no grant to `anon`" as though that excluded anonymous
+   users. It does not: a **Supabase anonymous sign-in runs as `authenticated`**
+   too. Restricting cloud snapshots to verified accounts would need an
+   `is_anonymous` condition on all three policies and is a product decision
+   nobody has made.
+2. `grant update on runtime_snapshots` is not column-minimal — it also hands
+   over `id` and `created_at`. Narrowed to
+   **`grant update (actor_id, payload)`**, which is exactly what the upsert
+   sends.
+3. `length(payload::text) <= 512` **counts characters while its own comment
+   called it a 512-byte bound.** 200 multibyte characters is 600 bytes and
+   passed. Replaced with `octet_length`.
+
+Codex also reported the bounds migration missing from `supabase/migrations/`;
+it is there and pushed in `64d8bec`, so that one was a stale read and is
+recorded as a false positive rather than acted on.
+
+**Verified live afterwards**: a reload moved `savedAt` from 15:40:43 to
+16:25:36, the row count stayed at 1, and **`created_at` did not move** — which
+proves all three at once: the write lands, it replaces rather than appends, and
+the column-scoped grant really does keep `created_at` out of reach.
+
+**Open, for the payments item:** `earner_payout_profiles` still carries
+Supabase's default grants — `anon` and `authenticated` both hold DELETE,
+INSERT, SELECT, TRUNCATE and UPDATE — with RLS as the only gate. Rows are
+confined to their owner, so nobody can touch anyone else's, but a user may set
+their own `stripe_connected_account_id` to any value and **nothing verifies
+that the Stripe account is theirs**, while `capture-payment` transfers to it.
+Blast radius is nil today (one payout profile, one contract with a
+PaymentIntent, both the owner's) and becomes real the moment a genuine
+counterparty exists. Raised by Codex; measured, not fixed.
+
 ### Stage 4b: the snapshot bound, applied to both projects
 
 `docs/proposals/20261106000000_runtime_snapshot_bounds.sql.draft` adds three
