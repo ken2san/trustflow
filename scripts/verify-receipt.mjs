@@ -3,6 +3,9 @@
 //
 //   node scripts/verify-receipt.mjs <receipt.json>
 //
+// Needs Node 22.18 or newer (or 22.6+/23.x with --experimental-strip-types),
+// because it loads the server's own canonical definition rather than a copy.
+//
 // No network. No database. No credentials. It reads the canonical inputs the
 // receipt carries, recomputes every digest through
 // supabase/functions/_shared/eventCanonical.ts, and compares. If the receipt
@@ -25,10 +28,49 @@
 //   Anything about identity, performance, payment, or intent.
 
 import { readFile } from 'node:fs/promises';
-import {
-  GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
-  deriveAgreementHash, sha256Hex, stableStringify,
-} from '../supabase/functions/_shared/eventCanonical.ts';
+
+// WHY THE CANONICAL DEFINITION IS LOADED, NOT COPIED, AND LOADED LATE
+//   It is a TypeScript file because the Edge Functions that write events import
+//   the same file: one definition of what a hash covers, with no second copy
+//   that can drift. Node imports a `.ts` path only on a runtime that strips
+//   types — 22.18 or newer, or 22.6+/23.x behind --experimental-strip-types.
+//   A static import would therefore fail before any line of this program ran,
+//   with a message about an unknown file extension and no mention of Node. This
+//   is the one program a third party is asked to run, so it has to say so
+//   itself rather than leave them with that.
+const CANONICAL_URL = new URL(
+  '../supabase/functions/_shared/eventCanonical.ts', import.meta.url);
+
+let GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
+  sha256Hex, stableStringify;
+
+/** Resolve the one definition of the hash, or say exactly what is needed. */
+async function loadCanonicalDefinition() {
+  try {
+    ({
+      GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
+      sha256Hex, stableStringify,
+    } = await import(CANONICAL_URL.href));
+  } catch (e) {
+    if (e?.code !== 'ERR_UNKNOWN_FILE_EXTENSION') throw e;
+    const v = process.versions.node;
+    const [maj, min] = v.split('.').map(Number);
+    const flagWouldWork = (maj === 22 && min >= 6) || maj === 23;
+    console.error([
+      `This verifier needs Node 22.18 or newer. This is Node ${v}.`,
+      '',
+      'It recomputes every digest through the same file the server hashes with',
+      '— supabase/functions/_shared/eventCanonical.ts — so a receipt is checked',
+      'against the real definition and not against a copy of it that could have',
+      'drifted. Loading that file needs a Node that strips types.',
+      '',
+      flagWouldWork
+        ? `On this version the flag is enough:\n  node --experimental-strip-types ${process.argv[1]} <receipt.json>`
+        : 'Install Node 22.18 or newer (24 is fine), then run this again.',
+    ].join('\n'));
+    process.exit(2);
+  }
+}
 
 const REQUIRED_CANONICAL = [
   'id', 'type', 'contract_id', 'actor_id', 'dod_hash', 'created_at',
@@ -113,6 +155,7 @@ async function main() {
     console.error('usage: node scripts/verify-receipt.mjs <receipt.json> [other.json]');
     process.exit(2);
   }
+  await loadCanonicalDefinition();
 
   const receipts = [];
   for (const f of files) {

@@ -140,6 +140,12 @@ async function main() {
     // correctness is the thing a receipt is supposed to make unnecessary.
     how_to_verify: {
       command: 'node scripts/verify-receipt.mjs <this-file>',
+      // A reader of this file has no README, so the runtime requirement is
+      // stated here. The verifier loads the server's own canonical definition
+      // instead of a copy, and that file is TypeScript.
+      requires: 'Node 22.18 or newer. On Node 22.6-22.17 or 23.x, add '
+        + '--experimental-strip-types. Older runtimes cannot load the canonical '
+        + 'definition at all.',
       offline: true,
       recomputes: ['event_hash per act', 'chain linkage', 'agreement_hash from the snapshot'],
       canonical_definition: 'supabase/functions/_shared/eventCanonical.ts',

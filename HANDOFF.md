@@ -1,8 +1,9 @@
 # TrustFlow — AI Session Handoff
 
 _Last updated: 2026-11-05 (the legacy surface is removed and the project has a
-linter, CI and accessibility checks for the first time. Migration ledgers level
-at 35; no database or Edge Function changed today)_
+linter, CI and accessibility checks for the first time; the third-party receipt
+verifier now names the runtime it needs instead of dying about file extensions.
+Migration ledgers level at 35; no database or Edge Function changed today)_
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -157,8 +158,11 @@ What the run did **not** cover is Next Priority #1.
   runs lint → build → unit on every push and PR, and
   `.claude/hooks/pre-commit-verify.sh` runs the same three before any commit.
   E2E is in neither: it writes to the live E2E project, so it stays a
-  deliberate local action. **CI pins Node 22** — `scripts/verify-receipt.mjs`
-  imports a `.ts` file and will not run on Node 20.
+  deliberate local action. **CI pins Node 22** — four scripts import a `.ts`
+  file from `_shared` and will not run on Node 20. Of those,
+  `scripts/verify-receipt.mjs` is the one a stranger runs, and it now says so
+  itself (see the portability note below); `make-receipt`, `api-e2e` and
+  `check-sql-draft` need credentials anyway and are covered by `engines`.
   `npm run test:api` (E2E project only) → **20 checks, 0 failed**, and
   `scripts/verify-chain.mjs` recomputed that run's chain independently — 4
   events, 17 checks, `CHAIN VERIFIED`.
@@ -775,10 +779,33 @@ Node that strips types natively (22.18+ / 24). That script is the one a third
 party is meant to run to verify a record independently — the whole evidence
 claim rests on someone else being able to execute it — and on an older Node it
 dies with a message about file extensions. The runner is pinned to 22 and
-`engines` now says `>=22.18`, which stops it being a CI failure; **it does not
-fix the portability of the verifier**, which is a product decision: either
-publish the requirement loudly, or stop importing a `.ts` file from the script
-third parties run. Nothing here chose between those.
+`engines` now says `>=22.18`, which stopped it being a CI failure but did not
+fix the verifier.
+
+**Chosen, later the same day: publish the requirement loudly, and keep the one
+definition.** Dropping the import would mean a second copy of what a hash
+covers, which is the drift `eventCanonical.ts`'s own header exists to forbid —
+and a verifier checking a receipt against a copy proves less than one checking
+it against the file the server hashes with. So the import stays and the script
+carries the requirement:
+
+- The import is now **dynamic and late**, inside `loadCanonicalDefinition()`.
+  A static import fails at module load, before any line of the program runs, so
+  no message of ours could ever have been reached. Only
+  `ERR_UNKNOWN_FILE_EXTENSION` is caught; anything else still throws.
+- The message names Node, the version needed, and why a `.ts` file is being
+  loaded at all, and exits 2. On Node 22.6–22.17 and 23.x it instead prints the
+  `--experimental-strip-types` invocation, which works.
+- `make-receipt.mjs` writes `how_to_verify.requires` into every new receipt. A
+  stranger holding the JSON has no README, so the requirement travels with the
+  artifact. `tests/fixtures/receipt-sample.json` is a real receipt captured on
+  2026-10-11 and was deliberately **not** edited.
+- **Verified on three runtimes, not reasoned about**: Node 20.20.2 → the new
+  message, exit 2; Node 22.17.1 → the flag advice, and `RECEIPT VERIFIED` with
+  the flag; Node 24.4.0 → `RECEIPT VERIFIED`, 0 failed checks. Both older
+  versions were installed with `fnm` for the test. There is **no automated
+  regression test**: CI runs one Node, and a test skipped there would report
+  success for a path nobody exercised, which this file's own lesson forbids.
 
 **Still open from this work:**
 
@@ -817,11 +844,10 @@ third parties run. Nothing here chose between those.
    `evidence-core.spec.js:96` calls one directly, so the points ledger has a
    live server-side writer even though its UI is gone.
 
-   Cheap and unblocked next to it: **`scripts/verify-receipt.mjs` imports a
-   `.ts` file**, so it needs Node 22.18+ and dies on older ones with a message
-   about file extensions. It is the script a third party runs to verify a
-   record independently, which is the whole evidence claim, so either the
-   requirement is published loudly or the import goes.
+   ~~Cheap and unblocked next to it: `scripts/verify-receipt.mjs` imports a
+   `.ts` file.~~ **Done 2026-11-05** — the requirement is published rather than
+   the import removed, and the failure path was exercised on Node 20 and 22.17.
+   See the portability note in the removal section.
 
 1. **A real second human.** The dogfood proved the mechanism (see "Where the
    product stands"); it did not test a stranger. Both addresses were one
