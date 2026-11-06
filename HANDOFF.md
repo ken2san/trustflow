@@ -669,10 +669,14 @@ the strongest find of the pass:
    button disabled below level 2 that advertised "Unlock Chat at Level 2" in
    text overlapping the icon it belonged to.
 
-5. **The failed-load card prints the raw server message** (`ContractsHomeView.jsx:254`
-   renders `{error}` as-is — "server exploded" in the stub, a PostgREST string
-   in production). Low severity and possibly deliberate for diagnosis, but it
-   is backend text shown to a user.
+5. ~~The failed-load card prints the raw server message.~~ **Settled
+   2026-11-05 by labelling it, not by hiding it.** The string stays verbatim —
+   this project's own lesson is that a client which collapses the server's
+   reason hides bugs for weeks — but it is now prefixed "Technical detail:" and
+   set in mono, so a PostgREST sentence no longer reads as advice addressed to
+   the person looking at it. No message mapping was invented; the headline and
+   the "Try again" button already carry what the reader can act on.
+   `contracts-home.spec.js` 13/13 and the three contrast checks pass.
 
 ### The E2E suite was already red, and nothing said so
 
@@ -966,8 +970,10 @@ carries the requirement:
 6. **Act on the visual-review pass** (see the measured section above, dated
    2026-11-04). The contrast fix is done (`3005bd0`) and the "+ New contract"
    candidate was checked and withdrawn, and findings 3 and 4 are fixed. What
-   remains from the pass: finding 5 (the raw server message), the Felix residue
-   inside the Trust Passport, and the ten pre-existing E2E failures above.
+   remains from the pass: the Felix residue inside the Trust Passport, which
+   needs the Trust Passport decision first. Finding 5 is settled (above), and
+   the ten pre-existing E2E failures are gone with the legacy surface — the
+   suite is green.
    Only then
    consider making the capture repeatable — and if it is made repeatable, the
    `auth/v1/signup` stub comes first, or every run keeps minting anonymous

@@ -251,7 +251,14 @@ export default function ContractsHomeView({
           <p className="text-amber-400 text-sm font-bold flex items-center gap-2">
             <AlertTriangle className="w-4 h-4" /> Your contracts could not be loaded.
           </p>
-          <p className="text-xs text-slate-500">{error}</p>
+          {/* Verbatim, and labelled as not addressed to the reader. This
+              project lost two weeks to a client that collapsed the server's
+              reason into one word, so the text stays exactly as the server
+              sent it; what changes is that a PostgREST string no longer reads
+              as advice to the person looking at it. */}
+          <p className="text-xs text-slate-500">
+            Technical detail: <span className="font-mono text-slate-400 break-words">{error}</span>
+          </p>
           {onRetry && (
             <button onClick={onRetry} className="text-xs text-slate-400 hover:text-white underline flex items-center gap-1.5">
               <RefreshCw className="w-3 h-3" /> Try again
