@@ -867,6 +867,165 @@ carries the requirement:
   subscription. If it is wanted it belongs on the agreement screen, keyed to
   the agreement being viewed — not to `selectedItem`.
 
+## What three reviewers found about a prototype left publicly reachable — 2026-11-06
+
+Kenji's question: the site has been sitting at a public URL, so could someone
+play with it, and can junk be reset afterwards? The answer to the second half
+is yes and it is measured below. The first half was reviewed by Codex (code
+audit) and by the `skeptic` subagent (the decision itself), **and both killed
+the proposal this session had reached**, for different reasons. That is the
+clearest return the review regime has produced so far, so the findings are
+recorded in full rather than as a conclusion.
+
+### The proposal that was wrong
+
+"Disable anonymous sign-ins on production; it costs essentially nothing."
+
+It would have **closed account creation entirely.** `requestEarnerVerification`
+is `supabase.auth.updateUser({ email })` (`src/lib/earnerAuth.js:34`) — it
+promotes the *current anonymous session* into a permanent account, and
+`verifyEarnerOtp` confirms it with `type: 'email_change'` (`:45-50`). There is
+no `signUp` path, and `requestSignInCode` passes `shouldCreateUser: false`
+(`:141`). With no anonymous session to promote there is nothing to upgrade, and
+the failure surfaces as "Could not send the code" — a misleading message on a
+publicly linked prototype. `tests/unit/earnerAuth.test.js` mocks `auth`
+wholesale, so the suite stays green through this break.
+
+Verified independently against the source before accepting it. The cost claim
+("four keys and RESTORABLE_VIEWS: home") was simply false.
+
+### What is actually exposed, measured rather than argued
+
+- **No cross-party reads.** `parties_read_own_contracts` is
+  `auth.uid() = earner_user_id OR hirer_user_id`; `runtime_snapshots` is
+  `actor_id = auth.uid()`. Both reviewers looked for a path around it and
+  neither found one. The `trustpoints_balance` SECURITY DEFINER view — the
+  obvious candidate — was already fixed in `20260924000003`.
+- **Anonymous sessions cannot write evidence**: `log-event/index.ts:181-184`.
+  Nor contracts: `verified_earner_only_insert` requires
+  `is_anonymous IS FALSE`.
+- **The phrasing "nobody can read anyone else's data" was wrong** and is
+  retired. The correct statement: *a holder of a valid invite link or guest
+  token can read that agreement, accept it, and write events on it.* That is
+  the designed capability model, and the invite token's unguessability is not a
+  defence against a leaked link.
+- **The three payment functions are live**, `create-payment-intent`,
+  `capture-payment` and `cancel-payment`, all ACTIVE with `verify_jwt` true —
+  and deployed from the **old Dropbox path**, so they are a September vintage.
+  "Unreachable from the UI" is not access control. `cancel-payment:73-116` is
+  callable by *either* party, guest included, and refunds with **no
+  mutual-consent check**. Blast radius today is nil — exactly one contract has
+  a PaymentIntent (`IN_PROGRESS`, 50,000 JPY, the owner's) and one payout
+  profile exists (also the owner's) — so a stranger could only refund a
+  contract they created themselves. It becomes real the moment a genuine
+  counterparty exists.
+- **`timestamp-event` and `send-acceptance-email` are NOT deployed**, so
+  Codex's unauthenticated-TSA-cost and mail-abuse findings are code-only. Both
+  were checked against the live function list, not assumed.
+- **`own_payout_profile_insert` has no `is_anonymous` gate**
+  (`20260921000001_earner_payout_profiles.sql:31`) — an anonymous session can
+  insert its own row with any `stripe_connected_account_id`. Harmless alone,
+  because `capture-payment` resolves the account from
+  `contract.earner_user_id`; recorded because it proves the "one open tap"
+  enumeration was not exhaustive.
+
+### The one that is shaped like a fatal problem, and which all three of us ranked wrong
+
+`disable_signup` is **false** (measured 2026-09-24, recorded at
+`src/lib/earnerAuth.js:107-108`), the URL is public, and any verified account
+may issue invitations. So **one throwaway inbox is enough to send a stranger a
+document that reads as a binding agreement, with arbitrary terms and an
+arbitrary `earner_display_name`, from a URL and sending domain Kenji
+operates.**
+
+It is the only finding here whose damage lands outside the database. Deleting
+the row does not unsend it, and the complaint arrives at the operator. Codex
+filed this under "that is the product working as specified", which is true and
+beside the point. Kenji's own framing is the useful one: junk that can be
+identified is equivalent to a reset, so being able to delete is a comfort —
+but what someone can *give away in your name* is in neither category.
+
+### Account lockout: raised, then downgraded
+
+The `skeptic` pass found that sign-in is email OTP only with no password, that
+the built-in mailer's rate limit is **project-wide** (Kenji's own note,
+`earnerAuth.js:106-111`), and that `/auth/v1/signup` also draws on that quota —
+so the hourly allowance can be held at zero by unauthenticated requests
+*without knowing the owner's address*. While that runs, no new sign-in is
+possible on a fresh browser.
+
+**Not fatal, and the review overstated it.** The Supabase dashboard is
+permanently the owner's: a link can be minted by hand, Custom SMTP configured,
+the address changed. The worst case is being locked out of the *app* until a
+ten-minute fix. Recorded because the reasoning is right even though the
+severity was not. (The public commit address is `ken2san@gmail.com` while the
+production account is a different address, so the targeted form needs a guess —
+but the quota-drain form needs no address at all, which is why that difference
+buys nothing.)
+
+### Reset: yes, and the catch
+
+`events` has **no DELETE or UPDATE policy for any role and no BEFORE DELETE
+trigger**, so append-only holds against clients and not at all against the
+operator through the dashboard. **The hash chain detects modification, not
+deletion** — delete a contract and its events and nothing remains to compare
+against. Which means the record's integrity does not come from the database
+being immutable; it comes from **the counterparty having taken their own
+copy**. That is what `scripts/make-receipt.mjs` and the guest record download
+are for, and nobody has ever taken one, because there has never been a
+counterparty. The deletability that makes a reset easy and the deletability
+that makes the record weak are the same property, and what separates them is
+whether a copy left the building.
+
+Separation is clean: **all 1321 contracts belong to one email-verified user**
+and were created 2026-09-21 → 09-26, so anything newer is by definition not the
+owner's. Order matters — `events_project_contract_state` fires on INSERT only,
+so deleting events alone leaves `contracts.state` wherever the projection put
+it. There are also **814 orphan events** already (pointing at no existing
+contract; `events.contract_id` is text with no foreign key), so this data has
+lost integrity before.
+
+### Why "nobody has visited" is not a measurement
+
+Vercel **Web Analytics is not enabled**, and `auth.audit_log_entries` is
+**empty — zero rows, ever**, so there are no IPs and no auth history. The only
+visit log is `auth.users`: `ensureActorIdentity` mints an anonymous user on
+every session-less load, which makes creation timestamps a proxy for traffic.
+2026-11-06 has 48, in three clusters (UTC 00:25–00:34, 03:06–05:53,
+13:22–13:49); the last is the owner signing in that morning and **the other two
+could not be attributed**. Enabling Web Analytics is therefore the cheapest
+item here, because every priority judgement above is being made without it.
+
+### Order agreed, after both reviews
+
+1. **Vercel Web Analytics on** — one toggle, and it turns "has anyone been
+   here" into an answerable question.
+2. **Captcha (Turnstile) on the auth endpoints** — one move that closes both
+   the signup-driven mail drain and the stranger-issues-invitations-in-your-name
+   path above. The reason is the second one, not the first.
+3. **The three payment functions** — stop or replace the September vintage
+   before a real counterparty exists.
+4. **Bound `runtime_snapshots` in the database** — draft below.
+5. **Leave anonymous sign-ins alone** until there is another way to create an
+   account.
+
+### Stage 4b: the snapshot bound, drafted and tested, not applied
+
+`docs/proposals/20261106000000_runtime_snapshot_bounds.sql.draft` adds three
+CHECK constraints (allowlisted keys, a 512-byte ceiling, leaf types) and a
+unique index giving one row per actor. Verified in a throwaway container —
+applies cleanly, and nine cases agree with it, including that the old
+thirteen-key shape and a document smuggled into `view` are both rejected.
+
+**It is coupled to a client change and the order is not free.** The unique
+index makes the second plain INSERT of any session fail, so
+`src/lib/runtimeState.js` now upserts with `onConflict: 'actor_id'` — which in
+turn needs the index to exist, or PostgREST answers 42P10. **Migration first,
+then the frontend.** Both windows degrade identically and non-fatally (the
+local cache is already written; a warning is the only other effect), but the
+frontend commit is deliberately **not pushed**, because pushing is a production
+deploy and would open the 42P10 window before the migration exists.
+
 ## How this project tests without a second human
 
 Standing arrangement, re-confirmed by Kenji on 2026-11-05 after it was lost in
