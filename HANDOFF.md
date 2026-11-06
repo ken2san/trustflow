@@ -1013,6 +1013,56 @@ refuse a mismatch** — an Edge Function change, so it needs its own approval an
 the whole set deploys together. Until then the window exists and the code says
 so where it is narrowed.
 
+### The third blind pass, and what the contrast gate had never looked at — 2026-11-05/06
+
+Run on the rebuilt screens with no knowledge of the first two passes. It
+confirmed the direction, the payment disclosure and the recap read correctly,
+and found the following, all fixed:
+
+- **A missing space.** "sendsAcme Translations" — a JSX line break ate it on
+  the screen a counterparty sees immediately after committing.
+- **The record printed its own column names**: `counterparty_name` beside the
+  value, and "by You (you)" where the server already labels the viewer's acts
+  "You". Unknown payload keys are now humanised rather than hidden — an
+  unlisted field is still evidence.
+- **Three date formats for one deadline** ("November 30, 2026" on the
+  invitation, "2026-11-30" on the record, and the event timestamps). The
+  record now writes the deadline the way the invitation does.
+- **The dead-link screen treated an already-accepted invitation as a broken
+  link**, listing "already used" as one of four possible faults. Telling the
+  person who used it that their link did not work sends them back to the
+  sender for a replacement nobody should issue; it now says so plainly and
+  points at the access link they were given.
+- **The terms-changed screen told the reader to look at the current terms and
+  offered only "Close".** It offers "Show me the current terms".
+
+**The contrast gate had never seen the invitation.** `visual-accessibility`
+walked through the invitation and the consent screen to reach the record and
+measured only the record. Three blind passes in a row called text on those two
+screens too dim, which was a measurement gap reported three times as an
+opinion. The walk now measures all three, and the first run found **six real
+violations** — `text-slate-500` at 4.05–4.23:1 and `text-slate-600` at 2.66:1
+where 4.5 is the floor. `InviteView` has none of either left.
+
+**Two E2E tests went red because the product improved**, which is the right
+way round: one asserted the ISO deadline the record no longer prints, the
+other asserted that a consumed invitation says "Invalid invite link". Both
+assertions described the old lie and were updated to the new truth.
+
+**Still open from this pass, and none of it is a copy fix:**
+
+- A reader cannot tell, from the record alone, **why two email addresses
+  differ** — only that they do. It is the most legally significant line on the
+  page and it is still unexplained.
+- **"Hash chain verified" fights its own footnote**, which says the reader
+  cannot re-verify the document themselves.
+- The reviewer, asked whether they would accept a real ¥20,000 obligation from
+  someone met once, said **no** — because the product states that it checks
+  nothing, the payment term is explicitly outside the agreement, the sender
+  can edit terms while they read, and nobody is notified. It called the
+  honesty creditable and insufficient. That is the clearest statement yet of
+  what Next Priority #1 will measure.
+
 **Open from the second pass, each needing a decision rather than a fix:**
 
 - ~~Nothing before the checkbox says how or when the payer pays.~~ **Done**, as

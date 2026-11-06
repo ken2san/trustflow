@@ -62,6 +62,10 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
     // invalid link told the reader their link was broken when the terms had
     // simply moved under them.
     const termsChanged = tokenError === 'terms_changed';
+    // Distinct from the rest: the invitation worked, once. Telling someone
+    // their link "did not work" when they are the one who used it sends them
+    // back to the sender for a replacement nobody should issue.
+    const alreadyUsed = tokenError === 'already_used';
     // The server could not check the terms against what this page showed,
     // because the two were built at different times. Nothing is wrong with the
     // agreement, so it must not be described as if something were.
@@ -70,6 +74,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
     const title = isExpired ? 'This invite has expired.'
       : termsChanged ? 'The terms changed while you were reading.'
       : cannotCheck ? 'This page is out of date.'
+      : alreadyUsed ? 'This invitation has already been accepted.'
       : 'Invalid invite link.';
     const body = isExpired
       ? 'Invite links are valid for 72 hours. Ask whoever sent you this link to issue a new one — they can do it from their own copy of the agreement.'
@@ -77,6 +82,8 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       // returns the same refusal for a link that was mistyped, already used,
       // or deleted before it was opened, and telling a stranger it was
       // "modified" when they simply pasted it twice is both wrong and alarming.
+      : alreadyUsed
+      ? 'An invitation can only be accepted once. If that was you, your record of the agreement is reachable from the access link you were given when you accepted, not from this one. If it was not you, say so to whoever sent it before anything else happens.'
       : cannotCheck
       ? 'Nothing was accepted, and nothing is wrong with the agreement. This page was loaded from an older version of TrustFlow than the one now running, so it could not confirm that the terms on screen are still the terms on offer. Reload the page and read them again.'
       : termsChanged
@@ -96,12 +103,27 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             existed for them. There is nowhere for a guest to go — the link
             was their whole entry — so this closes the screen instead of
             pretending otherwise. */}
-        <button
-          onClick={onDecline}
-          className="px-8 py-3 border border-white/10 rounded-2xl font-bold text-slate-400 hover:text-white hover:border-white/20 transition-all text-sm"
-        >
-          Close
-        </button>
+        {/* The terms-changed screen tells the reader to look at the current
+            terms, so it offers that rather than making them find the link
+            again. Everywhere else there is genuinely nowhere for a guest to
+            go — the link was their whole entry — and a button that pretends
+            otherwise is worse than none. */}
+        <div className="flex flex-col items-center gap-3">
+          {termsChanged && (
+            <button
+              onClick={() => window.location.reload()}
+              className="px-8 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all"
+            >
+              Show me the current terms
+            </button>
+          )}
+          <button
+            onClick={onDecline}
+            className="px-8 py-3 border border-white/10 rounded-2xl font-bold text-slate-300 hover:text-white hover:border-white/20 transition-all text-sm"
+          >
+            Close
+          </button>
+        </div>
       </div>
     );
   }
@@ -170,7 +192,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             onChange={e => setDisplayName(e.target.value)}
             placeholder="Your name or handle"
             autoFocus
-            className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-5 text-white text-lg font-bold outline-none transition-all placeholder:text-slate-600"
+            className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-5 text-white text-lg font-bold outline-none transition-all placeholder:text-slate-400"
           />
           <div className="space-y-1">
             <input
@@ -178,13 +200,13 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               value={guestEmail || invitedEmail || ''}
               onChange={e => setGuestEmail(e.target.value)}
               placeholder="Email address (required for contract record)"
-              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-4 text-white font-medium outline-none transition-all placeholder:text-slate-600"
+              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-4 text-white font-medium outline-none transition-all placeholder:text-slate-400"
             />
             {/* "A copy will be sent to you" promised an email nothing sends:
                 send-acceptance-email was deleted on 2026-09-26 and is not to
                 be redeployed. The record is downloadable instead, which is
                 true, and the link is what gets them back to it. */}
-            <p className="text-xs text-slate-500 px-2">Recorded with this agreement as your identifier. No acceptance email is sent — your copy is downloadable from the record, and this link is how you reach it again.</p>
+            <p className="text-xs text-slate-400 px-2">Recorded with this agreement as your identifier. No acceptance email is sent — your copy is downloadable from the record, and this link is how you reach it again.</p>
           </div>
           {/* The terms again, at the moment of commitment.
               Rendered from the same `inviteData` the previous screen used and
@@ -196,15 +218,15 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               screen gone — a blind reviewer said so, and Codex's design review
               set the condition that this recap share one source. */}
           <div className="p-4 bg-white/[0.03] border border-white/5 rounded-2xl space-y-2">
-            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">What you are agreeing to</p>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">What you are agreeing to</p>
             <dl className="text-xs text-slate-300 space-y-1">
-              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Work</dt><dd>{project}</dd></div>
-              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Done when</dt><dd>{(dod ?? []).join(' · ') || 'Not set'}</dd></div>
-              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Amount</dt><dd>{amountLabel}</dd></div>
-              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">By</dt><dd>{deadlineLabel}</dd></div>
-              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Who works</dt><dd>{guestPerforms ? 'You' : inviter}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">Work</dt><dd>{project}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">Done when</dt><dd>{(dod ?? []).join(' · ') || 'Not set'}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">Amount</dt><dd>{amountLabel}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">By</dt><dd>{deadlineLabel}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">Who works</dt><dd>{guestPerforms ? 'You' : inviter}</dd></div>
             </dl>
-            <p className="text-[11px] text-slate-500">A summary of the previous screen, not a replacement for it.</p>
+            <p className="text-[11px] text-slate-400">A summary of the previous screen, not a replacement for it.</p>
           </div>
 
           {/* Deliberately NOT inside the box above, and not inside the consent
@@ -243,7 +265,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           </button>
           <button
             onClick={() => setStage('review')}
-            className="w-full py-3 text-slate-600 hover:text-slate-400 transition-colors font-bold text-sm"
+            className="w-full py-3 text-slate-400 hover:text-slate-400 transition-colors font-bold text-sm"
           >
             ← Back
           </button>
@@ -252,7 +274,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
         {/* No account is created for a counterparty, and none is offered: the
             link is the credential. Saying otherwise promised a sign-up that
             does not exist. */}
-        <p className="text-center text-xs text-slate-600 pb-4">
+        <p className="text-center text-xs text-slate-400 pb-4">
           No account needed. This link is your access — keep it, and ask the
           other party for a new one if you lose it.
         </p>
@@ -283,18 +305,18 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             ? <>You do the work · {inviter} pays you. The terms below are recorded exactly as they stand when you accept.</>
             : <>{inviter} does the work · you pay. The terms below are recorded exactly as they stand when you accept.</>}
         </p>
-        <p className="text-xs font-bold text-slate-500">No account required to review.</p>
+        <p className="text-xs font-bold text-slate-400">No account required to review.</p>
       </div>
 
       {/* Project card */}
       <div className="bg-[#0f172a]/80 border border-white/10 rounded-[40px] p-8 space-y-5 shadow-2xl backdrop-blur-xl">
         <div>
-          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Project</p>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Project</p>
           <h2 className="text-2xl font-black text-white tracking-tight">{project}</h2>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Contract Value</p>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Contract Value</p>
             <p className="text-3xl font-black italic text-white">{amountLabel}</p>
             {/* Scoped to this agreement on purpose. "TrustFlow never holds
                 money" would be a product claim the screen cannot make: the
@@ -307,12 +329,12 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             </p>
           </div>
           <div>
-            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Deadline</p>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Deadline</p>
             <p className="text-lg font-black text-white pt-2">{deadlineLabel}</p>
           </div>
         </div>
         <div>
-          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Who does the work</p>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Who does the work</p>
           <p className="text-sm font-bold text-white">
             {guestPerforms
               ? <>You do the work · {inviter} pays</>
@@ -321,7 +343,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
         </div>
         {dod.length > 0 && (
           <div>
-            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">What counts as complete</p>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">What counts as complete</p>
             <div className="space-y-2">
               {dod.map((item, i) => (
                 <div key={i} className="flex items-start gap-3 text-sm text-slate-300">
@@ -336,7 +358,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
 
       {/* What you gain */}
       <div className="space-y-4">
-        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest text-center">What you get by joining</p>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">What you get by joining</p>
         {GAINS.map(({ icon: Icon, title, body }) => (
           <div key={title} className="flex gap-4 p-5 bg-white/[0.03] border border-white/5 rounded-[24px]">
             <div className="shrink-0 w-10 h-10 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl flex items-center justify-center">
@@ -344,7 +366,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             </div>
             <div>
               <p className="font-black text-white text-sm mb-1">{title}</p>
-              <p className="text-xs text-slate-500 leading-relaxed">{body}</p>
+              <p className="text-xs text-slate-400 leading-relaxed">{body}</p>
             </div>
           </div>
         ))}
@@ -361,12 +383,12 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
         </button>
         <button
           onClick={onDecline}
-          className="w-full py-4 border border-white/10 rounded-[24px] font-bold text-slate-500 hover:text-white hover:border-white/20 transition-all flex items-center justify-center gap-2 text-sm"
+          className="w-full py-4 border border-white/10 rounded-[24px] font-bold text-slate-400 hover:text-white hover:border-white/20 transition-all flex items-center justify-center gap-2 text-sm"
         >
           <X className="w-4 h-4" />
           Not interested
         </button>
-        <p className="text-center text-xs text-slate-600">
+        <p className="text-center text-xs text-slate-400">
           No payment or commitment at this stage — you review the full terms before anything is locked.
         </p>
       </div>

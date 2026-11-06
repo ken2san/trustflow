@@ -200,7 +200,18 @@ test('color contrast: guest record of agreement', async ({ page }) => {
   await page.goto(`/?token=${INVITE_TOKEN}`);
   await expect(page.getByText(ACCEPTED.project_name).first()).toBeVisible({ timeout: 15_000 });
 
+  // The two screens a counterparty reads BEFORE committing had never been
+  // measured: this walk passed through them to reach the record and only
+  // checked the end of it. Three blind reviews in a row called text on them
+  // too dim, which is a measurement gap rather than three opinions.
+  await finishFiniteAnimations(page);
+  await expectNoColorContrastViolations(page);
+
   await page.getByRole('button', { name: 'Review Agreement' }).click();
+  await expect(page.getByPlaceholder('Your name or handle')).toBeVisible();
+  await finishFiniteAnimations(page);
+  await expectNoColorContrastViolations(page);
+
   await page.getByPlaceholder('Your name or handle').fill('Guest');
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: /I Agree/ }).click();

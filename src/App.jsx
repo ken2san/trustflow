@@ -1292,7 +1292,7 @@ const App = () => {
                 temporary state, which reads as a product about to change
                 under someone who has just committed. */}
             <p className="text-xs text-slate-400 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
-              TrustFlow does not process the payment for this agreement, and sends
+              TrustFlow does not process the payment for this agreement, and sends{' '}
               {selectedItem?.client} no notification that you accepted — reach them the
               way they reached you. Either of you can then record that a payment was sent or
               received, which TrustFlow stores as your statement rather than as a

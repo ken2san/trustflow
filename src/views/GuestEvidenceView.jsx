@@ -76,7 +76,7 @@ function describeAgreement(agreement) {
   }
   const amount = formatAmount(agreement.amount, agreement.currency);
   if (amount) rows.push(['Amount', amount]);
-  if (agreement.deadline) rows.push(['By', agreement.deadline]);
+  if (agreement.deadline) rows.push(['By', formatDay(agreement.deadline)]);
   // Stated in plain terms rather than echoing the stored value: the snapshot
   // says "counterparty", which means the person reading this page.
   if (agreement.performed_by) {
@@ -96,6 +96,31 @@ function formatWhen(iso) {
     return iso;
   }
 }
+
+/** A date as the invitation writes it, so one fact has one spelling. */
+function formatDay(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/**
+ * Field names a reader should not have to decode.
+ *
+ * The record printed `counterparty_name` — a column name — beside the value,
+ * on the one screen meant to be legible to someone who has never used this
+ * product. Unlisted keys are humanised rather than hidden: an unknown field is
+ * still evidence, and dropping it would quietly narrow the record.
+ */
+const PAYLOAD_LABELS = {
+  counterparty_name: 'Name given when accepting',
+  note: 'Note',
+  reason: 'Reason given',
+  amount: 'Amount',
+};
+
+const humanise = (key) => key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
 function EventRow({ event }) {
   const attested = event.integrity.trust_model === 'server_attested';
@@ -118,14 +143,18 @@ function EventRow({ event }) {
 
       <p className="text-xs text-slate-400 mt-1">
         by <span className="text-slate-300">{event.actor.label}</span>
-        {event.actor.role === 'guest_hirer' && <span className="text-slate-400"> (you)</span>}
+        {/* The server already labels the viewer's own acts "You"; adding
+            "(you)" to that produced "by You (you)". The suffix is for an act
+            attributed to a named party that happens to be the reader. */}
+        {event.actor.role === 'guest_hirer' && event.actor.label !== 'You'
+          && <span className="text-slate-400"> (you)</span>}
       </p>
 
       {Object.keys(event.payload).length > 0 && (
         <dl className="mt-2 text-[11px] text-slate-400 space-y-0.5">
           {Object.entries(event.payload).map(([key, value]) => (
             <div key={key} className="flex gap-2">
-              <dt className="text-slate-400">{key}</dt>
+              <dt className="text-slate-400">{PAYLOAD_LABELS[key] ?? humanise(key)}</dt>
               <dd className="text-slate-400">
                 {Array.isArray(value) ? value.join(', ') : String(value)}
               </dd>

@@ -160,7 +160,11 @@ test('the record shows what was accepted, read from the acceptance itself', asyn
   await expect(page.getByText('What was accepted')).toBeVisible();
   await expect(page.getByText('return a stamped PDF')).toBeVisible();
   await expect(page.getByText('¥20,000')).toBeVisible();
-  await expect(page.getByText('2026-11-30')).toBeVisible();
+  // One fact, one spelling: the invitation writes the deadline as
+  // "November 30, 2026" and the record used to write the same date as
+  // "2026-11-30", which a blind reader counted as a third date format on a
+  // screen that already had two.
+  await expect(page.getByText('November 30, 2026')).toBeVisible();
 });
 
 test('the record does not claim the accepting identity was established', async ({ page }) => {

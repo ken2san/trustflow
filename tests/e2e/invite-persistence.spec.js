@@ -180,7 +180,11 @@ test('an expired invite fails closed', async ({ page, request }) => {
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto(`/?token=${contract.invite_token}`);
 
-  await expect(page.getByText(/Invalid invite link|expired/i)).toBeVisible({ timeout: 15_000 });
+  // A consumed token is its own answer, not "invalid link": telling the person
+  // who used it that their link is broken sends them back to the sender for a
+  // replacement nobody should issue. Changed 2026-11-05 after a blind review
+  // read the old wording as an accusation.
+  await expect(page.getByText(/already been accepted/i)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole('button', { name: /Review Agreement/i })).toHaveCount(0);
 });
 
