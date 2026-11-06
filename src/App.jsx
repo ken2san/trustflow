@@ -1306,14 +1306,18 @@ const App = () => {
 
       </main>
 
-      <nav aria-label="Primary, compact" className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A]/80 backdrop-blur-2xl border-t border-white/10 px-8 py-5 flex justify-center items-center z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
+      {/* Hidden on a guest surface: its single button goes to the operator's
+          contracts list, which a counterparty has no account for, and at phone
+          width the bar covered the completion criteria on the invitation and
+          the timeline on the record (blind review, 2026-11-05). */}
+      {!onGuestSurface && <nav aria-label="Primary, compact" className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A]/80 backdrop-blur-2xl border-t border-white/10 px-8 py-5 flex justify-center items-center z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
         <button title="Contracts" className={`p-3 transition-all duration-300 ${view === 'home' ? 'text-indigo-400 scale-125 bg-indigo-500/10 rounded-2xl shadow-[0_0_20px_rgba(99,102,241,0.2)]' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => { setIsCommandOpen(false); setView('home'); }}><LayoutGrid className="w-6 h-6" /></button>
         {/* The Wallet button and the profile avatar stood here. The avatar was
             the same hardcoded "F" the desktop header carried, and it survived
             bd33c34 because that change only touched the header and every frame
             reviewed for it was desktop-width — the mobile bar is sm:hidden.
             Recorded as the method's blind spot in HANDOFF.md. */}
-      </nav>
+      </nav>}
 
       <style>{`
         body { background-color: #020617; margin: 0; }

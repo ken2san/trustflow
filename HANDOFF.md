@@ -917,13 +917,53 @@ for the record). **A capture artefact spends a reviewer's attention on the
 camera** — so does a fixture that disagrees with itself, which this one did by
 showing one email in the form and another in the record.
 
-**Open from the pass, not acted on:**
+**The operator chrome is gone from guest surfaces** (approved and done the same
+day): `GUEST_SURFACE_VIEWS` covers invite, invite-accepted and guest-evidence,
+plus the agreement screen when it was opened with a guest credential. The ⌘K
+bar, "Sign in", "SWITCH TO HIRE", the activity badge, the "PROFESSIONAL"
+subtitle and the compact bottom nav are all hidden there.
 
-- The guest sees operator chrome throughout: the ⌘K command bar, "Sign in",
-  "SWITCH TO HIRE" and an activity icon with an unread badge — on a page
-  reached by a link, by someone with no account. The reviewer read all of it as
-  template filler. Hiding the chrome on the invite and guest-record views is a
-  contained change and a product decision.
+**A second blind pass then ran on the corrected screens**, told nothing about
+the first. It confirmed the direction now reads correctly and found two
+layout defects that the first pass could not see because the capture was
+hiding them:
+
+- **The compact bottom nav covered the content at phone width** — the
+  completion criteria on the invitation, the timeline on the record. It is one
+  button, to the operator's contracts list. Hidden on guest surfaces.
+- **The stage change kept the previous screen's scroll offset**, so on a phone
+  "How should we address you?" opened behind the fixed header: the heading of
+  the screen that asks for consent, unreadable. `InviteView` now scrolls to the
+  top when the stage changes.
+
+**Codex's verdicts on the remaining three claims** (stage ②): claim 3 TRUE on
+the normal path; claim 2 **OVERSTATED** — `guest-contract-events` caps at 500
+events and sets `truncated`, which the screen and the exported file both carry,
+so "Everything recorded against this agreement" was not true past that, now
+stated as a number; claim 4 **OVERSTATED** on who re-issues — there is no
+guest-initiated path, only the authenticated owner. It also checked the capture
+spec and found no unstubbed door to an account or a database write.
+
+**Open from the second pass, each needing a decision rather than a fix:**
+
+- **Nothing before the checkbox says how or when the payer pays.** It appears
+  only after acceptance, on screen 04, as "Acme Translations will contact you
+  about it". Both passes independently named payment as the thing most likely
+  to produce "that is not what I agreed to".
+- **"No account required *yet*" and "not collecting money for this agreement
+  *yet*"** read as a product that will change under someone who has already
+  committed.
+- **"Hash chain verified" fights its own footnote.** The headline reassurance
+  and "it is not a document you can re-verify yourself" pull in opposite
+  directions, and the reviewer could not tell whether "verified" covered
+  identity or terms.
+- **Someone who already accepted and reopens their link lands on the dead-link
+  screen** with no route back to their record, and the screen no longer knows
+  who sent it.
+- Smaller: the timeline prints `counterparty_name` and "by You (you)"; the
+  deadline renders "November 30, 2026" on the invitation and "2026-11-30" on
+  the record; "Join This Contract" and "name or handle" read oddly for a
+  two-party agreement.
 - Screen 04's payment note says TrustFlow "is not collecting money for this
   agreement **yet**", which reads as a product that will change under the
   reader after they have committed.

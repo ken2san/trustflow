@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShieldCheck, ArrowRight, X, Download, Lock, CheckCircle2, User, AlertTriangle, Clock } from "lucide-react";
 
 // Each of these says only what the system does. The three cards here used to
@@ -24,7 +24,11 @@ const GAINS = [
   {
     icon: Download,
     title: "You get your own copy of the record.",
-    body: "Everything recorded against this agreement, downloadable as a file that is yours to keep. No account needed, and it does not depend on TrustFlow still being here to read it.",
+    // "Everything recorded" was OVERSTATED (Codex audit, 2026-11-05):
+    // guest-contract-events returns at most 500 events, oldest first, and sets
+    // a `truncated` flag that the screen and the exported file both carry. Not
+    // a silent loss, but not everything either, so the number is stated.
+    body: "What is recorded against this agreement — up to the most recent 500 entries, and the file says so if there are more — downloadable as a file that is yours to keep. No account needed, and reading it does not depend on TrustFlow still being here.",
   },
   {
     icon: Lock,
@@ -40,6 +44,14 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
   const [displayName, setDisplayName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
   const [consentChecked, setConsentChecked] = useState(false);
+
+  // Each stage is a new screen on one scrolled page, so without this the
+  // second one opens at the first one's scroll offset. At phone width that put
+  // "How should we address you?" behind the fixed header — the heading of the
+  // screen asking for consent, unreadable, which is how the blind review of
+  // 2026-11-05 met it.
+  useEffect(() => { window.scrollTo({ top: 0 }); }, [stage]);
+
 
   // Token error states (expired, tampered, malformed)
   if (tokenError || !inviteData) {
