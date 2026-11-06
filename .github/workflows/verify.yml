@@ -1,0 +1,41 @@
+# Lint, build and unit tests on every push and pull request.
+#
+# Added 2026-11-05. The reason is specific: the E2E suite had been failing on
+# ten tests for weeks and nothing said so — the last full run before that day
+# appears to predate October. Local gates exist (.claude/hooks/pre-commit-
+# verify.sh blocks a commit when lint, build or the unit suite fails), but a
+# local hook only protects the machine it runs on and only the agent that
+# honours it.
+#
+# The E2E suite is deliberately NOT here. It drives a real Supabase project and
+# a full run writes roughly 68 contracts and 50 anonymous users to it, so it
+# stays a deliberate, local, approved action rather than something a push
+# triggers. What is here is everything that is free and side-effect-free.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Ordered cheapest-first, and each is a gate the one after it cannot
+      # stand in for. Lint catches an identifier that no longer exists, which
+      # the build does not resolve and the unit suite — which renders no
+      # component — never executes. That exact gap put a blank-screen build
+      # past both of them on the day this file was written.
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
