@@ -1,6 +1,6 @@
 # TrustFlow — Architecture Decisions
 
-_Last updated: 2026-11-05_
+_Last updated: 2026-11-06_
 
 > This file records significant design decisions and the reasoning behind them.
 > AI agents must read this before proposing changes to established patterns.
@@ -10,6 +10,69 @@ _Last updated: 2026-11-05_
 > are annotated with a status line saying what the implementation actually does;
 > `Protocol.md` describes the implemented protocol and `HANDOFF.md` the current
 > operational state.
+
+---
+
+## Current scope
+
+### [2026-11-06] — The money promise is recorded; settlement operations are out of current scope
+
+**Decision, by the owner, stated so it stops being re-derived.** TrustFlow
+records *the promise about money* and *what each party says happened*. It does
+not move, hold, capture or refund anything. In the owner's words: the record of
+the agreement about money should exist, but **touching settlement creates a wall
+that has to be crossed** — the 資金移動業 / 前払式支払手段 question in the Stripe
+Connect entry below, and the deliberate abandonment of "record, don't block" that
+holding funds would require.
+
+**This is a scope decision, not a reversal.** The Stripe Connect entry stays
+"decided, not built" and is **not** reversed; it remains what should be built if
+payment is ever wired. Nothing here promotes Stripe into the development queue,
+and nothing here forbids it later.
+
+**It is also not what the 2026-09-27 reframe says.** That entry opens by calling
+itself "a design conversation, not a decision to implement anything" and reasons
+from *if* payment management is abandoned. A session on 2026-11-06 read it as an
+established descoping and was corrected. The reframe is a line of reasoning; this
+entry is the decision.
+
+**What is in scope follows from that, and is narrower than "no money" implies:**
+
+- `amount` and `currency` are part of `buildAgreementSnapshot`, hashed into
+  `agreement_hash` and bound to the acceptance. **Agreeing to a sum is squarely
+  in scope** even though no sum ever moves — how it is shown, understood,
+  approved and recorded is central, not peripheral.
+- Settlement is recorded as assertion only: `payment.reported`,
+  `payment.acknowledged`, `payment.disputed` — the three types a party may write
+  (`log-event/index.ts:76-87`). Nothing claims a payment was verified.
+- Predicting whether real people accept such a sum is a market question, not a
+  development gate. See HANDOFF's Next Priority #1.
+
+**Two things found while writing this, both measured, both corrected from a
+claim this project had been making:**
+
+1. **The three payment Edge Functions write no events at all.** Not one.
+   `payment.intent_created` / `captured` / `refunded` exist only as unused
+   constants in `src/lib/eventLog.js:61-63`, and the comment in
+   `log-event/index.ts:79-83` saying service-role functions write them describes
+   something that was never implemented. A comment is not evidence of an
+   implementation.
+2. **`cancel-payment` changes the agreement with no money involved and leaves no
+   record.** `cancel-payment/index.ts:73-99` takes *one* party's authorization,
+   sets `state = 'CANCELLED'` before touching Stripe at all, and only refunds
+   `if (contract.stripe_payment_intent_id)`. It writes a `trustpoints_ledger`
+   penalty to both parties and **appends no event**. So one side can cancel an
+   accepted agreement and the append-only record says nothing happened. For a
+   product whose only claim is the record, that is worse than a money bug, and
+   "blast radius is nil because no money has moved" — said by a session on
+   2026-11-06 — is false.
+
+**Consequence.** Retiring the live payment surface is a scope-alignment task, not
+a feature removal, and it is more urgent than the money angle suggested. It does
+**not** require deciding the cancellation semantics first: stopping a dangerous
+writer and choosing what cancellation should mean are separate, and the latter
+stays open (see the 2026-09-25 entry). Retirement needs its own approval and is
+not performed by this entry.
 
 ---
 

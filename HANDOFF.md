@@ -1120,6 +1120,52 @@ token was accepted, and reaching it costs nothing from a project-wide mail
 quota that an earlier review had identified as drainable. Use this probe, not a
 real address, whenever this needs re-checking.
 
+### The payment surface: what it actually does, measured — 2026-11-06
+
+Scope was clarified by the owner and recorded in `Decisions.md` under **Current
+scope** — the money promise is recorded, settlement operations are out of
+current scope. That entry is the authority; this section is what was measured
+while writing it, because two things this file and the code comments had been
+saying are false.
+
+**1. The three payment Edge Functions write no events. Not one.**
+
+```
+create-payment-intent  events written: 0
+capture-payment        events written: 0
+cancel-payment         events written: 0
+```
+
+`payment.intent_created` / `payment.captured` / `payment.refunded` exist only
+as unused constants in `src/lib/eventLog.js:61-63`. The comment at
+`log-event/index.ts:79-83` saying service-role functions write them describes
+something never implemented, and a session on 2026-11-06 relayed that comment
+as fact. **A comment is not evidence of an implementation** — the same mistake
+as the `length`-called-a-byte-bound defect earlier the same day.
+
+What a party CAN write is unchanged and is the honest record:
+`payment.reported`, `payment.acknowledged`, `payment.disputed`.
+
+**2. `cancel-payment` changes the agreement with no money, and records
+nothing.** `cancel-payment/index.ts:73-99`: one party's authorization is
+enough, `state = 'CANCELLED'` is set **before Stripe is touched at all**, the
+refund runs only `if (contract.stripe_payment_intent_id)`, a
+`trustpoints_ledger` penalty is written to both parties — and **no event is
+appended**.
+
+So one side can cancel an accepted agreement and the append-only record says
+nothing happened. **For a product whose only claim is the record, this is worse
+than a money bug**, and the claim made earlier that day — "blast radius is nil
+because no money has moved" — is false. Found by Codex's design review, then
+confirmed in source.
+
+**Retirement is therefore scope alignment, not feature removal, and it does not
+wait on the cancellation semantics.** Stopping a dangerous writer and deciding
+what cancellation should mean are separate; the latter stays open (Next
+Priority #3). Order, dependencies and the approval it needs are in the review's
+plan — note `tests/e2e/evidence-core.spec.js:87-101` expects a 409 from
+`capture-payment`, so that guarantee moves rather than being deleted.
+
 ### A defect shipped to production, and the test that could not have caught it — 2026-11-06
 
 `20261106160059` gave `runtime_snapshots` one row per actor and the client
