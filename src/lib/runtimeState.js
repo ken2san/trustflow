@@ -54,7 +54,7 @@ const LOCAL_SNAPSHOT_KEY = 'tf_runtime_snapshot_v1'
  * wrong in a way worth recording. `uiProfile` and `internalProfile` were on it,
  * described in a comment as "mock gamification counters, no personal data" —
  * which was a claim about the names, not about the objects. Their declared
- * shapes (src/lib/profileTypes.js) are:
+ * shapes, from the profile types that used to live in src/lib/ were:
  *
  *   internalProfile.feedbackComments[] — { comment, rating, partnerId }
  *   internalProfile.recentHistory[]    — { partnerId, feedback, value, … }
@@ -71,32 +71,27 @@ const LOCAL_SNAPSHOT_KEY = 'tf_runtime_snapshot_v1'
  *
  * So the unit of permission is a declared leaf with a declared type. Anything
  * not named here is dropped at whatever depth it appears; anything named but
- * of the wrong type is dropped rather than coerced. `internalProfile` is gone
- * entirely: nothing in the app ever writes it, so syncing it bought nothing in
- * exchange for carrying every one of those fields.
+ * of the wrong type is dropped rather than coerced.
  *
- * The eight `uiProfile` numbers that remain are exactly the ones the app
- * actually updates (App.jsx:656, :687, :793 and ContractView.jsx:141, :188).
- * Everything else in that object is a static initial value, so dropping it
- * costs no behaviour at all. They are also mock Trust Ladder counters, not
- * evidence of anything — see Roadmap.md.
+ * WHY THE SHAPE IS CURRENTLY FLAT, AND WHY THE DESCENT STAYS
+ * `uiProfile`'s eight counters and `step` were declared here until 2026-11-05.
+ * They were written by the blind-rating, staking and five-step flows; with
+ * those removed (Decisions.md, same date) nothing in the app could change
+ * either one, so every save posted the same initial constants back to a table
+ * whose only reader restores them into state nothing reads. `internalProfile`
+ * had gone the same way earlier, for the same reason.
+ *
+ * Nothing nested is declared today, which does NOT make the per-leaf descent
+ * dead code: a flat list of top-level names is exactly the defect above, and
+ * the next feature to sync an object would otherwise inherit it. The descent
+ * is kept, and `filterToShape` is exported so it stays covered by tests that
+ * pass their own shape while the live one is flat.
  */
 export const CLOUD_SAFE_SHAPE = {
   hasOnboarded: 'boolean',
   mode: 'string',
   view: 'string',
-  step: 'number',
   savedAt: 'string',
-  uiProfile: {
-    level: 'number',
-    exp: 'number',
-    points: 'number',
-    trustScore: 'number',
-    completedContracts: 'number',
-    avgRating: 'number',
-    totalEarned: 'number',
-    totalSpent: 'number',
-  },
 }
 
 /** Whether a value is of the declared primitive type. No coercion. */
@@ -120,7 +115,7 @@ function isOfType(value, type) {
  * declared leaf whose value arrives as an object or an array is dropped, so a
  * scalar slot cannot be used to smuggle a structure through.
  */
-function filterToShape(value, shape) {
+export function filterToShape(value, shape) {
   if (typeof shape === 'string') return isOfType(value, shape) ? value : undefined
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
 
@@ -180,12 +175,14 @@ export const CLOUD_SAFE_KEYS = Object.keys(CLOUD_SAFE_SHAPE)
 /**
  * Lay a filtered remote snapshot over the local one, following the same shape.
  *
- * A plain `{ ...local, ...remote }` would be wrong now that the shape reaches
- * inside objects: the server's `uiProfile` holds eight of that object's
- * seventeen fields, so a shallow spread would REPLACE the local one and wipe
- * the nine the server is no longer allowed to carry. The user would watch a
- * cross-device restore delete data the privacy change was supposed to leave
- * alone. Merging per declared leaf keeps both halves.
+ * A plain `{ ...local, ...remote }` is wrong wherever the shape reaches inside
+ * an object, which it did until 2026-11-05 and will again: the server held
+ * eight of `uiProfile`'s seventeen fields, so a shallow spread would REPLACE
+ * the local object and wipe the nine it is not allowed to carry — a
+ * cross-device restore deleting data the privacy change existed to leave
+ * alone. Merging per declared leaf keeps both halves, and the `shape`
+ * parameter is what keeps that behaviour testable while the live shape is
+ * flat.
  */
 export function mergeRemoteOverLocal(local, remote, shape = CLOUD_SAFE_SHAPE) {
   if (!remote || typeof remote !== 'object') return local

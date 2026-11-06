@@ -2,8 +2,9 @@
 
 _Last updated: 2026-11-05 (the legacy surface is removed and the project has a
 linter, CI and accessibility checks for the first time; the third-party receipt
-verifier now names the runtime it needs instead of dying about file extensions.
-Migration ledgers level at 35; no database or Edge Function changed today)_
+verifier now names the runtime it needs; the runtime snapshot stopped carrying
+six dead states. Migration ledgers level at 35; no database or Edge Function
+changed today)_
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -822,11 +823,9 @@ carries the requirement:
   UUID-shaped string beyond the contract, event and actor ids. Actor ids are
   deliberately returned: `canonical.actor_id` is part of what an independent
   verifier rehashes, so withholding it would make the record unverifiable.
-- **Stage 4, needing approval**: `uiProfile`'s eight counters now have no
-  writer at all, yet still round-trip through `CLOUD_SAFE_SHAPE` into the
-  `runtime_snapshots` table. `internalProfile`, `acceptanceProtocol`,
-  `contractHistory` and `step` are in the same position. Nothing was changed in
-  the database.
+- ~~**Stage 4, needing approval**: `uiProfile`'s eight counters have no writer
+  and still round-trip into `runtime_snapshots`.~~ **The client half is done,
+  2026-11-05; the stored rows are still Kenji's call.** See "Stage 4a" below.
 - The `capture-payment` and `cancel-payment` edge functions still write
   `trustpoints_ledger`, and `evidence-core.spec.js:96` calls one directly. The
   UI layer is gone; the server side is untouched and undecided.
@@ -836,14 +835,38 @@ carries the requirement:
 
 ## Next Priority (in order)
 
-0. **Stage 4 of the removal — needs approval, touches the database.** The eight
-   `uiProfile` counters have had no writer since 2026-11-05 (the blind-rating
-   and staking steps that wrote them are gone), yet they still round-trip
-   through `CLOUD_SAFE_SHAPE` into the `runtime_snapshots` table on every save.
-   `internalProfile`, `acceptanceProtocol`, `contractHistory` and `step` are in
-   the same position. Decide what the snapshot should still carry, then whether
-   stored rows are left alone — the migration's own design copies rather than
-   moves, so nothing is lost by leaving them. Separately and also undecided:
+0. **Stage 4a — done 2026-11-05, client only, no database change.** What the
+   snapshot carries was the answerable half, so it was answered: the six states
+   that had lost their last writer are gone from `App.jsx` —
+   `uiProfile`, `internalProfile`, `acceptanceProtocol`, `badActorFlags`,
+   `contractHistory`, `step` — and `CLOUD_SAFE_SHAPE` is now **flat**
+   (`hasOnboarded`, `mode`, `view`, `savedAt`). `mode`, `view`, `selectedItem`,
+   `byocForm` and `activityLog` still have real writers and stay.
+   `src/lib/profileInitialData.js` went with them; knip reports no new orphan.
+
+   Two things worth knowing about how it was done:
+
+   - **The per-leaf descent in `runtimeState.js` was kept, not removed.** A
+     flat list of top-level names is the exact defect that file was written to
+     fix, and the next feature to sync an object would have inherited it. Since
+     nothing nested is declared any more, `filterToShape` is exported and the
+     depth tests pass their own shape — otherwise the privacy guarantee would
+     have become untested the moment it had no live example.
+   - **Two tests were passing for the wrong reason** and were rewritten:
+     `cloudSafeSubset({ step: NaN })` returned `{}` because `step` is now
+     undeclared, not because `NaN` was rejected, so the type check it claimed
+     to make could no longer go red. The rewritten file was then mutation-tested
+     — making `filterToShape` return its input turns 12 tests red — because
+     this project has shipped a test that never once failed on a path that was
+     broken for two weeks.
+
+   **Still Kenji's call, and the only part that touches the database:** whether
+   the stored rows are left as they are. Nothing was deleted; existing rows
+   still carry the old keys and are now filtered on read, which is what
+   `runtimeState.js` already did for pre-allowlist rows. The migration's design
+   copies rather than moves, so nothing is lost by leaving them.
+
+   Separately and also undecided:
    `capture-payment` and `cancel-payment` still write `trustpoints_ledger` and
    `evidence-core.spec.js:96` calls one directly, so the points ledger has a
    live server-side writer even though its UI is gone.

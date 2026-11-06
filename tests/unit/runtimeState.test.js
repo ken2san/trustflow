@@ -20,7 +20,16 @@ vi.mock('../../src/lib/identity.js', () => ({ getDeviceId: () => 'device-1' }))
 const {
   CLOUD_SAFE_KEYS, CLOUD_SAFE_SHAPE, cloudSafeSubset, mergeRemoteOverLocal,
   saveRuntimeSnapshot, loadRuntimeSnapshot, RESTORABLE_VIEWS, restorableView,
+  filterToShape,
 } = await import('../../src/lib/runtimeState.js')
+
+// The live shape has been flat since 2026-11-05: `uiProfile`'s counters and
+// `step` lost their last writer when the reputation layer and the five-step
+// flow were removed, so the table was being posted constants. The per-leaf
+// descent stays in the module — a flat list of top-level names is the exact
+// defect this file exists for — and these shapes keep it covered while nothing
+// nested is declared. Each is local to a test, never the module's own.
+const NESTED_SHAPE = { profile: { level: 'number', note: 'string' } }
 
 // The real UI state object, with every key App.jsx actually saves.
 const FULL_STATE = {
@@ -209,66 +218,65 @@ describe('cloudSafeSubset', () => {
 // nested field staying empty, which is not a guarantee.
 
 describe('nested fields', () => {
-  it('sends only the declared leaves of an allowlisted object', async () => {
+  it('sends no profile object at all, now that nothing in the app writes one', async () => {
     await saveRuntimeSnapshot(FULL_STATE, 'actor-1')
     const sent = insert.mock.calls.at(-1)[0].payload
 
-    expect(Object.keys(sent.uiProfile).sort())
-      .toEqual(Object.keys(CLOUD_SAFE_SHAPE.uiProfile).sort())
-    // The nine undeclared fields of the same object, named individually so a
-    // failure says which one got through.
-    for (const key of ['badActorFlags', 'location', 'badges', 'skillEndorsements',
-      'joinDate', 'verified', 'responseSpeed', 'repeatClients']) {
-      expect(sent.uiProfile, key).not.toHaveProperty(key)
-    }
-  })
-
-  it('does not send internalProfile at all', async () => {
-    // Nothing in the app ever writes it, so syncing it bought nothing in
-    // exchange for feedbackComments, recentHistory and networkGraph.
-    await saveRuntimeSnapshot(FULL_STATE, 'actor-1')
-    const sent = insert.mock.calls.at(-1)[0].payload
-
+    expect(sent).not.toHaveProperty('uiProfile')
     expect(sent).not.toHaveProperty('internalProfile')
+    expect(sent).not.toHaveProperty('step')
+    // Including every nested field the first allowlist would have admitted.
+    for (const value of ['badActorFlags', 'location', 'feedbackComments',
+      'networkGraph', 'recentHistory']) {
+      expect(JSON.stringify(sent), value).not.toContain(value)
+    }
+    expect(CLOUD_SAFE_KEYS).not.toContain('uiProfile')
     expect(CLOUD_SAFE_KEYS).not.toContain('internalProfile')
-    expect(JSON.stringify(sent)).not.toContain('feedbackComments')
-    expect(JSON.stringify(sent)).not.toContain('networkGraph')
   })
 
-  it('drops a field added to a profile later, at any depth', async () => {
-    await saveRuntimeSnapshot({
-      ...FULL_STATE,
-      uiProfile: {
-        ...FULL_STATE.uiProfile,
-        // Exactly the shape of the next feature to be written here.
-        lastPartner: { email: 'future@example.test', rating: 1 },
-        disputeNotes: 'they never replied',
-      },
-    }, 'actor-1')
-    const serialized = JSON.stringify(insert.mock.calls.at(-1)[0].payload)
+  it('keeps only the declared leaves of a nested object, when one is declared', () => {
+    // The guarantee the module is built on, exercised through the shape
+    // parameter because the live shape declares nothing nested today. Without
+    // this the descent would be untested and re-adding a nested field would
+    // inherit a top-level allowlist by accident.
+    const kept = filterToShape(
+      { profile: { level: 3, note: 'ok', partnerId: 'partner@example.test',
+        nested: { email: 'deeper@example.test' } } },
+      NESTED_SHAPE)
 
-    expect(serialized).not.toContain('future@example.test')
-    expect(serialized).not.toContain('lastPartner')
-    expect(serialized).not.toContain('disputeNotes')
+    expect(kept).toEqual({ profile: { level: 3, note: 'ok' } })
+    expect(JSON.stringify(kept)).not.toContain('partner@example.test')
+    expect(JSON.stringify(kept)).not.toContain('deeper@example.test')
+  })
+
+  it('drops a field added to a declared object later, at any depth', () => {
+    const kept = filterToShape(
+      { profile: { level: 1, lastPartner: { email: 'future@example.test', rating: 1 },
+        disputeNotes: 'they never replied' } },
+      NESTED_SHAPE)
+
+    expect(JSON.stringify(kept)).not.toContain('future@example.test')
+    expect(JSON.stringify(kept)).not.toContain('lastPartner')
+    expect(JSON.stringify(kept)).not.toContain('disputeNotes')
   })
 
   it('refuses a structure smuggled into a scalar slot', async () => {
-    // `level` is declared a number. An object or an array arriving in it is
-    // dropped, not stringified and not passed through.
+    // `mode` and `hasOnboarded` are declared scalars. An object or an array
+    // arriving in one is dropped, not stringified and not passed through.
     await saveRuntimeSnapshot({
-      ...FULL_STATE,
-      step: { note: 'leak@example.test' },
-      uiProfile: {
-        level: { toString: 'leak@example.test', email: 'leak@example.test' },
-        points: ['leak@example.test'],
-        trustScore: 90,
-      },
+      hasOnboarded: ['leak@example.test'],
+      mode: { note: 'leak@example.test' },
+      view: 'home',
     }, 'actor-1')
     const sent = insert.mock.calls.at(-1)[0].payload
 
     expect(JSON.stringify(sent)).not.toContain('leak@example.test')
-    expect(sent).not.toHaveProperty('step')
-    expect(sent.uiProfile).toEqual({ trustScore: 90 })
+    expect(sent).not.toHaveProperty('mode')
+    expect(sent).not.toHaveProperty('hasOnboarded')
+    expect(sent.view).toBe('home')
+    // And the same at depth.
+    expect(filterToShape({ profile: { level: { x: 1 }, note: ['a'] } }, NESTED_SHAPE))
+      .toBeUndefined()
   })
 
   it('never reads a key the shape does not name, including __proto__', async () => {
@@ -276,52 +284,68 @@ describe('nested fields', () => {
     // rather than merely unlisted.
     const crafted = JSON.parse(
       '{"mode":"earner","__proto__":{"polluted":"leak@example.test"},' +
-      '"constructor":{"x":1},"uiProfile":{"level":1,"__proto__":{"y":2}}}')
+      '"constructor":{"x":1}}')
     await saveRuntimeSnapshot(crafted, 'actor-1')
     const sent = insert.mock.calls.at(-1)[0].payload
 
     expect(JSON.stringify(sent)).not.toContain('leak@example.test')
     expect(sent).not.toHaveProperty('constructor')
-    expect(Object.keys(sent).sort()).toEqual(['mode', 'savedAt', 'uiProfile'])
+    expect(Object.keys(sent).sort()).toEqual(['mode', 'savedAt'])
     expect({}.polluted).toBeUndefined()
+    // At depth too, where the declared object is descended into.
+    const nested = filterToShape(
+      JSON.parse('{"profile":{"level":1,"__proto__":{"y":"leak@example.test"}}}'),
+      NESTED_SHAPE)
+    expect(nested).toEqual({ profile: { level: 1 } })
   })
 
   it('omits an object that kept nothing, rather than sending an empty one', () => {
     // So a filtered-away branch cannot be mistaken for one that was empty.
+    expect(filterToShape({ profile: { partnerId: 'partner@example.test' } }, NESTED_SHAPE))
+      .toBeUndefined()
     expect(cloudSafeSubset({ uiProfile: { location: 'Toronto, ON' } })).toEqual({})
     expect(cloudSafeSubset({ internalProfile: FULL_STATE.internalProfile })).toEqual({})
   })
 
-  it('rejects a non-finite number rather than coercing it', () => {
-    // JSON cannot carry these, but a caller in-process can.
-    expect(cloudSafeSubset({ step: NaN })).toEqual({})
-    expect(cloudSafeSubset({ step: Infinity })).toEqual({})
-    expect(cloudSafeSubset({ step: '3' })).toEqual({})
+  it('rejects a value of the wrong type rather than coercing it', () => {
+    // JSON cannot carry NaN or Infinity, but a caller in-process can. The
+    // number check needs a declared number, and the live shape has none since
+    // `step` left — so it is exercised through a shape, not through a key that
+    // would be dropped for being undeclared and pass for the wrong reason.
+    for (const bad of [NaN, Infinity, '3', null]) {
+      expect(filterToShape({ profile: { level: bad, note: 'ok' } }, NESTED_SHAPE))
+        .toEqual({ profile: { note: 'ok' } })
+    }
     expect(cloudSafeSubset({ hasOnboarded: 'yes' })).toEqual({})
+    expect(cloudSafeSubset({ mode: 7 })).toEqual({})
   })
 })
 
-describe('restoring a legacy row with nested personal data', () => {
+describe('restoring a legacy row', () => {
+  // Every row in the table predates the flat shape, so this is the live case
+  // and not a historical one.
   const LEGACY_ROW = {
     hasOnboarded: true,
     mode: 'hirer',
+    step: 4,
     uiProfile: { level: 7, points: 400, location: 'Toronto, ON', badActorFlags: ['flagged@example.test'] },
     internalProfile: FULL_STATE.internalProfile,
     selectedItem: { id: 'c-9', hirer_email: 'counterparty@example.test' },
   }
 
-  it('does not rehydrate the nested data into the app', async () => {
+  it('does not rehydrate anything the shape no longer declares', async () => {
     limit.mockResolvedValueOnce({ data: [{ payload: LEGACY_ROW, created_at: 'x' }], error: null })
     const restored = await loadRuntimeSnapshot('actor-1')
 
     expect(restored.internalProfile).toBeUndefined()
-    expect(restored.uiProfile).not.toHaveProperty('badActorFlags')
-    expect(restored.uiProfile).not.toHaveProperty('location')
+    expect(restored.uiProfile).toBeUndefined()
+    expect(restored.step).toBeUndefined()
     expect(JSON.stringify(restored)).not.toContain('partner@example.test')
     expect(JSON.stringify(restored)).not.toContain('flagged@example.test')
+    expect(JSON.stringify(restored)).not.toContain('Toronto, ON')
     // What it legitimately restores still arrives.
-    expect(restored.uiProfile.level).toBe(7)
     expect(restored.mode).toBe('hirer')
+    expect(restored.hasOnboarded).toBe(true)
   })
 
   it('does not resend any of it on the save that follows', async () => {
@@ -336,31 +360,32 @@ describe('restoring a legacy row with nested personal data', () => {
     }
   })
 
-  it('keeps the local half of a profile the server no longer carries', async () => {
-    // The regression a shallow merge would have caused: a cross-device restore
-    // deleting the nine local-only fields of uiProfile. Losing user data while
-    // claiming to protect it would be the worst available outcome.
+  it('leaves this device\'s own state alone, including a profile object', async () => {
+    // The regression a shallow merge would have caused when the shape was
+    // nested: a cross-device restore deleting local-only fields. Losing user
+    // data while claiming to protect it would be the worst available outcome.
     localStore.tf_runtime_snapshot_v1 = JSON.stringify(FULL_STATE)
     limit.mockResolvedValueOnce({
-      data: [{ payload: { uiProfile: { level: 9, points: 999 } }, created_at: 'x' }], error: null,
+      data: [{ payload: { mode: 'hirer', view: 'home' }, created_at: 'x' }], error: null,
     })
 
     const restored = await loadRuntimeSnapshot('actor-1')
-    expect(restored.uiProfile.level).toBe(9)            // server's value wins
-    expect(restored.uiProfile.badges).toEqual(['early']) // local survives
-    expect(restored.uiProfile.location).toBe('Toronto, ON')
+    expect(restored.uiProfile).toEqual(FULL_STATE.uiProfile)   // untouched locally
     expect(restored.byocForm.clientEmail).toBe('about.to.invite@example.test')
+    expect(restored.mode).toBe('hirer')                        // server's value wins
   })
 
   it('merges only declared leaves, so a legacy nested key cannot ride along', () => {
+    // Asserted through the shape parameter: the merge must not become a second
+    // way in when a nested field is declared again.
     const merged = mergeRemoteOverLocal(
-      { uiProfile: { level: 1, badges: ['early'] } },
-      // Already filtered, but assert the merge itself is not a second way in.
-      { uiProfile: { level: 2, badActorFlags: ['flagged@example.test'] } })
+      { profile: { level: 1, badges: ['early'] } },
+      { profile: { level: 2, badActorFlags: ['flagged@example.test'] } },
+      NESTED_SHAPE)
 
-    expect(merged.uiProfile.level).toBe(2)
-    expect(merged.uiProfile).not.toHaveProperty('badActorFlags')
-    expect(merged.uiProfile.badges).toEqual(['early'])
+    expect(merged.profile.level).toBe(2)
+    expect(merged.profile).not.toHaveProperty('badActorFlags')
+    expect(merged.profile.badges).toEqual(['early'])
   })
 })
 

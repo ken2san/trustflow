@@ -52,7 +52,6 @@
 
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { initialUIProfileStats, initialInternalProfileStats } from './lib/profileInitialData';
 import {
   ShieldCheck, CheckCircle2, Search, Activity, X, LayoutGrid, Loader2, RefreshCw, Briefcase, UserPlus, LogIn, LogOut
 } from 'lucide-react';
@@ -170,12 +169,6 @@ const App = () => {
   // It could not stop one being restored OVER it, which is why capturing the
   // URL once is the fix rather than another exclusion.
   const [initialParams] = useState(() => new URLSearchParams(window.location.search));
-  // Centralized Acceptance Protocol state (DoD/terms)
-  const [acceptanceProtocol, setAcceptanceProtocol] = useState([
-    'Definitive Figma Library',
-    'Dark Mode Tokens',
-    'Atomic Design Compliance'
-  ]);
   const [mode, setMode] = useState('earner');
   // Detect invite link params on mount; set initial view accordingly.
   // Supports two URL formats:
@@ -212,12 +205,6 @@ const App = () => {
   const [myContracts, setMyContracts] = useState([]);
   const [contractsLoading, setContractsLoading] = useState(true);
   const [contractsError, setContractsError] = useState(null);
-  const [step, setStep] = useState(1);
-
-  // UI profile state
-  const [uiProfile, setUIProfile] = useState(initialUIProfileStats);
-  // Internal profile state
-  const [internalProfile, setInternalProfile] = useState(initialInternalProfileStats);
 
   const [selectedItem, setSelectedItem] = useState(null);
   const [status, setStatus] = useState('idle');
@@ -227,10 +214,6 @@ const App = () => {
   const [activityLog, setActivityLog] = useState([]);
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  // Phase 4: append-only contract event log (persisted to Supabase when connected)
-  // Phase 4: permanent bad-actor flags — persist across contract cycles
-  const [badActorFlags, setBadActorFlags] = useState([]);
-  const [contractHistory, setContractHistory] = useState([]);
   const [hasOnboarded, setHasOnboarded] = useState(() => {
     if (initialParams.has('reset')) {
       localStorage.removeItem('tf_onboarded');
@@ -338,14 +321,13 @@ const App = () => {
         // hit ('agreement', a spinner that never resolved) and left every other
         // view restorable by default.
         if (!hasInviteParams) setView(restorableView(snapshot.view));
-        if (typeof snapshot.step === 'number') setStep(snapshot.step);
         if (snapshot.selectedItem) setSelectedItem(snapshot.selectedItem);
-        if (snapshot.uiProfile) setUIProfile(snapshot.uiProfile);
-        if (snapshot.internalProfile) setInternalProfile(snapshot.internalProfile);
-        if (Array.isArray(snapshot.acceptanceProtocol)) setAcceptanceProtocol(snapshot.acceptanceProtocol);
-        if (Array.isArray(snapshot.badActorFlags)) setBadActorFlags(snapshot.badActorFlags);
         if (snapshot.byocForm) setByocForm(snapshot.byocForm);
-        if (Array.isArray(snapshot.contractHistory)) setContractHistory(snapshot.contractHistory);
+        // step, uiProfile, internalProfile, acceptanceProtocol, badActorFlags
+        // and contractHistory were restored here until 2026-11-05. Each had no
+        // writer left once the reputation layer and the five-step flow went
+        // (Decisions.md), so restoring them only re-seeded a constant. A row
+        // written before today still carries them; nothing reads them now.
         if (Array.isArray(snapshot.activityLog)) setActivityLog(snapshot.activityLog.map(e => ({ ...e, timestamp: new Date(e.timestamp) })));
       }
 
@@ -384,14 +366,8 @@ const App = () => {
         hasOnboarded,
         mode,
         view,
-        step,
         selectedItem,
-        uiProfile,
-        internalProfile,
-        acceptanceProtocol,
-        badActorFlags,
         byocForm,
-        contractHistory,
         activityLog,
       }, actorId);
     }, 900);
@@ -402,14 +378,8 @@ const App = () => {
     hasOnboarded,
     mode,
     view,
-    step,
     selectedItem,
-    uiProfile,
-    internalProfile,
-    acceptanceProtocol,
-    badActorFlags,
     byocForm,
-    contractHistory,
     activityLog,
   ]);
 
