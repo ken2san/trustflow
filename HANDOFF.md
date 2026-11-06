@@ -689,13 +689,17 @@ the strongest find of the pass:
    including a guest's record of agreement — beside a "Sign in" button, whether
    signed in, signed out, or reading someone else's agreement, and clicking it
    opens a Trust Passport for a person who does not exist. This is the
-   2026-10-11 "no sign of which account you were acting as" defect, still open
-   and worse than recorded: it does not merely omit the acting account, it
-   asserts the wrong one, on the screens whose entire value is saying who did
-   what. **Not fixed here** — the minimal fix is not obvious (hiding it leaves
-   the signed-in case wrong too; the honest fix is removing the mock profile
-   chrome, which also owns the Trust Passport entry point and the `userLevel`
-   gamification), and that is a product decision, not a cleanup.
+   2026-10-11 "no sign of which account you were acting as" defect, worse than
+   recorded: it did not merely omit the acting account, it asserted the wrong
+   one, on the screens whose entire value is saying who did what.
+
+   **Fixed — the avatar and the bell are gone**, with the reasoning kept at
+   `src/App.jsx:1151-1167`. This paragraph said "Not fixed here" until
+   2026-11-06, when a batch of record-screen work went looking for open items
+   and found the fix already in place. **A handoff that says something is open
+   after it has been fixed costs a session the time to rediscover it**, which
+   is what happened; it is the same failure as a comment describing an
+   implementation that does not exist.
 
 4. **FIXED 2026-11-05, with the bell.** It carried a permanent unread dot
    rendered unconditionally, with no count or condition behind it, beside a
@@ -1310,6 +1314,29 @@ then the frontend.** Both windows degrade identically and non-fatally (the
 local cache is already written; a warning is the only other effect), so the frontend commit was held
 back until the migration existed on production. It does now, and the order
 held: migration first, frontend second.
+
+### The first acting counterparty, and what one run produced — 2026-11-06
+
+`npm run offer:tester` mints one agreement and prints the invite URL, which is
+exactly what a real invited party gets — Send Invite sends no email and
+delivery is manual, so there is nothing to simulate. A subagent was given that
+link, a situation, and nothing else: no repository, no API shape, no expected
+sequence, no previous findings.
+
+**One run, four outcomes, and the proportions are the useful part:**
+
+| | |
+|---|---|
+| **A false alarm** | It reported seeing someone else's contracts — addresses and ¥650,000 — after declining. Checked before relaying: those rows are E2E's, and the browser it drove already held an E2E session. **A stranger has none.** Fourth artefact of this class; the rule holds, verify before alarming |
+| **A fixture error of mine** | The brief said the tester had been *asked to do* translation work; the contract was minted `performed_by: 'creator'`, so the screen correctly said the opposite. It refused for exactly that reason. **The product was right and the test rig was wrong** — and the blind pass caught the rig, not just the product |
+| **Three real findings** | Declining left no trace and no acknowledgement; the prefilled address read as someone else's about to be recorded as them; "recorded, not remembered" did not parse for a non-engineer |
+| **One confirmation** | It read the direction of the work correctly off the invitation — the thing the first blind pass found backwards on 2026-11-05 and that was rewritten for it |
+
+**Batch the implementation, then run once.** Fixing one finding and re-running
+a through-test wastes the run: each change invalidates the previous
+verification. The five open record items were done together and the suite ran
+afterwards, on the owner's instruction — "通しテストでそれやると途中の確認
+全くの無駄になる".
 
 ## How this project tests without a second human
 
