@@ -1,10 +1,22 @@
 # TrustFlow — AI Session Handoff
 
-_Last updated: 2026-11-05 (the legacy surface is removed and the project has a
-linter, CI and accessibility checks for the first time; the third-party receipt
-verifier now names the runtime it needs; the runtime snapshot stopped carrying
-six dead states. Migration ledgers level at 35; no database or Edge Function
-changed today)_
+_Last updated: 2026-11-06. **A day of production changes — read this paragraph
+before assuming anything below is still pending.** The terms-binding guard is
+deployed to both projects and measured (`npm run test:api`, 22 checks).
+Production's 1161 old `runtime_snapshots` rows are deleted and the table is now
+bounded in the database, one row per actor. CAPTCHA protection is ON and the
+frontend sends the token. The app no longer mints an anonymous user per page
+view. Migration ledgers level at 37. Two defects were shipped and fixed the
+same day — see "The CAPTCHA outage" and "A defect shipped to production" — and
+both were green in the test suite the whole time._
+
+**Open, in priority order:** (1) enable Vercel Web Analytics — one toggle, and
+until it is on, nothing records whether anyone visits, because the anonymous
+user per page view that used to serve as a visit log is deliberately gone;
+(2) the three payment Edge Functions, a September vintage still ACTIVE, plus
+`earner_payout_profiles`' unverified payout destination. Both need their own
+approval. Next Priority #1 — a real second human — is unchanged and untouched
+by any of this.
 
 > Brief a new session with this file. It describes where the project **is**, not
 > what each past session did. `Decisions.md` is the source of truth for
@@ -1338,7 +1350,8 @@ outside the consent label, so it cannot be read as one of the terms.
 > were never shown. In a product whose whole claim is "this is what was agreed",
 > that is the claim failing.
 
-**Closed in code, waiting on a deploy.** `_shared/shownTerms.ts` defines the
+**Closed in code, and deployed 2026-11-06** (see "The terms-binding guard is
+deployed" below for the measurement). `_shared/shownTerms.ts` defines the
 digest of the terms an invitation displays — one definition, imported by the
 browser and by `validate-invite-token`, the way `eventCanonical.ts` already is.
 The browser sends the digest of what it showed and the version that computed
