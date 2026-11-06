@@ -832,6 +832,70 @@ carries the requirement:
   subscription. If it is wanted it belongs on the agreement screen, keyed to
   the agreement being viewed — not to `selectedItem`.
 
+### The guest path is now captured as images, and a stranger read them — 2026-11-05
+
+`tests/e2e/guest-path-capture.spec.js` photographs six boundaries of the
+counterparty's path at both widths and **writes nothing** — `auth/v1/**` is
+stubbed too, which the other stub-closed specs do not do, so a capture run adds
+no anonymous user to E2E. Output: `test-results/guest-path/` (gitignored). Run
+it with `npx playwright test tests/e2e/guest-path-capture.spec.js`; it needs no
+flags and no trace extraction, which is what made the 2026-11-04 method
+unrepeatable.
+
+Then a **subagent with no access to this repository** read the twelve images as
+a first-time user. That blindness is the instrument: the one real finding of
+the previous pass was a contrast judgement made by someone who had not written
+the screen.
+
+**What it found that was real** (each checked in source before acting, and all
+fixed in `817bd7d`):
+
+- **The first screen read backwards.** "Acme Translations wants to work with
+  you" over an unsigned ¥20,000 was taken as an offer of work *to* the reader;
+  "you pay" was small text further down, and the header's "PROFESSIONAL" and
+  "SWITCH TO HIRE" pushed the same way. The headline now states the direction
+  from `performed_by`.
+- **The dead-link screen offered "Back to Marketplace"** — removed earlier the
+  same day — and told the reader the link "may have been modified" when the
+  same refusal covers mistyped, already used and withdrawn.
+- **The consent checkbox said "the Definition of Done above"** with the terms a
+  screen back.
+- **The promised download was not where it was promised.** `GuestEvidenceView`
+  had no export affordance; it lived on `AgreementView`. The reviewer went
+  looking for the file the invitation promises and reported it missing.
+
+**What Codex found, auditing the same screens against the code** (stage ②, which
+an image cannot answer): "an edit afterwards cannot pass as the original" was
+**OVERSTATED**. The chain makes an edit detectable and `UPDATE`/`DELETE` on
+`events` is revoked, but no TSA token is written and nothing here outranks the
+operator of the server. Now scoped to detection. Its verdicts on the other three
+claims were still running when this was written.
+
+**Two findings were the capture's own fault**, which is the lesson worth
+keeping: `fullPage: true` stitches a document taller than the viewport and put
+the fixed header mid-page, read as a layout defect; and the fade-in was caught
+mid-flight, read as a contrast problem across the whole screen. Both are fixed
+in the spec (`animations: 'disabled'`, viewport shots, one explicit `-full`
+for the record). **A capture artefact spends a reviewer's attention on the
+camera** — so does a fixture that disagrees with itself, which this one did by
+showing one email in the form and another in the record.
+
+**Open from the pass, not acted on:**
+
+- The guest sees operator chrome throughout: the ⌘K command bar, "Sign in",
+  "SWITCH TO HIRE" and an activity icon with an unread badge — on a page
+  reached by a link, by someone with no account. The reviewer read all of it as
+  template filler. Hiding the chrome on the invite and guest-record views is a
+  contained change and a product decision.
+- Screen 04's payment note says TrustFlow "is not collecting money for this
+  agreement **yet**", which reads as a product that will change under the
+  reader after they have committed.
+- Screen 05 leads with "Hash chain verified across every server-attested
+  event" — the reviewer took "verified" to possibly mean identity or terms were
+  verified, which the footnote then denies.
+- The timeline prints the raw field name `counterparty_name`, and an actor
+  reading "by You (you)".
+
 ## Next Priority (in order)
 
 0. **Stage 4a — done 2026-11-05, client only, no database change.** What the
