@@ -1338,6 +1338,85 @@ verification. The five open record items were done together and the suite ran
 afterwards, on the owner's instruction — "通しテストでそれやると途中の確認
 全くの無駄になる".
 
+## The four patterns everything found today fell into
+
+Tallied 2026-11-06 after a day that produced, among other things, two defects
+shipped to production and fixed the same day. The point of counting is that
+**the same four shapes account for all of it** — so the next session can look
+for the shape instead of rediscovering the instance.
+
+### 1. Something says an implementation exists that does not — 5 instances
+
+The most expensive pattern of the day, and the only one that produced
+production defects.
+
+| where | what it claimed | what was true |
+|---|---|---|
+| `log-event/index.ts:79-83` | the payment functions write `payment.intent_created`/`captured`/`refunded` | they write **no events at all**; the types are unused constants |
+| `20261106160059`'s own comment | "a 512-byte bound" | `length()` counts characters; 200 multibyte characters is 600 bytes and passed |
+| `InviteView` | "the access link you were given when you accepted" | no link is given; accepting shows a screen |
+| `GuestEvidenceView` | "not a document you can re-verify yourself" | the export carries every canonical input precisely so it can be |
+| `HANDOFF.md` | the fabricated-identity header is "not fixed here" | it had been fixed; a session re-investigated it |
+
+**The rule:** a comment, a screen or a handoff is a claim about code, and a
+claim is checked, not read. Three of these five were caught by someone other
+than the author — two by Codex, one by a blind counterparty.
+
+### 2. A suite is green because of what it cannot see — 4 instances
+
+- `earnerAuth.test.js` mocks the auth surface wholesale, so a **missing option
+  in the call it stubs is invisible**. It stayed green through the CAPTCHA
+  outage.
+- The container constraint check runs every statement as `postgres`, where
+  **privileges do not exist**. It stayed green through the missing `UPDATE`
+  grant. A superuser cannot test a grant.
+- The contrast gate **passed through the invitation and consent screens
+  without measuring them**. Widening it found six real violations at once.
+- `guest-evidence.spec.js` **pinned the exact wording that was the defect**
+  (`/Hash chain verified/`), so the screen could not be corrected without the
+  test objecting.
+
+**The rule:** ask what a passing test would still allow. If the answer is "the
+thing that broke", the test is measuring something else.
+
+### 3. The camera, not the product — 4 instances
+
+Every one cost real time and **three were reported as product defects**.
+
+- `fullPage: true` stitches a document and invents layout that no viewport shows
+- a capture spec branched on **read count**, and the app reads the invitation
+  more than once, so it recorded a product bug that never existed
+- a blind counterparty saw "someone else's contracts" **twice** — both times
+  because it drove a browser that already held a session, which a stranger
+  never has
+
+**The rule, now four times paid for:** verify a finding against source or data
+before relaying it. A blind pass reports what it saw; what it saw includes the
+rig.
+
+### 4. The answer was already written down — 3 instances, all mine
+
+- payments were descoped; a session listed them as unfinished implementation
+  until the owner asked "外したはずでは？" — `Decisions.md` says "decided, not
+  built"
+- termination was already defined; the same session proposed deciding it,
+  while `contractStatus.js:45-53` held both the decision and the reasoning
+- the fabricated-identity header was already removed, with the reasoning in
+  the file
+
+**The rule:** before proposing a decision, grep for it. All three were one
+search away, and each cost more than the search would have.
+
+### What this says about where to spend
+
+Patterns 1 and 2 are **cheap to hunt and expensive to miss** — they are found
+by checking a claim against code, which is what Codex does and what the
+container and probe checks do. Pattern 3 is a **tax on exploration** that does
+not go away; it is paid by verifying before relaying. Pattern 4 is avoidable
+outright by reading first.
+
+None of the four needed a second human to find.
+
 ## How this project tests without a second human
 
 Standing arrangement, re-confirmed by Kenji on 2026-11-05 after it was lost in
