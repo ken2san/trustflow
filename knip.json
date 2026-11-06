@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/main.jsx",
+    "scripts/*.mjs",
+    "tests/**/*.{js,jsx}",
+    "*.config.js"
+  ],
+  "project": [
+    "src/**/*.{js,jsx}",
+    "scripts/**/*.mjs"
+  ],
+  "ignore": [
+    "supabase/functions/**",
+    "webpack.config.js"
+  ],
+  "ignoreDependencies": [
+    "autoprefixer",
+    "postcss",
+    "tailwindcss",
+    "axe-core"
+  ]
+}
