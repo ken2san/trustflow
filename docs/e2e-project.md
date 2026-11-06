@@ -188,8 +188,8 @@ parity (29). Pushing here needs the explicit `--db-url` form; a bare
 `supabase db push` means production, deliberately.
 
 The database password for this project is in **1Password, `Private` /
-`Supabase_Kenji`**, in the field `trust flow e2e password DB` — alongside
-production's, `trust flow password DB`, in the same item. Supabase does not
+`Supabase_Kenji`**, in the field `trustflow e2e password DB` — alongside
+production's, `trustflow password DB`, in the same item. Supabase does not
 show a database password again after creation, and the session that built this
 project in September did not keep it, so the only way back in on 2026-10-10
 was a reset.
@@ -203,7 +203,7 @@ an `op run --env-file` reference, which cannot be quoted.
 Read it without putting it on a command line or in a shell history:
 
 ```
-PW=$(op read "op://Private/Supabase_Kenji/trust flow e2e password DB")
+PW=$(op read "op://Private/Supabase_Kenji/trustflow e2e password DB")
 ENC=$(printf '%s' "$PW" | python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
 supabase db push --dry-run --db-url "postgresql://postgres:$ENC@db.yqjtawffpesplqyurlpj.supabase.co:5432/postgres"
 unset PW ENC
