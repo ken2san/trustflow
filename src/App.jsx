@@ -1252,11 +1252,22 @@ const App = () => {
             <h2 className="text-3xl font-black tracking-tighter text-white">Agreement accepted</h2>
             <p className="text-slate-400 text-sm leading-relaxed">
               Your acceptance of <span className="text-white font-bold">{selectedItem?.title}</span> has been
-              timestamped and recorded. {selectedItem?.client} has been notified.
+              timestamped and recorded.
             </p>
-            <p className="text-xs text-slate-500 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
-              Payment is handled separately for now — {selectedItem?.client} will contact you about it.
-              TrustFlow is not collecting money for this agreement yet.
+            {/* Two false statements stood here. "{client} has been notified"
+                was not true of anything: send-acceptance-email was deleted on
+                2026-09-26, invitation and access links are delivered by hand,
+                and the live subscription went with the legacy surface — so
+                nobody is told. And "for now"/"yet" described a permanent
+                design (money moves outside TrustFlow, Decisions.md) as a
+                temporary state, which reads as a product about to change
+                under someone who has just committed. */}
+            <p className="text-xs text-slate-400 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
+              TrustFlow does not process the payment for this agreement and does not
+              tell {selectedItem?.client} that you accepted — reach them the way they
+              reached you. Either of you can then record that a payment was sent or
+              received, which TrustFlow stores as your statement rather than as a
+              fact it checked.
             </p>
             <button
               onClick={() => openAgreementAsGuest(String(selectedItem?.id ?? ''))}

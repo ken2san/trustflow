@@ -56,14 +56,24 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
   // Token error states (expired, tampered, malformed)
   if (tokenError || !inviteData) {
     const isExpired = tokenError === 'expired';
+    // The server refuses an acceptance whose contract row changed after this
+    // screen loaded (row_version, 20260928000000_atomic_acceptance.sql). That
+    // is the one failure here that is nobody's mistake, and calling it an
+    // invalid link told the reader their link was broken when the terms had
+    // simply moved under them.
+    const termsChanged = tokenError === 'terms_changed';
     const Icon = isExpired ? Clock : AlertTriangle;
-    const title = isExpired ? 'This invite has expired.' : 'Invalid invite link.';
+    const title = isExpired ? 'This invite has expired.'
+      : termsChanged ? 'The terms changed while you were reading.'
+      : 'Invalid invite link.';
     const body = isExpired
       ? 'Invite links are valid for 72 hours. Ask whoever sent you this link to issue a new one — they can do it from their own copy of the agreement.'
       // Deliberately lists the possibilities rather than guessing: the server
       // returns the same refusal for a link that was mistyped, already used,
       // or deleted before it was opened, and telling a stranger it was
       // "modified" when they simply pasted it twice is both wrong and alarming.
+      : termsChanged
+      ? 'Nothing was accepted. Whoever sent this invitation edited the agreement after this page loaded, so the terms on screen are no longer the ones on offer. Open the link again to see the current terms before you decide.'
       : 'This link did not work. It may have been mistyped or cut short when it was copied, already used, or withdrawn by the sender. Ask whoever sent it to you for a new one.';
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 max-w-md mx-auto text-center animate-fade-in-up">
@@ -163,8 +173,48 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               placeholder="Email address (required for contract record)"
               className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-4 text-white font-medium outline-none transition-all placeholder:text-slate-600"
             />
-            <p className="text-xs text-slate-600 px-2">Your email is attached to this agreement as your identifier. A copy will be sent to you.</p>
+            {/* "A copy will be sent to you" promised an email nothing sends:
+                send-acceptance-email was deleted on 2026-09-26 and is not to
+                be redeployed. The record is downloadable instead, which is
+                true, and the link is what gets them back to it. */}
+            <p className="text-xs text-slate-500 px-2">Recorded with this agreement as your identifier. No email is sent — your copy is downloadable from the record, and this link is how you reach it again.</p>
           </div>
+          {/* The terms again, at the moment of commitment.
+              Rendered from the same `inviteData` the previous screen used and
+              that acceptance sends back, never from separate state: a second
+              source could show one thing and record another, and the row is
+              re-checked server-side at acceptance anyway (row_version,
+              20260928000000_atomic_acceptance.sql). The checkbox used to
+              reference "the terms on the previous screen" with the previous
+              screen gone — a blind reviewer said so, and Codex's design review
+              set the condition that this recap share one source. */}
+          <div className="p-4 bg-white/[0.03] border border-white/5 rounded-2xl space-y-2">
+            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">What you are agreeing to</p>
+            <dl className="text-xs text-slate-300 space-y-1">
+              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Work</dt><dd>{project}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Done when</dt><dd>{(dod ?? []).join(' · ') || 'Not set'}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Amount</dt><dd>{amountLabel}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">By</dt><dd>{deadlineLabel}</dd></div>
+              <div className="flex gap-2"><dt className="text-slate-500 w-20 shrink-0">Who works</dt><dd>{guestPerforms ? 'You' : inviter}</dd></div>
+            </dl>
+            <p className="text-[11px] text-slate-500">A summary of the previous screen, not a replacement for it.</p>
+          </div>
+
+          {/* Deliberately NOT inside the box above, and not inside the consent
+              label: this is what the agreement does not cover, and listing it
+              among the terms would invite reading it as one of them (Codex
+              design review, 2026-11-05). */}
+          <div className="p-4 border border-amber-500/20 bg-amber-500/[0.04] rounded-2xl space-y-1">
+            <p className="text-[10px] font-black text-amber-400/80 uppercase tracking-widest">Not settled by this agreement</p>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              When and how the {amountLabel} is paid is not part of what you are
+              accepting here, and TrustFlow does not process the payment. Arrange it
+              with {inviter} directly. Afterwards either of you can record that a
+              payment was sent or received — TrustFlow stores that statement, it does
+              not check it.
+            </p>
+          </div>
+
           <label className="flex items-start gap-3 p-4 bg-white/[0.03] border border-white/5 rounded-2xl cursor-pointer select-none">
             <input
               type="checkbox"
@@ -173,7 +223,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               className="mt-0.5 w-4 h-4 rounded accent-indigo-500 shrink-0"
             />
             <span className="text-xs text-slate-400 leading-relaxed">
-              I have reviewed the terms on the previous screen — the work, what counts as done, the amount and the deadline — and I agree to them. I understand that my acceptance will be timestamped and recorded as a binding agreement.
+              I have reviewed the terms above — the work, what counts as done, the amount and the deadline — and I agree to them. I understand that my acceptance will be timestamped and recorded as a binding agreement.
             </span>
           </label>
           <button
@@ -239,6 +289,15 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           <div>
             <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Contract Value</p>
             <p className="text-3xl font-black italic text-white">{amountLabel}</p>
+            {/* Scoped to this agreement on purpose. "TrustFlow never holds
+                money" would be a product claim the screen cannot make: the
+                Stripe functions exist in the repository and their deployment
+                is not knowable from here (Codex design review, 2026-11-05).
+                What is true and checkable is what happens to THIS one. */}
+            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+              Not paid through TrustFlow. {guestPerforms ? <>{inviter} pays you</> : <>You pay {inviter}</>} directly,
+              by whatever means you two arrange.
+            </p>
           </div>
           <div>
             <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Deadline</p>
