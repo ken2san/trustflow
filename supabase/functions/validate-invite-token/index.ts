@@ -30,7 +30,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
-import { shownTermsDigest, SHOWN_TERMS_VERSION } from '../_shared/shownTerms.ts'
+import { shownTermsDigest } from '../_shared/shownTerms.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -163,10 +163,13 @@ serve(async (req: Request) => {
       if (typeof shown_terms_digest === 'string' && shown_terms_digest.length > 0) {
         // The version the caller computed, not the one this build prefers. A
         // client shipped before the version travelled separately sends none,
-        // and v1 is what it meant.
+        // and v1 is what it meant — a literal 1, not this build's constant,
+        // which would silently reinterpret those callers' digests the day the
+        // format changes. That is the same comment-promises-what-code-cannot
+        // defect the version field was added to fix.
         const askedVersion = typeof shown_terms_version === 'number'
           ? shown_terms_version
-          : SHOWN_TERMS_VERSION
+          : 1
         const currentDigest = await shownTermsDigest(context.contract, askedVersion)
         if (currentDigest === null) {
           // Fail closed, but not as "the terms changed": this build cannot

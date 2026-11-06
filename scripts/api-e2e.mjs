@@ -35,6 +35,7 @@ import { redact } from './lib/e2eGuard.mjs';
 import {
   CANONICAL_INPUTS, missingCanonicalInputs, recomputeFromCanonicalBlock,
 } from '../supabase/functions/_shared/guestEventView.ts';
+import { shownTermsDigest } from '../supabase/functions/_shared/shownTerms.ts';
 
 const RUN = `api-e2e ${new Date().toISOString()}`;
 let step = 0;
@@ -110,13 +111,55 @@ async function main() {
   ok('the terms come from the row, not the URL',
     peek.data?.amount_jpy === 50000);
 
-  // ── 3. Acceptance: one transaction, and the guest credential is born ──────
+  // ── 3. The terms recorded must be the terms that were shown ────────────
+  // The server re-reads the contract and hashes THAT row, so an edit made
+  // while the invitation sat on screen would otherwise be recorded as what
+  // the counterparty agreed to. The invitee digests what it was shown —
+  // `peek.data` above, the same object the browser renders — and the function
+  // recomputes it from the row it is about to hash.
+  //
+  // Both refusals below must leave the invitation unspent: a guard that burns
+  // the token while refusing would strand an honest guest with no way back.
+  // Nothing asserts that directly; the acceptance that follows proves it by
+  // succeeding.
+  const shownDigest = await shownTermsDigest(peek.data, 1);
+
+  const staleDigest = await shownTermsDigest({ ...peek.data, amount_jpy: 999999 }, 1);
+  const editedUnderneath = await invoke('validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token, accept: true,
+      hirer_email: 'harness-guest@example.invalid',
+      counterparty_name: 'API Harness Guest',
+      shown_terms_digest: staleDigest, shown_terms_version: 1,
+    },
+  });
+  ok('an acceptance of terms that are no longer the terms is refused',
+    editedUnderneath.status === 409 && editedUnderneath.reason === 'terms_changed',
+    `HTTP ${editedUnderneath.status} ${editedUnderneath.reason}`);
+
+  // A format this build cannot compute must answer "I cannot check", never
+  // "they changed" — the second is a claim about the agreement, made on the
+  // strength of a release schedule.
+  const futureFormat = await invoke('validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token, accept: true,
+      hirer_email: 'harness-guest@example.invalid',
+      counterparty_name: 'API Harness Guest',
+      shown_terms_digest: shownDigest, shown_terms_version: 99,
+    },
+  });
+  ok('a digest in a format the server does not know is not called a change',
+    futureFormat.status === 409 && futureFormat.reason === 'terms_check_unsupported',
+    `HTTP ${futureFormat.status} ${futureFormat.reason}`);
+
+  // ── 4. Acceptance: one transaction, and the guest credential is born ──────
   const accepted = await invoke('validate-invite-token', {
     body: {
       invite_token: contract.invite_token,
       accept: true,
       hirer_email: 'harness-guest@example.invalid',
       counterparty_name: 'API Harness Guest',
+      shown_terms_digest: shownDigest, shown_terms_version: 1,
     },
   });
   if (!ok('the invitee accepts', accepted.status === 200, `HTTP ${accepted.status} ${accepted.reason ?? ''}`)) {
@@ -137,7 +180,7 @@ async function main() {
     replay.status !== 200 && replay.reason === 'already_used',
     `HTTP ${replay.status} ${replay.reason}`);
 
-  // ── 4. The authorities are not interchangeable ────────────────────────────
+  // ── 5. The authorities are not interchangeable ────────────────────────────
   // performed_by is 'creator', so the owner performs and the guest receives.
   // Each attempting the other's event must be refused by role, not by UI.
   const wrongWay = await invoke('log-event', {
@@ -156,7 +199,7 @@ async function main() {
     guestAsserts.status === 403 && guestAsserts.reason === 'wrong_party_for_event_type',
     `HTTP ${guestAsserts.status} ${guestAsserts.reason}`);
 
-  // ── 5. Delivery, asserted by the owner under their JWT ────────────────────
+  // ── 6. Delivery, asserted by the owner under their JWT ────────────────────
   const idemKey = `${RUN}:asserted`;
   const asserted = await invoke('log-event', {
     ownerToken,
@@ -186,7 +229,7 @@ async function main() {
       && retried.data?.event?.id === asserted.data?.event?.id,
     retried.data?.deduplicated ? 'returned the original' : 'wrote again');
 
-  // ── 6. Acceptance of delivery, by the guest under the bearer capability ───
+  // ── 7. Acceptance of delivery, by the guest under the bearer capability ───
   const deliveryAccepted = await invoke('log-event', {
     guestToken,
     body: {
@@ -199,7 +242,7 @@ async function main() {
     deliveryAccepted.status < 300 && Boolean(deliveryAccepted.data?.event),
     `HTTP ${deliveryAccepted.status} ${deliveryAccepted.reason ?? ''}`);
 
-  // ── 7. A revoked capability stops working ─────────────────────────────────
+  // ── 8. A revoked capability stops working ─────────────────────────────────
   // Re-issue rotates the token. The old one must die, because this is the only
   // credential revocation the system has.
   const reissued = await invoke('reissue-guest-access', { ownerToken, body: { contract_id: contractId } });
@@ -214,7 +257,7 @@ async function main() {
 
   const newGuestToken = reissued.data?.guest_access_token;
 
-  // ── 8. Both sides read the same evidence ──────────────────────────────────
+  // ── 9. Both sides read the same evidence ──────────────────────────────────
   const ownerRows = await rest(ownerToken,
     `events?contract_id=eq.${contractId}&select=id,type,event_hash,prev_event_hash&order=created_at.asc,id.asc`);
   const guestView = await invoke('guest-contract-events', { guestToken: newGuestToken });

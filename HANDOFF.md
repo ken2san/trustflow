@@ -205,10 +205,14 @@ What the run did **not** cover is Next Priority #1.
   |---|---|---|---|
   | `log-event` | **v10** | v5 | `edb1fae3…` |
   | `guest-contract-events` | **v9** | v5 | `2d15e3a2…` |
-  | `validate-invite-token` | **v9** | v3 | `a94f9381…` |
+  | `validate-invite-token` | **v10** | v4 | `0546f875…` |
   | `reissue-guest-access` | **v1 (new)** | v2 | `a415bd80…` |
 
-  **Both projects are on one vintage as of 2026-10-12, and the digests are
+  `validate-invite-token` was redeployed to both on 2026-11-06 (see "The
+  terms-binding guard is deployed"); the other three are unchanged since
+  2026-10-12.
+
+  **Both projects are on one vintage, and the digests are
   identical across them** — the version numbers differ only because each
   project has its own deploy count. `verify_jwt` is true on all four. The
   two-week production lag described below is closed; the paragraph stays
@@ -311,6 +315,21 @@ What the run did **not** cover is Next Priority #1.
   `supabase functions deploy <name> --project-ref <ref>` works and was how both
   projects were deployed on 2026-10-12 — so there is no reason to relink, and
   relinking to production would leave exactly the footgun this avoids.
+- **The `supabase` CLI cannot run when nobody is at the Mac.** It reads its
+  access token from the login keychain, and that read raises a GUI
+  authorization prompt: with no one to click it the process blocks forever and
+  ignores SIGTERM, inside the sandbox and outside it alike. `--debug` stops at
+  `NotFound: FileSystem.readFile (~/.supabase/profile)` and then nothing. So a
+  remote session cannot `supabase functions deploy`, `db push` or `projects
+  list`, and `delete from runtime_snapshots;` has to be pasted into the
+  dashboard SQL editor by hand. Edge Functions can still be deployed through
+  the Supabase management connector (done on 2026-11-06, see "The terms-binding
+  guard is deployed"), which needs the bundle assembled by hand — every file
+  the entrypoint imports, at `functions/<slug>/index.ts` and
+  `functions/_shared/*.ts` — and verified afterwards by `ezbr_sha256` against a
+  bundle already measured. **Migrations are a different matter: the management
+  API is still banned for those**, for the reason below, and the connector is
+  not a way around it.
   The management API's `apply_migration` is banned for a concrete reason, paid
   for twice: **it mints its own timestamp version per call and rewrites the
   body** (schema-qualifying identifiers, stripping the file's `begin;`/`commit;`
@@ -1000,9 +1019,52 @@ fields identical in all 20**, including rows with a null deadline (jsonb `null`
 and SQL NULL differ in SQL and arrive the same in JavaScript, which is what
 made a first, sloppier query look like a mismatch).
 
-**Needs approval to finish**: deploying `validate-invite-token`, and with it
-the other three functions, since the set shares `_shared` and deploys together.
-Until then the client's pre-flight re-read is the only guard.
+### The terms-binding guard is deployed, and measured — 2026-11-06
+
+**Approved remotely and done.** `validate-invite-token` is live on both
+projects, `ezbr_sha256` `0546f875a8478ebb4a9f67ecf7234eb82b7ac011d19bc04fecd1bcb2966172a5`
+on each — the production artifact is byte-identical to the one E2E was measured
+on, which is what makes that measurement transferable. E2E v4, production v10.
+
+**Only that one function was deployed, and the "deploy the set together" rule
+was satisfied rather than waived.** That rule exists because each function
+bundles its own `_shared`, so shipping one of a set can put two vintages of
+`eventRecord.ts` live at once. Here it cannot: `git log` shows
+`eventCanonical.ts` last changed 2026-09-24 and `eventRecord.ts` /
+`authAssurance.ts` 2026-10-11, all before the 2026-10-12 deploy that levelled
+both projects — so the copies this bundle carries are byte-identical to the ones
+`log-event`, `reissue-guest-access` and `guest-contract-events` already hold.
+`shownTerms.ts` is new and nothing else imports it. The rule's purpose is no
+drift, and there is none; deploying three unchanged functions to satisfy its
+wording would have been three deploys bought with nothing.
+
+**The guard is now measured, not merely reasoned about.** `npm run test:api`
+grew from 20 checks to 22 and exercises the live function:
+
+- an acceptance carrying the digest of terms that have since changed → **409
+  `terms_changed`**;
+- a digest in a format this build cannot compute → **409
+  `terms_check_unsupported`**, never "they changed", because the second is a
+  claim about the agreement made on the strength of a release schedule;
+- an acceptance carrying the digest of **the preview response the browser
+  actually renders** → 200, which also proves the two refusals left the
+  invitation unspent.
+
+That third check closes the one thing Codex's review left open: that the
+browser digests the invitation GET while the server recomputes from
+`invite_acceptance_context`, and nothing had ever compared the two against real
+database values end to end. They agree.
+
+**One defect was fixed before the deploy.** The implied version read
+`SHOWN_TERMS_VERSION` when a caller sent a digest but no version — this build's
+constant, not the version such a caller actually computed. It is harmless while
+the constant is 1 and would silently reinterpret those callers' digests the day
+the format changes: the same comment-promises-what-the-code-cannot-do defect the
+version field was added to fix. Now a literal `1`.
+
+**Still open, unchanged**: the compatibility period. A missing digest is let
+through, nothing measures how many callers omit it, and until something does,
+the window stays open for exactly those callers.
 
 **Narrowed first, in `39a7849`.** The client re-reads the invitation
 immediately before accepting and refuses on any difference across the displayed
