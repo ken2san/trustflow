@@ -113,19 +113,19 @@ function EventRow({ event }) {
         <span className="text-white font-bold text-sm">
           {TYPE_LABELS[event.type] ?? event.type}
         </span>
-        <span className="text-[11px] text-slate-500 font-mono">{formatWhen(event.created_at)}</span>
+        <span className="text-[11px] text-slate-400 font-mono">{formatWhen(event.created_at)}</span>
       </div>
 
       <p className="text-xs text-slate-400 mt-1">
         by <span className="text-slate-300">{event.actor.label}</span>
-        {event.actor.role === 'guest_hirer' && <span className="text-slate-600"> (you)</span>}
+        {event.actor.role === 'guest_hirer' && <span className="text-slate-400"> (you)</span>}
       </p>
 
       {Object.keys(event.payload).length > 0 && (
-        <dl className="mt-2 text-[11px] text-slate-500 space-y-0.5">
+        <dl className="mt-2 text-[11px] text-slate-400 space-y-0.5">
           {Object.entries(event.payload).map(([key, value]) => (
             <div key={key} className="flex gap-2">
-              <dt className="text-slate-600">{key}</dt>
+              <dt className="text-slate-400">{key}</dt>
               <dd className="text-slate-400">
                 {Array.isArray(value) ? value.join(', ') : String(value)}
               </dd>
@@ -135,7 +135,7 @@ function EventRow({ event }) {
       )}
 
       <p className={`mt-2 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest ${
-        broken ? 'text-red-400' : attested ? 'text-emerald-500/70' : 'text-amber-500/70'
+        broken ? 'text-red-400' : attested ? 'text-emerald-400' : 'text-amber-400'
       }`}>
         {broken
           ? <><ShieldAlert className="w-3 h-3" />Integrity check failed</>
@@ -157,10 +157,10 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
 
     return (
       <div className="max-w-lg mx-auto text-center space-y-4 py-20">
-        <ShieldAlert className="w-10 h-10 text-slate-600 mx-auto" />
+        <ShieldAlert className="w-10 h-10 text-slate-400 mx-auto" />
         <p className="text-slate-400 text-sm">{message}</p>
         {onBack && (
-          <button onClick={onBack} className="text-xs text-slate-500 hover:text-slate-300 underline">
+          <button onClick={onBack} className="text-xs text-slate-400 hover:text-slate-300 underline">
             Go back
           </button>
         )}
@@ -170,7 +170,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
 
   if (!evidence) {
     return (
-      <div className="max-w-lg mx-auto text-center py-20 text-slate-500 text-sm">
+      <div className="max-w-lg mx-auto text-center py-20 text-slate-400 text-sm">
         <Clock className="w-8 h-8 mx-auto mb-3 animate-pulse" />
         Loading the record…
       </div>
@@ -233,13 +233,13 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
           never from the contract row, which may since have moved on. */}
       {accepted && (
         <section className="rounded-2xl border border-white/5 bg-white/[0.02] px-5 py-4 space-y-3">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">
             What was accepted
           </h3>
           <dl className="text-sm space-y-1.5">
             {acceptedTerms.map(([label, value]) => (
               <div key={label} className="flex flex-wrap gap-x-3">
-                <dt className="text-slate-500 text-xs w-32 shrink-0 pt-0.5">{label}</dt>
+                <dt className="text-slate-400 text-xs w-32 shrink-0 pt-0.5">{label}</dt>
                 <dd className="text-slate-300 flex-1">{value}</dd>
               </div>
             ))}
@@ -255,14 +255,14 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
 
       <div className="rounded-2xl border border-white/5 bg-white/[0.02] px-5 py-4 text-xs space-y-1">
         <p className="text-slate-400">
-          <span className="text-slate-600">{chain.event_count}</span> event{chain.event_count === 1 ? '' : 's'} recorded
+          <span className="text-slate-400">{chain.event_count}</span> event{chain.event_count === 1 ? '' : 's'} recorded
           {chain.client_asserted > 0 && (
             <span className="text-amber-500/70">
               {' '}· {chain.client_asserted} predate server attestation
             </span>
           )}
         </p>
-        <p className={chain.verified ? 'text-emerald-500/80' : 'text-slate-500'}>
+        <p className={chain.verified ? 'text-emerald-400' : 'text-slate-400'}>
           {chain.verified
             ? 'Hash chain verified across every server-attested event.'
             : 'No server-attested events to verify yet.'}
@@ -270,28 +270,28 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
       </div>
 
       {events.length === 0 ? (
-        <p className="text-slate-500 text-sm">Nothing has been recorded on this agreement yet.</p>
+        <p className="text-slate-400 text-sm">Nothing has been recorded on this agreement yet.</p>
       ) : (
         <ol className="ml-1">
           {events.map(event => <EventRow key={event.id} event={event} />)}
         </ol>
       )}
 
-      <p className="text-[11px] text-slate-600 leading-relaxed border-t border-white/5 pt-4">
+      <p className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
         Each event's hash covers its type, timing, actor and the agreement it belongs to, and links
         to the event before it.{' '}
         {/* Stated from what the server reported, not assumed: a record containing
             entries written before payloads were attested cannot claim otherwise. */}
         {chain.payload_covered_by_hash
           ? <>It also covers the detail fields shown under each entry, so those are tamper-evident too.</>
-          : <>It does <span className="text-slate-500">not</span> cover the detail fields shown under
+          : <>It does <span className="text-slate-400">not</span> cover the detail fields shown under
              each entry, so those are recorded but not tamper-evident.</>}
         {' '}TrustFlow records what each party stated; it does not establish that a statement is true.
         {chain.truncated && ' Only the earliest events are shown.'}
       </p>
 
       {onBack && (
-        <button onClick={onBack} className="text-xs text-slate-500 hover:text-slate-300 underline">
+        <button onClick={onBack} className="text-xs text-slate-400 hover:text-slate-300 underline">
           Go back
         </button>
       )}

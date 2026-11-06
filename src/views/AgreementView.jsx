@@ -60,14 +60,14 @@ function formatWhen(iso) {
 
 function Record({ events }) {
   if (!events?.length) {
-    return <p className="text-sm text-slate-600">Nothing recorded yet.</p>;
+    return <p className="text-sm text-slate-400">Nothing recorded yet.</p>;
   }
   return (
     <ol className="space-y-3">
       {events.map(event => (
         <li key={event.id} className="flex flex-wrap items-baseline gap-x-3 text-sm">
           <span className="text-white font-bold">{RECORD_LABELS[event.type] ?? event.type}</span>
-          <span className="text-[11px] font-mono text-slate-600">{formatWhen(event.created_at)}</span>
+          <span className="text-[11px] font-mono text-slate-400">{formatWhen(event.created_at)}</span>
           <span className="text-xs text-slate-500">{event.actorLabel}</span>
           {event.reason && (
             <span className="w-full text-xs text-slate-500 pl-1">“{event.reason}”</span>
@@ -267,13 +267,13 @@ export default function AgreementView({
       {/* What was agreed. Always visible — it is the agreement. */}
       {dod.length > 0 && (
         <section className="rounded-[24px] border border-white/5 bg-white/[0.02] px-6 py-5 space-y-3">
-          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">
             What counts as complete
           </h2>
           <ul className="space-y-1.5">
             {dod.map((item, i) => (
               <li key={i} className="text-sm text-slate-300 flex gap-2">
-                <span className="text-slate-600">·</span>{item}
+                <span className="text-slate-400">·</span>{item}
               </li>
             ))}
           </ul>
@@ -301,7 +301,7 @@ export default function AgreementView({
             >
               <Send className="w-4 h-4" /> Mark as delivered
             </button>
-            <p className="text-[11px] text-slate-600 leading-relaxed">
+            <p className="text-[11px] text-slate-400 leading-relaxed">
               {/* "your identity" claimed more than the record holds: what is bound
                   is the credential that acted, which TrustFlow has never tied to a
                   legal person. */}
@@ -325,7 +325,7 @@ export default function AgreementView({
               rows={2}
               autoFocus
               placeholder="e.g. koseki_translation.pdf, sha256 a1b2c3…"
-              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
             />
             <div className="flex flex-wrap gap-3">
               <button
@@ -342,7 +342,7 @@ export default function AgreementView({
                 Cancel
               </button>
             </div>
-            <p className="text-[11px] text-slate-600 leading-relaxed">
+            <p className="text-[11px] text-slate-400 leading-relaxed">
               This records that you stated the work was delivered, with the server's time
               and the credential you acted with. It does not state that the work is
               correct — that is for the other party to answer.
@@ -386,7 +386,7 @@ export default function AgreementView({
               rows={3}
               autoFocus
               placeholder="e.g. page 2 is missing"
-              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
             />
             <div className="flex flex-wrap gap-3">
               <button
@@ -403,7 +403,7 @@ export default function AgreementView({
                 Cancel
               </button>
             </div>
-            <p className="text-[11px] text-slate-600 leading-relaxed">
+            <p className="text-[11px] text-slate-400 leading-relaxed">
               This records that you asked for a correction, and why. It does not decide that you are
               right — they can deliver again and the record keeps both statements.
             </p>
@@ -424,7 +424,7 @@ export default function AgreementView({
           from the one-action section above it, which is about performance. */}
       {paymentEligible && (
         <section className="rounded-[24px] border border-white/10 bg-[#0f172a]/60 px-6 py-6 space-y-4">
-          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">Payment</h2>
+          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Payment</h2>
 
           {paymentConfirmed && (
             <p className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
@@ -480,7 +480,7 @@ export default function AgreementView({
                 rows={2}
                 autoFocus
                 placeholder="e.g. bank transfer, ref #12345"
-                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
               />
               <div className="flex flex-wrap gap-3">
                 <button
@@ -497,7 +497,7 @@ export default function AgreementView({
                   Cancel
                 </button>
               </div>
-              <p className="text-[11px] text-slate-600 leading-relaxed">
+              <p className="text-[11px] text-slate-400 leading-relaxed">
                 This records that you stated payment was sent, with the server's time. It is not
                 proof that money moved — TrustFlow cannot see outside itself.
               </p>
@@ -540,7 +540,7 @@ export default function AgreementView({
                 rows={2}
                 autoFocus
                 placeholder="e.g. nothing received, or wrong amount"
-                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-600"
+                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
               />
               <div className="flex flex-wrap gap-3">
                 <button
@@ -563,7 +563,7 @@ export default function AgreementView({
       )}
 
       <section className="space-y-3">
-        <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">Record</h2>
+        <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Record</h2>
         <Record events={events} />
 
         {/* The point of keeping a tamper-evident record is being able to take it
@@ -603,7 +603,7 @@ export default function AgreementView({
           </div>
         )}
 
-        <p className="text-[11px] text-slate-600 leading-relaxed border-t border-white/5 pt-4">
+        <p className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
           This record is tamper-evident. TrustFlow records what each party stated; it does not
           establish that a statement is true.
           {/* What the download is differs by who is asking, and saying the wrong
