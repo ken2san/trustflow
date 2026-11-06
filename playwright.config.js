@@ -48,6 +48,11 @@ export default defineConfig({
         '**/agreement-export.spec.js',
         '**/earner-signin.spec.js',
         '**/visual-accessibility.spec.js',
+        // The capture spec belongs here for the reason the project exists: the
+        // review it feeds is about whether a screen can be read, and a phone is
+        // where a counterparty most likely reads it. It stubs every call
+        // including auth, so it cannot write at either width.
+        '**/guest-path-capture.spec.js',
       ],
       // A denylist, not an allowlist. Codex's first version listed every
       // included test title in one regex, which fails silently in the worst

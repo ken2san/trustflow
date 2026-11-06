@@ -137,13 +137,18 @@ test('the invitation says which side does the work before anyone agrees', async 
   await openTheRecord(page);
 
   await expect(page.getByText('Who does the work')).toBeVisible();
-  await expect(page.getByText('Acme Translations does the work · you pay')).toBeVisible();
+  await expect(page.getByText('Acme Translations does the work · you pay', { exact: true }))
+    .toBeVisible();
 });
 
 test('the invitation states the work direction the other way round too', async ({ page }) => {
   await openTheRecord(page, { invite: { performed_by: 'counterparty' } });
 
-  await expect(page.getByText('You do the work · Acme Translations pays')).toBeVisible();
+  // Both the headline and the card say this now — the headline states the
+  // direction because a blind reviewer read the old one backwards — so this
+  // pins the card's own label rather than matching twice.
+  await expect(page.getByText('You do the work · Acme Translations pays', { exact: true }))
+    .toBeVisible();
 });
 
 // ── After agreeing ──────────────────────────────────────────────────────────

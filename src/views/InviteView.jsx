@@ -12,7 +12,14 @@ const GAINS = [
   {
     icon: ShieldCheck,
     title: "What you accept is recorded, not remembered.",
-    body: "Accepting writes a timestamped record of these exact terms — the amount, the deadline and what counts as done. Each later step is hash-linked to the one before it, so an edit afterwards cannot pass as the original.",
+    // "cannot pass as the original" was too strong and Codex's audit said so:
+    // the chain makes a later edit DETECTABLE when the record is checked, and
+    // UPDATE/DELETE on events is revoked, but there is no third-party
+    // timestamp and no TSA token is written, so nothing here outranks the
+    // operator of the server. Scoped to detection, which is what the code does
+    // (log-event/index.ts:280-318, 20260927000000_agreement_snapshot.sql:48-75,
+    // 20260313000000_events_table.sql:129-133).
+    body: "Accepting writes a timestamped record of these exact terms — the amount, the deadline and what counts as done. Each later step is hash-linked to the one before it, so anything edited afterwards shows up when the record is checked.",
   },
   {
     icon: Download,
@@ -40,8 +47,12 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
     const Icon = isExpired ? Clock : AlertTriangle;
     const title = isExpired ? 'This invite has expired.' : 'Invalid invite link.';
     const body = isExpired
-      ? 'Invite links are valid for 72 hours. Ask the sender to generate a new one.'
-      : 'This link may have been modified or is malformed. Please request a fresh invite link.';
+      ? 'Invite links are valid for 72 hours. Ask whoever sent you this link to issue a new one — they can do it from their own copy of the agreement.'
+      // Deliberately lists the possibilities rather than guessing: the server
+      // returns the same refusal for a link that was mistyped, already used,
+      // or deleted before it was opened, and telling a stranger it was
+      // "modified" when they simply pasted it twice is both wrong and alarming.
+      : 'This link did not work. It may have been mistyped or cut short when it was copied, already used, or withdrawn by the sender. Ask whoever sent it to you for a new one.';
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 max-w-md mx-auto text-center animate-fade-in-up">
         <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/20 rounded-[20px] flex items-center justify-center">
@@ -51,11 +62,16 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           <h2 className="text-2xl font-black tracking-tighter text-white">{title}</h2>
           <p className="text-slate-400 text-sm leading-relaxed">{body}</p>
         </div>
+        {/* "Back to Marketplace" pointed at a surface removed on 2026-11-05,
+            and promised a stranger a store of other people that never
+            existed for them. There is nowhere for a guest to go — the link
+            was their whole entry — so this closes the screen instead of
+            pretending otherwise. */}
         <button
           onClick={onDecline}
           className="px-8 py-3 border border-white/10 rounded-2xl font-bold text-slate-400 hover:text-white hover:border-white/20 transition-all text-sm"
         >
-          Back to Marketplace
+          Close
         </button>
       </div>
     );
@@ -145,7 +161,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               className="mt-0.5 w-4 h-4 rounded accent-indigo-500 shrink-0"
             />
             <span className="text-xs text-slate-400 leading-relaxed">
-              I have reviewed the Definition of Done above and agree to these terms. I understand that my acceptance will be timestamped and recorded as a binding agreement.
+              I have reviewed the terms on the previous screen — the work, what counts as done, the amount and the deadline — and I agree to them. I understand that my acceptance will be timestamped and recorded as a binding agreement.
             </span>
           </label>
           <button
@@ -181,11 +197,22 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       {/* Header */}
       <div className="text-center space-y-3">
         <p className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.3em]">You've been invited</p>
+        {/* The direction belongs in the headline, not in a label further down
+            the card. A reviewer shown these screens with no context read
+            "{inviter} wants to work with you" plus an unsigned ¥20,000 as an
+            offer of work TO them, and only found "you pay" in small text
+            lower down (blind review, 2026-11-05). Which side pays is the
+            first thing a stranger needs and the last thing they should have
+            to infer. */}
         <h1 className="text-4xl sm:text-5xl font-black tracking-tighter text-white leading-none">
-          {inviter} wants to work with you.
+          {guestPerforms
+            ? <>{inviter} is asking you to do this work.</>
+            : <>{inviter} is offering to do this work for you.</>}
         </h1>
         <p className="text-slate-400 text-base leading-relaxed max-w-md mx-auto">
-          They set up a TrustFlow contract — so both sides are protected, not just them.
+          {guestPerforms
+            ? <>You do the work · {inviter} pays you. The terms below are recorded exactly as they stand when you accept.</>
+            : <>{inviter} does the work · you pay. The terms below are recorded exactly as they stand when you accept.</>}
         </p>
         <p className="text-xs font-bold text-slate-500">No account required to review.</p>
       </div>

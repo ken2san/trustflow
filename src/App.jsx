@@ -1263,6 +1263,16 @@ const App = () => {
           <GuestEvidenceView
             evidence={guestEvidence}
             reason={guestEvidenceReason}
+            onExport={guestEvidence ? async () => {
+              try {
+                await downloadGuestRecord(guestEvidence);
+              } catch (err) {
+                // The same evidence object the screen is rendering, so this
+                // fails only if the document builder rejects it — worth
+                // saying out loud rather than a button that does nothing.
+                addToast('Download failed', err?.message ?? 'The record could not be written.', 'error');
+              }
+            } : undefined}
             onBack={() => setView('invite-accepted')}
           />
         )}

@@ -7,7 +7,7 @@
 // its own; it reports what the server verified, and is deliberate about not
 // overstating it (see the footnote about payload coverage).
 
-import { ShieldCheck, ShieldAlert, Clock, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
 
 const TYPE_LABELS = {
   'contract.initiated':   'Agreement created',
@@ -147,7 +147,7 @@ function EventRow({ event }) {
   );
 }
 
-export default function GuestEvidenceView({ evidence, reason, onBack }) {
+export default function GuestEvidenceView({ evidence, reason, onBack, onExport }) {
   if (reason) {
     const message = {
       no_credential:      'This browser does not hold a credential for the agreement.',
@@ -289,6 +289,32 @@ export default function GuestEvidenceView({ evidence, reason, onBack }) {
         {' '}TrustFlow records what each party stated; it does not establish that a statement is true.
         {chain.truncated && ' Only the earliest events are shown.'}
       </p>
+
+      {/* The invitation promises the counterparty "your own copy of the
+          record". It was true — the download sits on the agreement screen —
+          but not from here, which is the screen reached by the link called
+          "View the full verification detail" and the one a reader lands on
+          when they go looking for it. A reviewer shown these screens with no
+          repository looked for the promised file and reported it missing
+          (blind review, 2026-11-05). A promise is kept where it is made. */}
+      {onExport && (
+        <div className="pt-2 space-y-2">
+          <button
+            onClick={onExport}
+            className="flex items-center gap-2 px-5 py-3 rounded-2xl border border-white/10 hover:border-white/20 hover:bg-white/5 text-sm font-bold text-slate-200 transition-all"
+          >
+            <Download className="w-4 h-4" /> Download this record
+          </button>
+          {/* slate-400, not slate-500: at 12px the dimmer one measures 4.23:1
+              against this background and the accessibility gate rejected it —
+              on a screen whose last finding was exactly this. */}
+          <p className="text-xs text-slate-400">
+            A copy of what is shown here, as a file you keep. Reading it needs
+            nothing from TrustFlow. It records what the server verified; it is
+            not a document you can re-verify yourself.
+          </p>
+        </div>
+      )}
 
       {onBack && (
         <button onClick={onBack} className="text-xs text-slate-400 hover:text-slate-300 underline">
