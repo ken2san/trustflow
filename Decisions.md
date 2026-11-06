@@ -392,6 +392,26 @@ removed code:
 `CLOUD_SAFE_SHAPE` and the `runtime_snapshots` table. That touches the database
 and needs its own approval.
 
+**Follow-through, later the same day — the client half only.** `CLOUD_SAFE_SHAPE`
+no longer declares `uiProfile` or `step`, and the six states that had lost
+their last writer are out of `App.jsx` (`uiProfile`, `internalProfile`,
+`acceptanceProtocol`, `badActorFlags`, `contractHistory`, `step`). The shape is
+flat now, and `runtimeState.js`'s per-leaf descent is kept anyway — a top-level
+allowlist is the defect that file exists for, so `filterToShape` is exported
+and the depth tests declare their own shape. **The database is untouched**:
+existing rows keep the old keys and are filtered on read, exactly as
+pre-allowlist rows already were, and whether to delete them is still the open
+approval above.
+
+Two claims this layer left behind on screens were also corrected, because a
+removed feature that is still being promised is worse than one still shipping:
+`InviteView`'s cards offered the counterparty a Trust Passport that "builds"
+with every contract, records "you own permanently", and an agreement "locked
+before any money moves" — and the footer offered an account to save the
+passport. A guest gets a link, not an account, and TrustFlow does not hold
+money. The copy now states what acceptance does. This is the same failure as
+the Felix avatar in point 1: the screen was asserting, not idling.
+
 ---
 
 ### [2026-09-29] — An export is built from rows that can be re-verified
