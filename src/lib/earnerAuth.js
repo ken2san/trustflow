@@ -22,6 +22,7 @@
 // is_anonymous claim, so it stays closed for the whole pending window.
 
 import { supabase } from './supabase.js'
+import { captchaOptions } from './captcha.js'
 
 const NOT_CONFIGURED = new Error('Supabase is not configured')
 
@@ -130,22 +131,32 @@ function forgetEarnerEmail() {
  *
  * @returns {Promise<{ ok: boolean, reason: string|null }>}
  *          reason is 'not_configured' | 'unknown_email' | 'rate_limited'
+ *                  | 'captcha_failed'
  *                  | 'invalid_email' | 'error'
  */
-export async function requestSignInCode(email) {
+export async function requestSignInCode(email, captchaToken = null) {
   if (!supabase) return { ok: false, reason: 'not_configured' }
 
   const address = String(email ?? '').trim()
   if (!address) return { ok: false, reason: 'invalid_email' }
 
+  // `/auth/v1/otp` is one of the endpoints CAPTCHA protection covers. Without
+  // the token a protected project answers 400 captcha_failed and nobody can
+  // sign in at all — measured on production 2026-11-06. See lib/captcha.js.
   const { error } = await supabase.auth.signInWithOtp({
     email: address,
-    options: { shouldCreateUser: false },
+    options: { shouldCreateUser: false, ...captchaOptions(captchaToken) },
   })
 
   if (!error) return { ok: true, reason: null }
 
   const code = error.code ?? ''
+  // Kept distinct from every other failure here: "the challenge did not pass"
+  // is a statement about this browser, while 'unknown_email' and
+  // 'rate_limited' are statements about the address or the project. Collapsing
+  // them is exactly how the 2026-11-06 outage presented itself to the user —
+  // as "Could not send the code", which sent the operator looking at mail.
+  if (code === 'captcha_failed') return { ok: false, reason: 'captcha_failed' }
   if (code === 'otp_disabled') {
     // The signed-out screen names the remembered address and offers to bring
     // its work back. The backend has just said there is nothing to sign in to

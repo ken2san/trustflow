@@ -64,7 +64,7 @@ import { logEvent, EVENT_TYPES, fetchContractEvents } from './lib/eventLog.js';
 import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
-import { ensureActorIdentity } from './lib/identity.js';
+import { currentActorIdentity, ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
 import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
@@ -108,6 +108,8 @@ import ToastContainer from './components/ui/ToastContainer';
 
 // CommandPalette component for command modal
 import CommandPalette from './components/ui/CommandPalette.jsx';
+import CaptchaChallenge from './components/ui/CaptchaChallenge.jsx';
+import { captchaConfigured } from './lib/captcha.js';
 
 
 
@@ -231,6 +233,10 @@ const App = () => {
   // Earner verification (A-1): the contract is only persisted once the Earner
   // has proved an email, so a cleared browser cannot orphan a real agreement.
   const [otpStage, setOtpStage] = useState('idle'); // 'idle' | 'busy' | 'code'
+  // The Turnstile token, when the deployment is protected. Null is the normal
+  // resting state: the widget sets it on solve and clears it on expiry, and
+  // the auth calls omit the field entirely rather than sending an empty one.
+  const [captchaToken, setCaptchaToken] = useState(null);
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState(null);
   const [isRuntimeHydrated, setIsRuntimeHydrated] = useState(false);
@@ -300,7 +306,11 @@ const App = () => {
     let alive = true;
 
     const hydrate = async () => {
-      const identity = await ensureActorIdentity();
+      // Reads an existing session; deliberately does NOT create one. See
+      // identity.js — an anonymous user per page view was both junk and an
+      // unauthenticated write surface, and nothing on this path needs a
+      // server identity.
+      const identity = await currentActorIdentity();
       if (alive && identity?.actorId) setActorId(identity.actorId);
 
       const snapshot = await loadRuntimeSnapshot(identity?.actorId);
@@ -793,6 +803,29 @@ const App = () => {
         setOtpStage('idle');
         return;
       }
+      // `updateUser({ email })` upgrades the CURRENT session into a permanent
+      // account, so there has to be one. It is created here rather than on
+      // load, which is the only place a captcha challenge can honestly appear:
+      // the person is in front of a form they chose to fill in.
+      const identity = await ensureActorIdentity(captchaToken);
+      if (identity.source !== 'supabase-auth') {
+        // Three different causes, and they must not share a sentence: no
+        // challenge was shown because this build has none, a challenge was
+        // shown and not completed, or the network failed. The first is a
+        // misconfiguration and is not the reader's fault.
+        setOtpError(
+          !captchaConfigured()
+            ? 'Could not start a session. This deployment may be missing its '
+              + 'challenge configuration — the site owner needs to look at it.'
+            : captchaToken
+              ? 'Could not start a session. Check your connection and try again.'
+              : 'Please complete the challenge below first.',
+        );
+        setOtpStage('idle');
+        return;
+      }
+      setActorId(identity.actorId);
+
       const { error } = await requestEarnerVerification((byocForm.earnerEmail || '').trim());
       if (error) {
         setOtpError(describeAuthError(error) ?? error.message ?? 'Could not send the code.');
@@ -810,7 +843,7 @@ const App = () => {
       setOtpError(describeAuthError(err) ?? String(err?.message ?? err));
       setOtpStage('idle');
     }
-  }, [byocForm, persistContractAndLink]);
+  }, [byocForm, persistContractAndLink, captchaToken]);
 
   const handleVerifyEarnerCode = useCallback(async () => {
     setOtpError(null);
@@ -1029,7 +1062,10 @@ const App = () => {
               )}
             </div>
             {/* Sticky footer */}
-            <div className="px-10 pb-10 pt-4 border-t border-white/5 flex gap-3">
+            <div className="px-10 pb-10 pt-4 border-t border-white/5 flex flex-col gap-3">
+              {otpStage !== 'code' && (
+                <CaptchaChallenge onToken={setCaptchaToken} />
+              )}
               <button
                 onClick={handleSendInvite}
                 disabled={
@@ -1161,7 +1197,8 @@ const App = () => {
           <SignInView
             initialEmail={auth.email ?? ''}
             expired={auth.status === 'expired'}
-            onRequestCode={requestSignInCode}
+            onRequestCode={(email) => requestSignInCode(email, captchaToken)}
+            captchaSlot={<CaptchaChallenge onToken={setCaptchaToken} />}
             onVerifyCode={async (email, code) => {
               const result = await verifySignInCode(email, code);
               if (result.user) await handleSignedIn();

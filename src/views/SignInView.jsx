@@ -23,6 +23,10 @@ const REQUEST_ERRORS = {
   rate_limited: RATE_LIMIT_MESSAGE,
   invalid_email: 'That does not look like an email address.',
   not_configured: 'Sign-in is unavailable — this build has no Supabase connection.',
+  // Separate from `error` on purpose. "The code could not be sent" sends the
+  // reader to look at their mail; the challenge is in front of them.
+  captcha_failed: 'The challenge below was not completed, or has expired. '
+    + 'Complete it and try again.',
   error: 'The code could not be sent. Try again in a moment.',
 };
 
@@ -35,6 +39,11 @@ const VERIFY_ERRORS = {
 
 export default function SignInView({
   initialEmail = '', expired = false, onRequestCode, onVerifyCode, onBack,
+  // The challenge, passed in rather than built here: this view does not know
+  // whether the deployment is protected, and the token belongs to the caller
+  // that makes the auth request. Absent in tests and in any build without a
+  // site key, which is why every use is guarded.
+  captchaSlot = null,
 }) {
   const [email, setEmail] = React.useState(initialEmail ?? '');
   const [code, setCode] = React.useState('');
@@ -95,6 +104,7 @@ export default function SignInView({
             aria-label="Email address"
             className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-6 py-4 text-white font-medium outline-none transition-all placeholder:text-slate-600"
           />
+          {captchaSlot}
           <button
             onClick={sendCode}
             disabled={!email.trim() || busy}
