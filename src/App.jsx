@@ -51,7 +51,7 @@
  */
 
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { initialUIProfileStats, initialInternalProfileStats } from './lib/profileInitialData';
 import {
   ShieldCheck, CheckCircle2, Search, Activity, X, LayoutGrid, Loader2, RefreshCw, Briefcase, UserPlus, LogIn, LogOut
@@ -60,9 +60,8 @@ import {
 // (moved below imports)
 
 // Centralized constants and mock data
-import { deriveLevel } from './lib/utils';
 import { sha256, buildDodCanonical } from './lib/crypto.js';
-import { logEvent, EVENT_TYPES, fetchContractEvents, subscribeToContractEvents } from './lib/eventLog.js';
+import { logEvent, EVENT_TYPES, fetchContractEvents } from './lib/eventLog.js';
 import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
@@ -74,7 +73,6 @@ import {
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
   describeAuthError,
 } from './lib/earnerAuth.js';
-import { supabase, isSupabaseEnabled } from './lib/supabase.js';
 
 
 // ...existing code...
@@ -178,20 +176,6 @@ const App = () => {
     'Dark Mode Tokens',
     'Atomic Design Compliance'
   ]);
-  // Animation state for level/parameter up
-  const [showLevelUp, setShowLevelUp] = useState(false);
-  const [showParamUp, setShowParamUp] = useState(false);
-
-  // Animation triggers
-  const triggerLevelUp = useCallback(() => {
-    setShowLevelUp(true);
-    setTimeout(() => setShowLevelUp(false), 1800);
-  }, []);
-  const triggerParamUp = useCallback(() => {
-    setShowParamUp(true);
-    setTimeout(() => setShowParamUp(false), 1200);
-  }, []);
-
   const [mode, setMode] = useState('earner');
   // Detect invite link params on mount; set initial view accordingly.
   // Supports two URL formats:
@@ -237,26 +221,16 @@ const App = () => {
 
   const [selectedItem, setSelectedItem] = useState(null);
   const [status, setStatus] = useState('idle');
-  const lastActionTime = useRef(0); // Safety guard for global transitions
 
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
-  const [scrambleTrigger, setScrambleTrigger] = useState(0);
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [isBiometricOpen, setIsBiometricOpen] = useState(false);
-  const [isDisputeOpen, setIsDisputeOpen] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [profileData, setProfileData] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   // Phase 4: append-only contract event log (persisted to Supabase when connected)
-  const [contractEvents, setContractEvents] = useState([]);
-  const [dodHash, setDodHash] = useState(null);
   // Phase 4: permanent bad-actor flags — persist across contract cycles
   const [badActorFlags, setBadActorFlags] = useState([]);
   const [contractHistory, setContractHistory] = useState([]);
-  const [isRehire, setIsRehire] = useState(false);
   const [hasOnboarded, setHasOnboarded] = useState(() => {
     if (initialParams.has('reset')) {
       localStorage.removeItem('tf_onboarded');
@@ -266,7 +240,6 @@ const App = () => {
   });
   const [showBYOCForm, setShowBYOCForm] = useState(false);
   const [byocForm, setByocForm] = useState({ name: '', description: '', amount: '', dod: '' });
-  const [byocContractId, setByocContractId] = useState('');
   const [inviteLink, setInviteLink] = useState(null);
   const [inviteLinkCopied, setInviteLinkCopied] = useState(false);
   // Earner verification (A-1): the contract is only persisted once the Earner
@@ -274,8 +247,6 @@ const App = () => {
   const [otpStage, setOtpStage] = useState('idle'); // 'idle' | 'busy' | 'code'
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState(null);
-  const [guestName, setGuestName] = useState(null); // set when counterparty joins via invite link
-  const [guestEmail, setGuestEmail] = useState(null); // optional email from invite Stage 2
   const [isRuntimeHydrated, setIsRuntimeHydrated] = useState(false);
   const [actorId, setActorId] = useState('user');
   // Mirrors actorId for the contract-events subscription below, whose effect
@@ -288,9 +259,6 @@ const App = () => {
   const actorIdRef = useRef(actorId);
   useEffect(() => { actorIdRef.current = actorId; }, [actorId]);
 
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const [activePaymentIntentId, setActivePaymentIntentId] = useState(null);
 
 
   useEffect(() => { const handleKeyDown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setIsCommandOpen(prev => !prev); } }; window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown); }, []);
@@ -391,79 +359,22 @@ const App = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const contractId = String(selectedItem?.id ?? '');
-    if (!contractId || contractId === 'mock') return;
+  // A realtime subscription on the selected contract's events used to live
+  // here. It is gone (2026-11-05) with the five-step flow it served.
+  //
+  // It kept a `contractEvents` array nothing read any more, advanced the
+  // legacy `step`, and toasted when the counterparty acted. The evidence path
+  // never used it: openContractFromHome fetches the owner's events itself,
+  // recordAgreementEvent re-reads them after a write, and the guest screen is
+  // built from fetchGuestEvidence. What reach it still had was accidental —
+  // it keyed off `selectedItem`, which after the removal is set only by the
+  // guest acceptance path, so a "your counterparty advanced the contract"
+  // toast could fire on a screen with nothing to advance.
+  //
+  // Live notification of the other party acting is worth having, and this was
+  // not it. If it is built, it belongs on the agreement screen and keyed to
+  // the agreement being viewed — see HANDOFF.md.
 
-    let cancelled = false;
-    const mergeEvents = incoming => {
-      setContractEvents(prev => {
-        const map = new Map(prev.map(e => [e.id, e]));
-        incoming.forEach(e => map.set(e.id, e));
-        return Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      });
-    };
-
-    const load = async () => {
-      // Merges into whatever is already on screen, so a failed read leaves the
-      // previous events in place rather than replacing them with nothing. The
-      // subscription below is the other way these arrive.
-      let remote;
-      try {
-        remote = await fetchContractEvents(contractId);
-      } catch (err) {
-        console.warn('[TrustFlow] contract events fetch failed:', err);
-        return;
-      }
-      if (cancelled || remote.length === 0) return;
-      mergeEvents(remote);
-      const initiated = remote.find(e => e.type === EVENT_TYPES.CONTRACT_INITIATED);
-      if (initiated?.dod_hash) setDodHash(prev => prev || initiated.dod_hash);
-    };
-
-    load();
-    const unsubscribe = subscribeToContractEvents(contractId, ev => {
-      if (!ev?.id) return;
-      mergeEvents([ev]);
-
-      // Step sync: apply state changes from counterparty events.
-      // Skip own events — local state was already updated when we wrote them.
-      // Reads actorIdRef (always current), not the actorId closed over when
-      // this effect last ran — see actorIdRef's declaration for why.
-      if (ev.actor_id === actorIdRef.current) return;
-
-      const STEP_MAP = {
-        [EVENT_TYPES.CONTRACT_ACCEPTED]: 2,
-        [EVENT_TYPES.PERFORMANCE_ASSERTED]:    3,
-        [EVENT_TYPES.PERFORMANCE_ACCEPTED]:     4,
-        [EVENT_TYPES.PAYMENT_RELEASED]:  5,
-        [EVENT_TYPES.CONTRACT_COMPLETED]: 5,
-      };
-
-      const targetStep = STEP_MAP[ev.type];
-      if (targetStep) {
-        setStep(prev => (prev < targetStep ? targetStep : prev));
-        addToast('Contract Updated', 'Your counterparty advanced the contract.', 'info');
-      }
-
-      if (ev.type === EVENT_TYPES.CONTRACT_CANCELLED) {
-        addToast('Contract Cancelled', 'Your counterparty has cancelled this contract.', 'warning');
-        setView('home');
-        setSelectedItem(null);
-        setStep(1);
-        setContractEvents([]);
-      }
-
-      if (ev.type === EVENT_TYPES.DISPUTE_OPENED || ev.type === EVENT_TYPES.DISPUTE_RESOLVED) {
-        addToast('Dispute Update', `Dispute ${ev.type === EVENT_TYPES.DISPUTE_OPENED ? 'opened' : 'resolved'} by counterparty.`, 'warning');
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [selectedItem?.id]);
 
   useEffect(() => {
     if (!isRuntimeHydrated) return;
@@ -521,257 +432,6 @@ const App = () => {
     }, 800);
   };
 
-  // BiometricModal removed: go directly to contract view
-  //
-  // Shared by every "start a contract" entry point (ScopingView's AI-architect
-  // flow, direct Hire from the marketplace, and agreeing terms in the
-  // negotiation chat) so the DoD hash + CONTRACT_INITIATED audit event are
-  // always recorded — previously onHire and the negotiation-chat onAgreement
-  // path each had their own inline state-setting that skipped both, leaving
-  // contracts started that way with no evidence-trail entry for how they began.
-  const beginContract = useCallback(async (item) => {
-    setSelectedItem(item);
-    setView('contract');
-    setStep(1);
-    if (!item) return;
-    const dodText = item.acceptanceCriteria?.join('\n') ?? item.title ?? '';
-    const canonical = buildDodCanonical({
-      dodText,
-      hirerId: mode === 'hirer' ? 'user' : String(item.id),
-      earnerId: mode === 'earner' ? 'user' : String(item.id),
-      budgetPoints: String(item.totalPoints ?? 0),
-      deadline: item.deadline ?? 'TBD',
-    });
-    const hash = await sha256(canonical);
-    setDodHash(hash);
-    const event = await logEvent({
-      type: EVENT_TYPES.CONTRACT_INITIATED,
-      contractId: String(item.id ?? 'mock-' + Date.now()),
-      actorId,
-      payload: { title: item.title, budgetPoints: item.totalPoints },
-    });
-    setContractEvents(prev => [event, ...prev]);
-  }, [mode, actorId]);
-
-  const initiateContract = () => {
-    addToast('Contract Initiated', 'Contract flow started.');
-    return beginContract(selectedItem);
-  };
-
-  const handleNextStep = useCallback(() => {
-    const now = Date.now();
-    // Guard: Prevent double execution within 1.5 seconds
-    if (now - lastActionTime.current < 1500) return;
-
-    lastActionTime.current = now;
-    setStatus('processing');
-
-    setTimeout(async () => {
-      // Logic execution
-      if (step === 2) {
-        if (mode === 'hirer') setUIProfile(s => ({ ...s, points: (s.points ?? 0) - selectedItem.totalPoints, totalSpent: (s.totalSpent ?? 0) + selectedItem.totalPoints }));
-        else setUIProfile(s => ({ ...s, points: (s.points ?? 0) + selectedItem.totalPoints }));
-      }
-
-      // Phase 4: log step transition events
-      const contractId = String(selectedItem?.id ?? 'mock');
-      if (step === 1) {
-        const ev = await logEvent({ type: EVENT_TYPES.CONTRACT_ACCEPTED, contractId, actorId, payload: { step: 1 } });
-        setContractEvents(prev => [ev, ...prev]);
-      } else if (step === 4) {
-        const ev = await logEvent({ type: EVENT_TYPES.PERFORMANCE_ACCEPTED, contractId, actorId, payload: { step: 4 } });
-        setContractEvents(prev => [ev, ...prev]);
-        // Fire acceptance email if hirer email is known (BYOC flow).
-        // send-acceptance-email now loads recipient/amount/DoD from the
-        // contracts DB row for contract_id itself (closes a hole where the
-        // old payload-trusting version let a caller send arbitrary content
-        // to an arbitrary address) — it only succeeds for a contract that
-        // actually exists in that table with state SETTLED. This local/demo
-        // flow's `contractId` is not a real row there yet (this whole flow
-        // isn't wired to the DB-backed contracts table — see HANDOFF.md), so
-        // this call will 404 until that wiring lands. Left in place rather
-        // than removed so it starts working the moment that wiring exists.
-        if (isSupabaseEnabled && guestEmail) {
-          supabase.functions.invoke('send-acceptance-email', {
-            body: { contract_id: contractId },
-          }).then(({ error }) => {
-            if (error) addToast('Email not sent', 'Acceptance email failed to send.', 'warning');
-            else addToast('Confirmation sent', 'DoD acceptance email sent to hirer.', 'success');
-          });
-        }
-        // Trust Passport: record contract completion
-        setUIProfile(s => {
-          const newCompleted = (s.completedContracts ?? 0) + 1;
-          const newLevel = deriveLevel(newCompleted);
-          return {
-            ...s,
-            completedContracts: newCompleted,
-            exp: (s.exp ?? 0) + 500,
-            trustScore: Math.min(1000, (s.trustScore ?? 0) + 5),
-            level: newLevel,
-            totalEarned: mode === 'earner' ? (s.totalEarned ?? 0) + (selectedItem?.totalPoints ?? 0) : (s.totalEarned ?? 0),
-          };
-        });
-        triggerLevelUp();
-      }
-
-      // Navigation
-      // (negotiationMessages and negotiationAgreed state are now at the top level)
-      if (step === 5) {
-          // Log contract completion before resetting
-          const ev = await logEvent({ type: EVENT_TYPES.CONTRACT_COMPLETED, contractId, actorId, payload: {} });
-          setContractEvents(prev => [ev, ...prev]);
-          setContractHistory(prev => [{
-            id: contractId,
-            title: selectedItem?.title ?? 'Contract',
-            client: selectedItem?.client ?? '—',
-            date: new Date().toISOString().slice(0, 10).replace(/-/g, '.'),
-            earned: mode === 'earner' ? (selectedItem?.totalPoints ?? 0) : 0,
-            rating: uiProfile.avgRating ?? '—',
-          }, ...prev]);
-          // Reset everything for next cycle
-          setView('home');
-          setSelectedItem(null);
-          setStep(1);
-          setDodHash(null);
-          setContractEvents([]);
-          setIsUploading(false);
-          setUploadProgress(0);
-          setStatus('idle');
-          return;
-      }
-
-      setStep(prev => prev + 1);
-      setStatus('idle');
-    }, 1200);
-  }, [step, mode, selectedItem, status, actorId, guestEmail, dodHash]);
-
-  const handleReject = async () => {
-    setStep(2);
-    addToast('Re-delivery Requested', 'The hirer has requested a revised submission.', 'warning');
-    const contractId = String(selectedItem?.id ?? 'mock');
-    const ev = await logEvent({ type: EVENT_TYPES.PERFORMANCE_REJECTED, contractId, actorId, payload: { step: 2 } });
-    setContractEvents(prev => [ev, ...prev]);
-  };
-  const handleOpenDispute = () => { setIsDisputeOpen(true); };
-  const handleRehire = React.useCallback(() => {
-    // Carry over negotiated DoD (acceptanceProtocol) into the re-hire item
-    setSelectedItem(prev => prev
-      ? { ...prev, acceptanceCriteria: acceptanceProtocol.length > 0 ? [...acceptanceProtocol] : prev.acceptanceCriteria }
-      : prev
-    );
-    // Reset stale contract state so new contract starts clean
-    setDodHash(null);
-    setContractEvents([]);
-    setIsRehire(true);
-    setStep(1);
-    setView('scoping');
-    addToast('Re-hire Template Ready', 'DoD and amount pre-filled from your last contract.', 'info');
-  }, [acceptanceProtocol, addToast]);
-
-  const handleContractCancel = React.useCallback(async ({ reason }) => {
-    setContractHistory(prev => [{
-      id: 'cancelled-' + Date.now(),
-      title: selectedItem?.title ?? 'Contract',
-      client: selectedItem?.client ?? '—',
-      date: new Date().toISOString().slice(0, 10).replace(/-/g, '.'),
-      earned: 0,
-      rating: '—',
-    }, ...prev]);
-
-    // ContractView's own toast ("cancelled and logged") already claims this
-    // is recorded — it previously wasn't. Mirrors the counterparty-initiated
-    // cancel path below (CONTRACT_CANCELLED branch of the events subscription).
-    const contractId = String(selectedItem?.id ?? 'mock');
-    await logEvent({ type: EVENT_TYPES.CONTRACT_CANCELLED, contractId, actorId, payload: { reason } });
-
-    // Leaving this contract's view — same reset the counterparty-initiated
-    // cancel path does (events subscription's CONTRACT_CANCELLED branch
-    // above), including clearing contractEvents rather than keeping the
-    // event just logged: it's already persisted, and a stale local list
-    // shouldn't bleed into whatever contract is viewed next.
-    setView('home');
-    setSelectedItem(null);
-    setStep(1);
-    setContractEvents([]);
-  }, [selectedItem, actorId]);
-
-  const handleDisputeResolve = async ({ winner, arbiter, reason } = {}) => {
-    setIsDisputeOpen(false);
-    const contractId = String(selectedItem?.id ?? 'mock');
-    const isPending = winner === 'pending';
-    const currentUserWins = !isPending && winner === mode;
-
-    if (isPending) {
-      addToast('Arbitration Submitted', `${arbiter === 'human' ? 'Human arbiter' : 'Peer panel'} assigned — ruling expected within ${arbiter === 'human' ? '24–48h' : '48–72h'}.`, 'info');
-    } else if (currentUserWins) {
-      addToast('Dispute Won', 'Arbitration ruled in your favor. Proceeding to settlement.', 'success');
-      setUIProfile(s => ({ ...s, trustScore: Math.min(1000, (s.trustScore ?? 0) + 5) }));
-    } else {
-      addToast('Dispute Lost', 'Arbitration ruled against you. Stake partially forfeited.', 'error');
-      setUIProfile(s => ({ ...s, trustScore: Math.max(0, (s.trustScore ?? 0) - 10) }));
-      setBadActorFlags(prev => [...prev, {
-        type: EVENT_TYPES.DISPUTE_LOST,
-        label: 'Dispute Lost',
-        contractId,
-        date: new Date().toISOString(),
-      }]);
-    }
-
-    const ev = await logEvent({
-      type: currentUserWins ? EVENT_TYPES.DISPUTE_WON : EVENT_TYPES.DISPUTE_LOST,
-      contractId,
-      actorId,
-      payload: { winner, arbiter, reason, resolvedAt: new Date().toISOString() },
-    });
-    setContractEvents(prev => [ev, ...prev]);
-    // Advance to blind rating phase — both parties rate each other after any dispute resolution
-    setStep(4);
-  };
-
-  const handleFileUpload = () => {
-      if (isUploading) return;
-      setIsUploading(true);
-      let progress = 0;
-      const interval = setInterval(() => {
-          progress += 5;
-          setUploadProgress(progress);
-          if (progress >= 100) {
-              clearInterval(interval);
-              setIsUploading(false);
-              setUploadProgress(0);
-              // Directly call handleNextStep logic here to avoid race conditions with button state.
-              // Guards against the same double-fire handleNextStep guards against
-              // (lastActionTime.current) — this path used to skip that check
-              // entirely: isUploading resets to false above, before this delayed
-              // step-advance actually runs, leaving a window where a second
-              // upload could be started and its own delayed callback would also
-              // log WORK_SUBMITTED and advance step.
-              const uploadNow = Date.now();
-              if (uploadNow - lastActionTime.current < 1500) return;
-              lastActionTime.current = uploadNow;
-              setStatus('processing');
-              setTimeout(async () => {
-                  // Phase 4: log work submitted event
-                  const ev = await logEvent({
-                    type: EVENT_TYPES.PERFORMANCE_ASSERTED,
-                    contractId: String(selectedItem?.id ?? 'mock'),
-                    actorId,
-                    payload: { step: 3 },
-                  });
-                  setContractEvents(prev => [ev, ...prev]);
-                  setStep(prev => prev + 1);
-                  setStatus('idle');
-                  addToast('Upload Complete', 'AI Inspection initiated.');
-              }, 1200);
-          }
-      }, 80);
-  };
-  const handlePaymentSuccess = (paymentIntentId) => {
-    setActivePaymentIntentId(paymentIntentId);
-    setIsPaymentModalOpen(false);
-    addToast('Escrow Secured', 'Payment held. Work can begin.', 'success');
-  };
 
   // Lands on the real home screen, named rather than inherited. Dismissing the
   // overlay used to reveal whatever `view` happened to hold, which on a first
@@ -802,7 +462,9 @@ const App = () => {
   }, [addToast]);
 
   const handleBYOCStart = useCallback(() => {
-    setByocContractId(crypto.randomUUID());
+    // It used to reserve a client-side UUID here. Nothing reads it: the
+    // contract id comes back from the server in persistContractAndLink, and
+    // the only consumer of the reserved one was the legacy mock item.
     setShowBYOCForm(true);
   }, []);
 
@@ -1095,26 +757,6 @@ const App = () => {
     await refreshContracts();
   }, [addToast, refreshContracts]);
 
-  const handleBYOCSubmit = useCallback(() => {
-    const item = {
-      id: byocContractId || ('byoc-' + Date.now()),
-      title: byocForm.description || 'Custom Engagement',
-      client: byocForm.name || 'Direct Counterparty',
-      totalPoints: parseInt(byocForm.amount, 10) || 0,
-      acceptanceCriteria: byocForm.dod
-        ? byocForm.dod.split('\n').map(s => s.trim()).filter(Boolean)
-        : [],
-    };
-    setSelectedItem(item);
-    setShowBYOCForm(false);
-    setByocForm({ name: '', description: '', amount: '', dod: '' });
-    setByocContractId('');
-    setInviteLink(null);
-    setInviteLinkCopied(false);
-    setView('scoping');
-    addToast('Agreement Started', 'Define your scope below.');
-  }, [byocForm, addToast, byocContractId]);
-
   // Persists the contract and turns the server-issued invite_token into a link.
   // Server-owned columns (state, invite_token, expiry, ...) are deliberately not
   // sent — the client no longer holds INSERT privilege on them.
@@ -1211,23 +853,6 @@ const App = () => {
       { id: 'switch', label: `Switch to ${mode === 'earner' ? 'Hirer' : 'Earner'} Mode`, icon: RefreshCw, action: toggleMode },
   ], [mode, handleBYOCStart]);
 
-  const activeOperations = useMemo(() => {
-    if (!selectedItem || step < 1 || step > 4) return [];
-    const PHASES = ['', 'COMMITMENT', 'IN ESCROW', 'INSPECTION', 'RATING'];
-    const PROGRESS = [0, 20, 40, 60, 80];
-    const NEXT_ACTIONS = ['', 'Lock contract terms', 'Submit deliverables', 'Awaiting hirer review', 'Submit rating'];
-    return [{
-      id: selectedItem.id,
-      phase: PHASES[step] || 'ACTIVE',
-      title: selectedItem.title || 'Active Contract',
-      client: selectedItem.client || '—',
-      progress: PROGRESS[step] || 0,
-      nextAction: NEXT_ACTIONS[step] || '—',
-    }];
-  }, [selectedItem, step]);
-
-  // Strategy level (Conservative / Normal / Aggressive)
-  const [strategy, setStrategy] = useState('Balanced');
 
 
 
@@ -1287,7 +912,7 @@ const App = () => {
                 <h3 className="text-2xl font-black text-white mb-1">Work with someone you know</h3>
                 <p className="text-slate-400 text-sm">They can review the terms before creating an account.</p>
               </div>
-              <button onClick={() => { setShowBYOCForm(false); setByocContractId(''); setInviteLink(null); setInviteLinkCopied(false); }} className="ml-4 mt-1 text-slate-500 hover:text-white transition-colors shrink-0" aria-label="Close">
+              <button onClick={() => { setShowBYOCForm(false); setInviteLink(null); setInviteLinkCopied(false); }} className="ml-4 mt-1 text-slate-500 hover:text-white transition-colors shrink-0" aria-label="Close">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1612,8 +1237,10 @@ const App = () => {
                 acceptanceCriteria: accepted.dod ?? [],
                 deadline: accepted.deadline ?? null,
               });
-              setGuestName(name);
-              if (email) setGuestEmail(email);
+              // The claimed name and email were also held in state here. Only
+              // the legacy ContractView read them; what matters about both is
+              // already recorded server-side in the acceptance event, which is
+              // the copy a dispute would rely on.
               window.history.replaceState({}, '', window.location.pathname);
               setView('invite-accepted');
               // No qualification needed any more. The response exists only
@@ -1670,30 +1297,16 @@ const App = () => {
           />
         )}
         {/* scoping and the five-step ContractView rendered here. */}
-              {/* Global Level Up/Param Up Animation */}
-              {showLevelUp && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none">
-                  {/* Overlay background */}
-                  <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-                  <div className="relative flex flex-col items-center justify-center">
-                    <div className="text-5xl font-black text-emerald-400 drop-shadow-[0_4px_32px_rgba(16,185,129,0.7)] animate-pop-scale mb-4 text-center" style={{textShadow:'0 2px 16px #059669, 0 0 2px #fff'}}>LEVEL UP!</div>
-                    <div className="text-xl font-bold text-indigo-200 drop-shadow animate-fade-in-up text-center">
-                      New ability unlocked: <span className="text-white">Priority Support</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {showParamUp && !showLevelUp && (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center pointer-events-none">
-                  <div className="text-3xl font-black text-indigo-300 drop-shadow animate-pop-fade">+1 PARAMETER</div>
-                </div>
-              )}
+        {/* The LEVEL UP / +1 PARAMETER overlays rendered here. They read
+            state that nothing set any more: the only triggers were in the
+            removed five-step flow, so a name-occurrence scan called them
+            used and they could never appear. */}
         {/* wallet and command-center rendered here. */}
 
       </main>
 
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0F172A]/80 backdrop-blur-2xl border-t border-white/10 px-8 py-5 flex justify-center items-center z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
-        <button title="Contracts" className={`p-3 transition-all duration-300 ${view === 'home' ? 'text-indigo-400 scale-125 bg-indigo-500/10 rounded-2xl shadow-[0_0_20px_rgba(99,102,241,0.2)]' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => { setIsProfileOpen(false); setIsCommandOpen(false); setProfileData(null); setView('home'); }}><LayoutGrid className="w-6 h-6" /></button>
+        <button title="Contracts" className={`p-3 transition-all duration-300 ${view === 'home' ? 'text-indigo-400 scale-125 bg-indigo-500/10 rounded-2xl shadow-[0_0_20px_rgba(99,102,241,0.2)]' : 'text-slate-500 hover:text-slate-300'}`} onClick={() => { setIsCommandOpen(false); setView('home'); }}><LayoutGrid className="w-6 h-6" /></button>
         {/* The Wallet button and the profile avatar stood here. The avatar was
             the same hardcoded "F" the desktop header carried, and it survived
             bd33c34 because that change only touched the header and every frame
