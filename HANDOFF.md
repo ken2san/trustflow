@@ -1378,6 +1378,64 @@ What remains is quality, found by running the thing: the acting counterparty
 (Next Priority #1), and the production smoke check that twice would have
 caught what every suite missed.
 
+### Open, and the most serious thing standing: the server does not enforce the order it projects — 2026-11-06
+
+**Found by Codex's review of the owner-side flow — the half nobody had
+examined from outside — and then reproduced against E2E rather than argued
+about.**
+
+`log-event/index.ts:249-266` reads the contract to resolve the actor and
+checks two things: that the caller is a party, and that their role may write
+this event type. **It never reads `contracts.state`.** The projection then
+takes the most recent performance event
+(`20260925000000_evidence_core.sql:61-85`), and that migration explicitly
+accepts `PERFORMANCE_ACCEPTED` as an input state.
+
+Measured, with the real API and a real guest credential:
+
+```
+after acceptance        : TERMS_ACCEPTED
+performance.accepted    : HTTP 201
+state now               : PERFORMANCE_ACCEPTED   <- terminal, and the record
+                                                    holds no performance.asserted
+```
+
+**A receiver can record that they accepted a performance nobody ever claimed,
+and the agreement reaches its terminal state.** Append-only, so it cannot be
+taken back. The UI never offers the button; the API is the product's surface
+and does not need it.
+
+Codex also describes the mirror case — a performer re-asserting from the
+terminal state and reopening it — which this probe did not confirm (its owner
+call was refused for an unrelated reason) and which should be checked before
+being claimed.
+
+**Why this is in scope and not a UI nicety.** The product's only claim is that
+the record says what happened. A history in which acceptance precedes any
+claim is not a record of anything; `PERFORMANCE_ACCEPTED` is called terminal
+in two places and the server does not make it so.
+
+**The fix needs a decision, and both halves need approval:**
+
+- The honest place is the database, inside the transaction that inserts the
+  event — an Edge-only check leaves exactly the read-to-write race the
+  acceptance path already uses `row_version` to close.
+- A narrower Edge check would close the ordinary case today and leave the
+  race. It deploys with the four-function set.
+
+Neither was done. **Nothing here is urgent in the sense of ongoing damage —
+no counterparty exists yet — and all of it is urgent before one does**,
+because every defect of this class writes something permanent.
+
+Codex's other findings in the same pass, each recorded and none acted on:
+re-issue has a TOCTOU window where a write authorised under the old token can
+land after the new one is issued; `auditExport`'s `VERIFIED` does not
+distinguish "checked and matched" from "nothing to check"; that document's
+re-verification instructions do not match the builder's own sort or cover v3
+and v4 canonical forms, and its header still speaks of signatures, TSA tokens
+and on-chain anchors that this builder does not produce; owner-side retries
+send no idempotency key, so a lost response can record one intention twice.
+
 ## The four patterns everything found today fell into
 
 Tallied 2026-11-06 after a day that produced, among other things, two defects
