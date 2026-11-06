@@ -28,6 +28,40 @@
 
 begin;
 
+-- 0. The precondition, carried by the migration rather than left to whoever
+--    runs it.
+--
+--    Measured 2026-11-06 before writing this: E2E holds 282 rows of which 276
+--    fail the key check and 261 are superseded duplicates, and production
+--    holds 3 rows which all pass the shape checks but include 2 duplicates.
+--    So neither project can take the constraints below as they stand — ADD
+--    CONSTRAINT validates existing rows, and a unique index cannot be built
+--    over duplicates.
+--
+--    Deleting them loses nothing that is read. loadRuntimeSnapshot takes
+--    `order by created_at desc limit 1`, so every row but the newest per actor
+--    has no reader at all, and a row in the pre-allowlist shape is one the
+--    client already refuses to rehydrate (filterToShape strips it on the way
+--    in as well as out — see runtimeState.js). What is removed is state a
+--    browser can rebuild by existing.
+--
+--    This is destructive and deliberate. It is confined to runtime_snapshots,
+--    which is application state and not evidence: no hashes, no chain, no
+--    contractual meaning. `contracts` and `events` are untouched.
+
+-- Anything the allowlist does not admit, which the client would discard anyway.
+delete from runtime_snapshots
+where payload - array['hasOnboarded', 'mode', 'view', 'savedAt'] <> '{}'::jsonb
+   or length(payload::text) > 512;
+
+-- Every row but the newest per actor, which is the only one anything reads.
+delete from runtime_snapshots a
+where exists (
+  select 1 from runtime_snapshots b
+  where b.actor_id = a.actor_id
+    and (b.created_at, b.id) > (a.created_at, a.id)
+);
+
 -- 1a. Shape: nothing outside the allowlist, at the top level.
 --     `payload - keys` removes those keys; whatever remains was not allowed.
 alter table runtime_snapshots

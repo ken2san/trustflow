@@ -1106,7 +1106,7 @@ token was accepted, and reaching it costs nothing from a project-wide mail
 quota that an earlier review had identified as drainable. Use this probe, not a
 real address, whenever this needs re-checking.
 
-### Stage 4b: the snapshot bound, drafted and tested, not applied
+### Stage 4b: the snapshot bound, applied to both projects
 
 `docs/proposals/20261106000000_runtime_snapshot_bounds.sql.draft` adds three
 CHECK constraints (allowlisted keys, a 512-byte ceiling, leaf types) and a
@@ -1114,14 +1114,28 @@ unique index giving one row per actor. Verified in a throwaway container —
 applies cleanly, and nine cases agree with it, including that the old
 thirteen-key shape and a document smuggled into `view` are both rejected.
 
-**It is coupled to a client change and the order is not free.** The unique
+**Applied 2026-11-06, E2E then production**, as
+`20261106160059_runtime_snapshot_bounds.sql`. The draft could not have been
+applied as first written: ADD CONSTRAINT validates existing rows and a unique
+index cannot be built over duplicates, and E2E held 282 rows of which 276 were
+the pre-allowlist shape while production's 3 included 2 superseded duplicates.
+So the migration carries its own precondition — it deletes rows the allowlist
+does not admit and every row but the newest per actor — and the container test
+now seeds both dirty shapes before applying, because a cleanup step verified
+against an empty table is not verified at all.
+
+Measured after: E2E 282 → 5, production 3 → 1, no duplicates on either, three
+CHECK constraints and the unique index present on both, `contracts` 1321 and
+`events` 2396 unchanged. `npm run test:api` 22/22 against E2E afterwards.
+
+**It was coupled to a client change and the order was not free.** The unique
 index makes the second plain INSERT of any session fail, so
 `src/lib/runtimeState.js` now upserts with `onConflict: 'actor_id'` — which in
 turn needs the index to exist, or PostgREST answers 42P10. **Migration first,
 then the frontend.** Both windows degrade identically and non-fatally (the
-local cache is already written; a warning is the only other effect), but the
-frontend commit is deliberately **not pushed**, because pushing is a production
-deploy and would open the 42P10 window before the migration exists.
+local cache is already written; a warning is the only other effect), so the frontend commit was held
+back until the migration existed on production. It does now, and the order
+held: migration first, frontend second.
 
 ## How this project tests without a second human
 
