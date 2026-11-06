@@ -966,7 +966,40 @@ outside the consent label, so it cannot be read as one of the terms.
 > were never shown. In a product whose whole claim is "this is what was agreed",
 > that is the claim failing.
 
-**Narrowed, not closed, in `39a7849`.** The client re-reads the invitation
+**Closed in code, waiting on a deploy.** `_shared/shownTerms.ts` defines the
+digest of the terms an invitation displays — one definition, imported by the
+browser and by `validate-invite-token`, the way `eventCanonical.ts` already is.
+The browser sends the digest of what it showed and the version that computed
+it; the function recomputes from the row it is about to hash and refuses with
+`terms_changed`. Three things about it are deliberate and were each argued:
+
+- **The version travels beside the digest, not inside it.** A digest is
+  opaque, so a server that assumed its own version would refuse every client
+  one deploy out of step — the blanket refusal the mechanism exists to avoid.
+  An unknown version answers `terms_check_unsupported`, which the screen reads
+  as "this page is out of date", never as "the terms changed": the second is a
+  claim about the agreement, and making it on the strength of a release
+  schedule would be a lie. Codex caught this — the first version's comment
+  promised a two-version deploy the code could not perform.
+- **A missing digest is still let through**, which is a compatibility period
+  and not a closed hole. The condition for ending it: once no deployed client
+  omits the field, make it required. Nothing measures that yet.
+- **It is not a security control.** The caller computes what it sends.
+
+**The deploy blocker was checked against real data rather than reasoned
+about.** The worry was that `invite_acceptance_context`'s `contract` object and
+the invitation response might serialize the same columns differently, in which
+case every acceptance would fail the moment the function shipped. Measured on
+E2E, read-only, over the 20 most recent unaccepted contracts: **all seven
+fields identical in all 20**, including rows with a null deadline (jsonb `null`
+and SQL NULL differ in SQL and arrive the same in JavaScript, which is what
+made a first, sloppier query look like a mismatch).
+
+**Needs approval to finish**: deploying `validate-invite-token`, and with it
+the other three functions, since the set shares `_shared` and deploys together.
+Until then the client's pre-flight re-read is the only guard.
+
+**Narrowed first, in `39a7849`.** The client re-reads the invitation
 immediately before accepting and refuses on any difference across the displayed
 terms (`shownTermsFingerprint`, 15 unit tests, one per field that can change).
 That shrinks the window from minutes to one round trip. **The real fix is for

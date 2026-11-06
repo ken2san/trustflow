@@ -30,7 +30,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
-import { shownTermsDigest } from '../_shared/shownTerms.ts'
+import { shownTermsDigest, SHOWN_TERMS_VERSION } from '../_shared/shownTerms.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -67,7 +67,10 @@ serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
   try {
-    const { invite_token, accept, hirer_email, counterparty_name, shown_terms_digest } = await req.json()
+    const {
+      invite_token, accept, hirer_email, counterparty_name,
+      shown_terms_digest, shown_terms_version,
+    } = await req.json()
     if (!invite_token || typeof invite_token !== 'string') {
       return json({ error: 'missing invite_token' }, 400)
     }
@@ -158,7 +161,19 @@ serve(async (req: Request) => {
       // client omits it. The field is caller-supplied and therefore not a
       // security control; it protects an honest guest from an honest edit.
       if (typeof shown_terms_digest === 'string' && shown_terms_digest.length > 0) {
-        const currentDigest = await shownTermsDigest(context.contract)
+        // The version the caller computed, not the one this build prefers. A
+        // client shipped before the version travelled separately sends none,
+        // and v1 is what it meant.
+        const askedVersion = typeof shown_terms_version === 'number'
+          ? shown_terms_version
+          : SHOWN_TERMS_VERSION
+        const currentDigest = await shownTermsDigest(context.contract, askedVersion)
+        if (currentDigest === null) {
+          // Fail closed, but not as "the terms changed": this build cannot
+          // check a format it does not know, and saying they changed would be
+          // a claim about the agreement rather than about the two deploys.
+          return json({ error: 'terms_check_unsupported' }, 409)
+        }
         if (currentDigest !== shown_terms_digest) {
           return json({ error: 'terms_changed' }, 409)
         }

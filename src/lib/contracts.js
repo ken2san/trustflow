@@ -11,9 +11,9 @@
 // invite_token_expires_at to now() + 72h.
 
 import { supabase, invokeErrorReason } from './supabase.js'
-import { shownTermsDigest } from '../../supabase/functions/_shared/shownTerms.ts'
+import { shownTermsDigest, SHOWN_TERMS_VERSION } from '../../supabase/functions/_shared/shownTerms.ts'
 
-export { shownTermsDigest }
+export { shownTermsDigest, SHOWN_TERMS_VERSION }
 import { getGuestAccessToken } from './guestSession.js'
 
 const NOT_CONFIGURED = new Error('Supabase is not configured')
@@ -281,6 +281,10 @@ export async function acceptInvite(inviteToken, hirerEmail, counterpartyName, sh
       // computes it, so it protects an honest guest from an honest edit and
       // nothing more. See _shared/shownTerms.ts.
       shown_terms_digest: shownTermsDigestValue ?? null,
+      // Sent beside it, never inferred from it: a digest is opaque, so a
+      // server that guessed its own version would refuse every client one
+      // deploy out of step.
+      shown_terms_version: SHOWN_TERMS_VERSION,
     },
   })
 

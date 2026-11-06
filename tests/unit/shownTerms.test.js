@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { shownTermsDigest, shownTerms, SHOWN_TERMS_VERSION } from '../../supabase/functions/_shared/shownTerms.ts'
+import {
+  shownTermsDigest, shownTerms, SHOWN_TERMS_VERSION, SUPPORTED_SHOWN_TERMS_VERSIONS,
+} from '../../supabase/functions/_shared/shownTerms.ts'
 
 // WHY THIS GUARD EXISTS
 // The acceptance request carries only the invite token. The server re-reads
@@ -109,6 +111,26 @@ describe('the terms a guest was shown', () => {
     expect(shownTerms(SHOWN).v).toBe(SHOWN_TERMS_VERSION)
     expect(await shownTermsDigest({ ...SHOWN }))
       .not.toBe(await sha256OfADifferentVersion(SHOWN))
+  })
+})
+
+describe('version mismatch between a client and a server', () => {
+  it('names the version explicitly rather than implying it', async () => {
+    expect(await shownTermsDigest(SHOWN, 1)).toBe(await shownTermsDigest(SHOWN))
+  })
+
+  it('answers "cannot check" rather than "they differ" for a version it does not know', async () => {
+    // The distinction is the whole point: a digest is opaque, so a build that
+    // assumed its own version would report every client one deploy out of step
+    // as having had its terms edited — a claim about the agreement, made on
+    // the strength of a release schedule.
+    expect(await shownTermsDigest(SHOWN, 2)).toBeNull()
+    expect(await shownTermsDigest(SHOWN, 0)).toBeNull()
+    expect(shownTerms(SHOWN, 99)).toBeNull()
+  })
+
+  it('lists what it can verify, so a deploy can be sequenced', () => {
+    expect(SUPPORTED_SHOWN_TERMS_VERSIONS).toContain(SHOWN_TERMS_VERSION)
   })
 })
 

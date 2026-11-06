@@ -33,12 +33,21 @@
 import { sha256Hex, stableStringify } from './eventCanonical.ts'
 
 /**
- * The format version of the digest.
+ * The format version this client computes.
  *
  * Changing WHICH fields are covered, their order, or how they are normalised
  * changes the digest for an unchanged contract, which would refuse every
- * in-flight acceptance. Such a change bumps this number, and the server must
- * accept both versions across a deploy.
+ * in-flight acceptance.
+ *
+ * The version therefore travels WITH the digest rather than being implied by
+ * it. A digest is opaque: a server that assumed its own version would reject
+ * every acceptance from a client one deploy ahead or behind, which is the
+ * blanket refusal this whole mechanism exists to avoid. Codex's review of the
+ * first implementation caught exactly that — the comment here promised a
+ * two-version deploy that the code could not perform.
+ *
+ * To add a version: add a builder to BUILDERS, bump this constant, ship the
+ * server first so it can verify both, then the clients.
  */
 export const SHOWN_TERMS_VERSION = 1
 
@@ -60,10 +69,20 @@ type TermsSource = Record<string, unknown> | null | undefined
  * and `null` becomes `[]` to match that same function, so "unset" and "empty"
  * cannot produce two digests for one contract.
  */
-export function shownTerms(source: TermsSource): Record<string, unknown> {
-  const row = source ?? {}
-  return {
-    v: SHOWN_TERMS_VERSION,
+export function shownTerms(
+  source: TermsSource,
+  version: number = SHOWN_TERMS_VERSION,
+): Record<string, unknown> | null {
+  const build = BUILDERS[version]
+  return build ? build(source ?? {}) : null
+}
+
+/** Every version this build can verify. */
+export const SUPPORTED_SHOWN_TERMS_VERSIONS = [1]
+
+const BUILDERS: Record<number, (row: Record<string, unknown>) => Record<string, unknown>> = {
+  1: (row) => ({
+    v: 1,
     project_name: row.project_name ?? null,
     dod: row.dod ?? [],
     amount_jpy: row.amount_jpy ?? null,
@@ -73,10 +92,19 @@ export function shownTerms(source: TermsSource): Record<string, unknown> {
     // has to read the same default or an older contract would never match.
     performed_by: row.performed_by ?? 'creator',
     earner_display_name: row.earner_display_name ?? null,
-  }
+  }),
 }
 
-/** SHA-256 hex of those terms. Same input, same digest, on either side. */
-export function shownTermsDigest(source: TermsSource): Promise<string> {
-  return sha256Hex(stableStringify(shownTerms(source)))
+/**
+ * SHA-256 hex of those terms. Same input and version, same digest, on either
+ * side. `null` when this build does not know the version asked for — the
+ * caller decides what to do about that, because "I cannot check" and "they do
+ * not match" are different answers and must not share a message.
+ */
+export async function shownTermsDigest(
+  source: TermsSource,
+  version: number = SHOWN_TERMS_VERSION,
+): Promise<string | null> {
+  const terms = shownTerms(source, version)
+  return terms === null ? null : await sha256Hex(stableStringify(terms))
 }

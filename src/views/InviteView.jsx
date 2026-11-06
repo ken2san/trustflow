@@ -62,9 +62,14 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
     // invalid link told the reader their link was broken when the terms had
     // simply moved under them.
     const termsChanged = tokenError === 'terms_changed';
+    // The server could not check the terms against what this page showed,
+    // because the two were built at different times. Nothing is wrong with the
+    // agreement, so it must not be described as if something were.
+    const cannotCheck = tokenError === 'terms_check_unsupported';
     const Icon = isExpired ? Clock : AlertTriangle;
     const title = isExpired ? 'This invite has expired.'
       : termsChanged ? 'The terms changed while you were reading.'
+      : cannotCheck ? 'This page is out of date.'
       : 'Invalid invite link.';
     const body = isExpired
       ? 'Invite links are valid for 72 hours. Ask whoever sent you this link to issue a new one — they can do it from their own copy of the agreement.'
@@ -72,6 +77,8 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       // returns the same refusal for a link that was mistyped, already used,
       // or deleted before it was opened, and telling a stranger it was
       // "modified" when they simply pasted it twice is both wrong and alarming.
+      : cannotCheck
+      ? 'Nothing was accepted, and nothing is wrong with the agreement. This page was loaded from an older version of TrustFlow than the one now running, so it could not confirm that the terms on screen are still the terms on offer. Reload the page and read them again.'
       : termsChanged
       ? 'Nothing was accepted. Whoever sent this invitation edited the agreement after this page loaded, so the terms on screen are no longer the ones on offer. Open the link again to see the current terms before you decide.'
       : 'This link did not work. It may have been mistyped or cut short when it was copied, already used, or withdrawn by the sender. Ask whoever sent it to you for a new one.';
