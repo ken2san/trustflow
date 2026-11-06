@@ -842,8 +842,24 @@ carries the requirement:
   deliberately returned: `canonical.actor_id` is part of what an independent
   verifier rehashes, so withholding it would make the record unverifiable.
 - ~~**Stage 4, needing approval**: `uiProfile`'s eight counters have no writer
-  and still round-trip into `runtime_snapshots`.~~ **The client half is done,
-  2026-11-05; the stored rows are still Kenji's call.** See "Stage 4a" below.
+  and still round-trip into `runtime_snapshots`.~~ **Done, both halves.** The
+  client half landed 2026-11-05 (see "Stage 4a"); Kenji ran
+  `delete from runtime_snapshots;` in production's dashboard SQL editor on
+  2026-11-06 — **1161 rows across 171 actors gone, 0 remaining**, with
+  `contracts` 1321 and `events` 2396 unchanged either side of it, so nothing
+  else was touched. The permission classifier refused the statement from this
+  session as a mass delete, which is why it was pasted by hand; the CLI was no
+  help either (see the keychain bullet under Active Constraints).
+
+  **What is NOT yet proven: that what comes back is narrow.** The writer is
+  live — the count had already crept 1160 → 1161 overnight — so rows will
+  return, and the claim that `CLOUD_SAFE_SHAPE` now admits only
+  `{hasOnboarded, mode, view, savedAt}` has been tested in unit tests and never
+  against a production row. The table is empty right now, which is the one
+  moment that measurement is clean: after the app is next used, read the
+  distinct top-level keys of `state` and confirm there are exactly those four.
+  trustflow-e2e still holds 282 rows of the old shape, deliberately — not
+  approved for deletion, and useful as a before/after comparison.
 - The `capture-payment` and `cancel-payment` edge functions still write
   `trustpoints_ledger`, and `evidence-core.spec.js:96` calls one directly. The
   UI layer is gone; the server side is untouched and undecided.
