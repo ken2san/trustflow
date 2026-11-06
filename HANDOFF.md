@@ -1083,11 +1083,28 @@ here" is unanswerable until Web Analytics is enabled.
 The frontend must be live **before** the toggle, or the outage repeats. The
 site key reaching the build was verified by fetching the deployed bundle rather
 than trusting the dashboard: `vu="0x4AAAAAAF2UdDbcQl6zNv0f"`, used as
-`sitekey: vu`. **Still unverified at the time of writing: whether
-`project-trustflow.vercel.app` is in the Turnstile widget's hostname
-allowlist.** That must be checked with CAPTCHA still OFF — the widget renders
-and its token is simply ignored — because finding it after the toggle opens the
-lockout window again.
+`sitekey: vu`. The Turnstile widget's hostname allowlist was checked with
+protection still OFF, because finding a mismatch after the toggle reopens the
+lockout window.
+
+#### Verified on, and the test that cost nothing
+
+Three separate things, measured separately, because each could pass while
+another failed:
+
+| what | how | result |
+|---|---|---|
+| protection is actually on | probe `/auth/v1/signup` and `/auth/v1/otp` with no token | both `captcha_failed` |
+| the widget renders on production | opened the create form on the live site | "Success!", and no test-key notice |
+| **the app sends the token** | the sign-in screen, with an address that does not exist | `unknown_email` |
+
+The third is the one that broke this morning and the only one that matters,
+and it was done **without sending a single email**: `requestSignInCode` passes
+`shouldCreateUser: false`, so an unknown address never produces mail, while the
+CAPTCHA check still runs first. Reaching `unknown_email` therefore proves the
+token was accepted, and reaching it costs nothing from a project-wide mail
+quota that an earlier review had identified as drainable. Use this probe, not a
+real address, whenever this needs re-checking.
 
 ### Stage 4b: the snapshot bound, drafted and tested, not applied
 
