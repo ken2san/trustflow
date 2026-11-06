@@ -137,8 +137,14 @@ What the run did **not** cover is Next Priority #1.
   eleven commits, then three more), each push also deploying the frontend. Check for later local-only work with
   `git rev-list --count origin/main..main` rather than reading a number here —
   a number written in this file goes stale on the commit that writes it.
-  **A push to `main` is a production frontend deploy**, and that approval is
-  spent: the next push needs its own. **Working tree is clean.** No agent is
+  **A push to `main` is a production frontend deploy.** As of 2026-11-05 the
+  owner has given standing approval to push without asking each time — this is
+  a one-person project with no other committers, and the per-push question was
+  costing more than it bought. **Report when a run of several pushes is
+  coming**, rather than asking permission for each. The standing approval
+  covers pushes and the frontend deploy they trigger; it does not extend to
+  production database writes, migrations, or anything else on the "Not
+  approved" list, which are still asked for one at a time. **Working tree is clean.** No agent is
   holding a file; the tree is partitioned by path (see Ownership and locks),
   and Codex's work from 2026-11-04 is committed verbatim in `0ca97ab` and
   `e132137`.
@@ -360,9 +366,10 @@ database is how the migration drift above happened in the first place.
   caller of `supabase db push` and the only one to apply a migration. Codex may
   read E2E and run tests against it. The migration drift of 2026-10-12 is what
   this prevents.
-- **Every push, every deploy and every production write is individually
-  approved.** Approval for one does not carry to the next, and approval in E2E
-  never implies approval in production.
+- **Every production write is individually approved.** Approval for one does
+  not carry to the next, and approval in E2E never implies approval in
+  production. **Pushing `main` is the exception as of 2026-11-05**: standing
+  approval, no need to ask, but say so when several pushes are coming.
 - **Report to ADA:** what was done, what is blocking, what needs a decision, and
   the exact scope of what changed.
 - **Refresh this file** at the end of each phase, before any production change,
