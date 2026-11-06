@@ -266,7 +266,22 @@ serve(async (req: Request) => {
       return json({ error: 'wrong_party_for_event_type' }, 403)
     }
 
-    // Idempotency: a retry returns what was already written.
+    // Idempotency: a retry returns what THIS caller already wrote.
+    //
+    // THE DISCLOSURE THIS CLOSES
+    // The match used to be contract_id + key, and the row was returned raw.
+    // So a guest who supplied a key an owner had used received the owner's
+    // event in full — payload, internal fields and all — bypassing the
+    // allowlist projection that `guest-contract-events` exists to apply.
+    // Measured 2026-11-06: an owner wrote `performance.asserted` carrying an
+    // internal note under a known key, a guest called this function with
+    // `performance.accepted` and the same key, and got back HTTP 200,
+    // `deduplicated: true`, and the note. Found by Codex's sweep for
+    // transaction boundaries; it is not one, which is why it had survived.
+    //
+    // A key is scoped to an operation, not to a contract. Matching the type
+    // and the actor as well makes a retry a retry, and makes a collision a
+    // collision — answered as one, rather than handed someone else's record.
     if (idempotency_key) {
       const { data: existing } = await admin
         .from('events')
@@ -274,7 +289,15 @@ serve(async (req: Request) => {
         .eq('contract_id', contract_id)
         .eq('idempotency_key', idempotency_key)
         .maybeSingle()
-      if (existing) return json({ event: existing, deduplicated: true }, 200)
+      if (existing) {
+        if (existing.type === type && existing.actor_id === actor.actorId) {
+          return json({ event: existing, deduplicated: true }, 200)
+        }
+        // Same key, different operation. Refusing names the real problem;
+        // returning the other event would disclose it, and writing a second
+        // row under one key would make "idempotent" meaningless.
+        return json({ error: 'idempotency_key_in_use' }, 409)
+      }
     }
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
@@ -353,7 +376,7 @@ serve(async (req: Request) => {
             .eq('contract_id', contract_id)
             .eq('idempotency_key', idempotency_key as string)
             .maybeSingle()
-          if (twin && twin.type === type && twin.actor_id === event.actor_id) {
+          if (twin && twin.type === type && twin.actor_id === actor.actorId) {
             return json({ event: twin, deduplicated: true }, 200)
           }
         }
