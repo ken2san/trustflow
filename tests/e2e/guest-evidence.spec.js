@@ -372,7 +372,7 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   await expect(page.getByText('ui.actual@example.test', { exact: true }).first()).toBeVisible();
 
   // And it states what the hash covers without overstating it. These events are
-  // written under canonical v3, so the detail fields are covered — and the view
+  // written under canonical v3 or later, so the detail fields are covered — and the view
   // is explicit that a record of what was stated is not a finding that it is true.
   await expect(page.getByText(/also covers the detail fields/i)).toBeVisible();
   await expect(page.getByText(/does not establish that a statement is true/i)).toBeVisible();
@@ -383,7 +383,7 @@ test('the response states whether payloads are covered by the hash', async ({ re
 
   const { body } = await api(request, '/functions/v1/guest-contract-events', { guestToken });
 
-  // Events written under canonical v3 bind a hash of the payload, so on a
+  // Events from canonical v3 onward bind a hash of the payload, so on a
   // trail made up entirely of such events the detail fields ARE tamper-evident
   // and the response says so. The flag is per-trail rather than constant: a
   // trail containing a pre-v3 event reports false, because its substance was
@@ -485,10 +485,31 @@ test('declining records nothing and leaves the invitation usable', async ({ page
 
   // It says what did NOT happen, which is what the reader is uncertain about.
   await expect(page.getByRole('heading', { name: /You did not accept/i })).toBeVisible();
-  await expect(page.getByText(/Nothing was recorded and nothing was sent/i)).toBeVisible();
+  // Scoped to the agreement, not to the whole system. The first wording here
+  // was "Nothing was recorded and nothing was sent", which is false: changing
+  // view saves a runtime snapshot and that snapshot is upserted. The screen
+  // and this assertion now claim only what the checks below actually prove.
+  await expect(page.getByText(/Nothing was added to the agreement/i)).toBeVisible();
+  await expect(page.getByText(/does not use up this invitation/i)).toBeVisible();
   await expect(page.getByText(/not told/i)).toBeVisible();
 
-  // The invitation really is unspent: the server still answers for it.
+  // The claim is about the AGREEMENT, so the agreement is what gets checked.
+  // Codex's review pointed out that this test asserted the screen said the
+  // right words and never that the words were true: a decline handler that
+  // wrote an event or consumed the token would still have passed.
+  const after = await api(request, `/rest/v1/events?contract_id=eq.${contract.id}&select=id`, {
+    method: 'GET', token,
+  });
+  expect(after.status).toBe(200);
+  expect(after.body, 'declining must add no event to the agreement').toHaveLength(0);
+
+  const row = await api(request, `/rest/v1/contracts?id=eq.${contract.id}&select=state,invite_token_used_at`, {
+    method: 'GET', token,
+  });
+  expect(row.body[0].state).toBe('AWAITING_ACCEPTANCE');
+  expect(row.body[0].invite_token_used_at, 'declining must not consume the invitation').toBeNull();
+
+  // And the invitation really is still offerable.
   const stillOffered = await api(request, '/functions/v1/validate-invite-token', {
     body: { invite_token: contract.invite_token },
   });

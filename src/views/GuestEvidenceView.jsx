@@ -317,11 +317,31 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             offline (src/lib/guestRecordExport.js:88). So the fix is not to
             soften the claim; it is to say who checked, and to stop denying
             that the reader can. */}
-        <p className={chain.verified ? 'text-emerald-400' : 'text-slate-400'}>
-          {chain.verified
-            ? 'TrustFlow recomputed every server-attested event and the chain holds.'
-            : 'No server-attested events to verify yet.'}
-        </p>
+        {/* `verified` is false in two situations that must never share a
+            sentence: nothing was attested, and something was attested and
+            FAILED. The screen said "No server-attested events to verify yet"
+            for both — so a reader holding a tampered record was told there
+            was nothing to check, on the one screen whose entire purpose is
+            tamper-evidence. Found by Codex, 2026-11-06.
+
+            "every server-attested event" was also wrong when the response is
+            truncated: guest-contract-events returns at most MAX_EVENTS and
+            says so, and a check over a prefix is not a check over all. */}
+        {chain.server_attested === 0 ? (
+          <p className="text-slate-400">No server-attested events to verify yet.</p>
+        ) : chain.verified ? (
+          <p className="text-emerald-400">
+            TrustFlow recomputed {chain.truncated ? 'the events shown here' : 'every server-attested event'} and
+            the chain holds{chain.truncated ? ' across them' : ''}.
+          </p>
+        ) : (
+          <p className="text-rose-400">
+            TrustFlow recomputed {chain.truncated ? 'the events shown here' : 'these events'} and
+            at least one does not match what was recorded. The entries below
+            mark which. This is what a tampered or damaged record looks like —
+            do not treat it as verified.
+          </p>
+        )}
       </div>
 
       {events.length === 0 ? (
@@ -368,10 +388,11 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             nothing from TrustFlow — and neither does checking it: each act
             carries every input its hash was taken over, so you can recompute
             the hashes and follow the chain yourself, without trusting the
-            verdicts in the file. The one thing you cannot check that way is
-            whether the detail text shown under each act is what was committed,
-            because the hash covers the whole payload and you are shown part
-            of it.
+            verdicts in the file. What that does not settle: whether the detail
+            text shown under each act is what was committed — the hash covers
+            the whole payload and you are shown part of it — nor who the people
+            are, nor whether the work or the payment described actually
+            happened, nor that both sides were shown the same history.
           </p>
         </div>
       )}

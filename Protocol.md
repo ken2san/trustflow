@@ -154,7 +154,7 @@ Two documents, deliberately different, and they must not converge:
 |---|---|---|
 | Built by | `src/lib/auditExport.js` | `src/lib/guestRecordExport.js` |
 | Named | `trustflow_audit_trail` | `trustflow_counterparty_record` |
-| Claim | self-contained, re-verifiable by a third party | server-verified; states that its results cannot be reproduced from the file |
+| Claim | self-contained, re-verifiable by a third party | event hashes and the chain are recomputable from the file; `payload_hash` is not, because the detail shown is an allowlisted part of what it covers |
 
 Both are built from raw `events` rows, never from the shaped arrays a screen
 renders. A document built from shaped events would report every untouched event

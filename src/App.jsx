@@ -557,9 +557,15 @@ const App = () => {
     setAgreement({
       // A guest has no auth.users row, so RLS gives them nothing from `events`
       // directly — their trail comes shaped from guest-contract-events, with
-      // each payload allowlist-filtered. They cannot recompute a hash from
-      // that, so their export is the server's verified record rather than the
-      // owner's re-verifiable one. The unshaped response is kept because the
+      // each payload allowlist-filtered.
+      //
+      // This comment used to end "they cannot recompute a hash from that".
+      // That stopped being true when the response gained a `canonical` block
+      // per event: a guest CAN recompute each event hash and follow the chain.
+      // What they cannot reproduce is `payload_hash`, because it is one digest
+      // over the whole payload and they are shown an allowlisted part of it.
+      // Corrected 2026-11-06 after Codex found the same stale claim in three
+      // places. The unshaped response is kept because the
       // document is built from it, not from the array this screen renders.
       source: 'guest',
       evidence,
@@ -625,8 +631,9 @@ const App = () => {
         exported_by_role: agreement?.role ?? null,
       },
     });
-    // Same reason as the guest export below: a download is invisible in-page.
-    addToast('Record saved to your downloads', 'success');
+    // Same reason as the guest export below: a download is invisible in-page,
+    // and what is observed is the request, not the save.
+    addToast('Download started — check your browser downloads', 'success');
   }, [agreement, addToast]);
 
   /**
@@ -647,7 +654,13 @@ const App = () => {
     // pressing a dead button look identical. A blind counterparty pressed it
     // and reported it did nothing, on the screen that had just told it the
     // file was theirs to keep (2026-11-06).
-    addToast('Record saved to your downloads', 'success');
+    //
+    // "saved to your downloads" was the first wording and it was false: the
+    // export builds a Blob and clicks an anchor, and nothing here observes
+    // whether the browser saved it, cancelled it, or put it anywhere in
+    // particular. Claiming the save is the same defect this screen was being
+    // fixed for. Codex, the same day.
+    addToast('Download started — check your browser downloads', 'success');
   }, [agreement, addToast]);
 
   /**
@@ -1349,9 +1362,20 @@ const App = () => {
             {/* Says what did NOT happen, because that is what the reader is
                 uncertain about. A blind counterparty declined and could not
                 tell whether anything had been sent, recorded or used up. */}
+            {/* Said "Nothing was recorded and nothing was sent", which is
+                false as written: changing view saves a runtime snapshot, and
+                that snapshot is upserted to the server (runtimeState.js). The
+                true, narrower claim is about the AGREEMENT — declining adds
+                no event to it and consumes nothing. Codex caught the
+                over-reach, 2026-11-06.
+
+                "this link still works" was also unconditional. Declining does
+                not spend the invitation; expiry, withdrawal by the sender, or
+                an acceptance in another tab still can. */}
             <p className="text-slate-400 text-sm leading-relaxed">
-              Nothing was recorded and nothing was sent. The invitation has not
-              been used, so this link still works if you change your mind.
+              Nothing was added to the agreement, and declining does not use up
+              this invitation — so you can come back to it while it is still
+              valid.
             </p>
             <p className="text-xs text-slate-400 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
               Whoever sent it is <span className="text-slate-300">not told</span> that

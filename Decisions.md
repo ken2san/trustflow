@@ -660,6 +660,16 @@ instructing its reader to recompute each hash would mismatch on **every
 untouched event**, and an export that falsely cries tampering is worse than no
 export at all.
 
+**Updated 2026-11-06.** The response later gained a `canonical` block per
+event — every input that event's hash was taken over — so the guest's document
+*is* recomputable after all, for the event hashes and the chain. The exception
+is the one that drove the original decision: `payload_hash` is a single digest
+over the whole payload, and the guest is shown part of it, so that one value
+cannot be reproduced and the document says so rather than inviting a check
+that would fail. Three places still described the old state until Codex found
+them; what makes the distinction load-bearing is that it is the difference
+between "you must trust us" and "trust us about one field".
+
 **The alternative considered and rejected**: widening what the guest may see so
 their document could be re-verified like the owner's. Rejected for now because
 it moves an access-control boundary that exists deliberately, to solve a problem

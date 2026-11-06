@@ -318,9 +318,10 @@ export default function ContractsHomeView({
             Accepted on this device
           </h3>
           <p className="text-xs text-slate-400">
-            Agreements you joined by invitation. They live in this browser, so
-            another device will not show them — ask whoever invited you to
-            re-send your access link if you need them there.
+            Agreements you joined by invitation. This list is built from the
+            access this browser kept — the records themselves live on the
+            server. On another browser, ask whoever invited you to re-send
+            your access link.
           </p>
           <ul className="space-y-2">
             {guestAgreementIds.map(id => (

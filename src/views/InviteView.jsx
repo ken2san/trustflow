@@ -94,7 +94,10 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       // record was lost (2026-11-06). The route that does exist is the device
       // that accepted, which keeps the credential; the one that exists when
       // that device is gone is a re-issue by the sender.
-      ? 'An invitation can only be accepted once. If that was you, open this site on the device you accepted on — it keeps your access and lists the agreement. From any other device, ask whoever invited you to re-send your access link. If it was not you, say so to them before anything else happens.'
+      // "it keeps your access and lists the agreement" promised something the
+      // storage can fail at silently (guestSession.js swallows a write
+      // failure), so it is conditional now. Codex, 2026-11-06.
+      ? 'An invitation can only be accepted once. If that was you, open this site on the browser you accepted in — if it still holds your access, the agreement is listed there. If it does not, or you are on another device, ask whoever invited you to re-send your access link. If it was not you, say so to them before anything else happens.'
       : cannotCheck
       ? 'Nothing was accepted, and nothing is wrong with the agreement. This page was loaded from an older version of TrustFlow than the one now running, so it could not confirm that the terms on screen are still the terms on offer. Reload the page and read them again.'
       : termsChanged
