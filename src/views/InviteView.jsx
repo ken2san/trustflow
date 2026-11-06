@@ -177,7 +177,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
                 send-acceptance-email was deleted on 2026-09-26 and is not to
                 be redeployed. The record is downloadable instead, which is
                 true, and the link is what gets them back to it. */}
-            <p className="text-xs text-slate-500 px-2">Recorded with this agreement as your identifier. No email is sent — your copy is downloadable from the record, and this link is how you reach it again.</p>
+            <p className="text-xs text-slate-500 px-2">Recorded with this agreement as your identifier. No acceptance email is sent — your copy is downloadable from the record, and this link is how you reach it again.</p>
           </div>
           {/* The terms again, at the moment of commitment.
               Rendered from the same `inviteData` the previous screen used and

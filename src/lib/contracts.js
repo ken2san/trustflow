@@ -259,6 +259,25 @@ export async function reissueGuestAccess(contractId) {
  * of it does, so a caller that gets a result has both the acceptance and the
  * record of what was accepted.
  */
+/**
+ * The terms a guest is shown, in the shape a comparison can be made over.
+ *
+ * Only the fields the invitation actually displays, in a fixed order, so two
+ * reads of the same unchanged contract always produce the same string.
+ */
+export function shownTermsFingerprint(invite) {
+  if (!invite) return null
+  return JSON.stringify([
+    invite.project_name ?? null,
+    invite.dod ?? null,
+    invite.amount_jpy ?? null,
+    invite.currency ?? null,
+    invite.deadline ?? null,
+    invite.performed_by ?? null,
+    invite.earner_display_name ?? null,
+  ])
+}
+
 export async function acceptInvite(inviteToken, hirerEmail, counterpartyName) {
   if (!supabase) return { accepted: null, reason: 'error' }
 

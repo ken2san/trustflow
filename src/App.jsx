@@ -65,7 +65,7 @@ import { downloadAuditTrail } from './lib/auditExport.js';
 import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { ensureActorIdentity } from './lib/identity.js';
-import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor } from './lib/contracts.js';
+import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsFingerprint } from './lib/contracts.js';
 import { storeGuestAccessToken } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
@@ -1208,6 +1208,31 @@ const App = () => {
               // effect could have rewritten the address bar.
               const raw = initialParams.get('token');
               const name = guestName || 'Guest';
+
+              // WHAT THIS NARROWS, AND WHAT IT DOES NOT CLOSE
+              // The acceptance request carries only the token. The server
+              // re-reads the contract and hashes THAT row
+              // (validate-invite-token/index.ts:135-149), so the snapshot
+              // binds the terms as they stand at the click, not the terms on
+              // screen. Its row_version guard covers only the server's own
+              // read-to-write window. Between this screen loading and this
+              // click — minutes, while someone reads — the owner can edit the
+              // agreement, and the guest would be recorded as having accepted
+              // terms they were never shown. Found by Codex's review of this
+              // change, 2026-11-05.
+              // Re-reading here and refusing on a difference shrinks that
+              // window to one round trip. It does not remove it: the real fix
+              // is for the acceptance request to carry the version the guest
+              // saw and for the server to refuse a mismatch, which is an Edge
+              // Function change and needs its own approval. Until then this is
+              // a narrowing, not a guarantee — see HANDOFF.md.
+              const { invite: current } = await fetchInvite(raw);
+              if (current && shownTermsFingerprint(current) !== shownTermsFingerprint(inviteData)) {
+                setInviteTokenError('terms_changed');
+                setInviteData(null);
+                return;
+              }
+
               const { accepted, reason } = await acceptInvite(raw, email, name);
               if (!accepted) {
                 setInviteTokenError(reason === 'already_used' ? 'already_used' : reason);
@@ -1263,9 +1288,9 @@ const App = () => {
                 temporary state, which reads as a product about to change
                 under someone who has just committed. */}
             <p className="text-xs text-slate-400 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
-              TrustFlow does not process the payment for this agreement and does not
-              tell {selectedItem?.client} that you accepted — reach them the way they
-              reached you. Either of you can then record that a payment was sent or
+              TrustFlow does not process the payment for this agreement, and sends
+              {selectedItem?.client} no notification that you accepted — reach them the
+              way they reached you. Either of you can then record that a payment was sent or
               received, which TrustFlow stores as your statement rather than as a
               fact it checked.
             </p>

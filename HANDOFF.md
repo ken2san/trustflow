@@ -944,12 +944,44 @@ stated as a number; claim 4 **OVERSTATED** on who re-issues — there is no
 guest-initiated path, only the authenticated owner. It also checked the capture
 spec and found no unstubbed door to an account or a database write.
 
+**The payment disclosure was built, and Codex reviewed the design before it
+existed** — the first time a design, rather than a diff, went to it. Three
+things changed before a line was written: the claim is scoped to the agreement
+on screen rather than to the product (`capture-payment/index.ts:138-161` really
+does transfer funds and set `SETTLED`, so "TrustFlow never holds money" is not
+sayable); the recap above the checkbox renders from the same `inviteData` the
+rest of the screen uses; and the payment note sits outside the terms box and
+outside the consent label, so it cannot be read as one of the terms.
+
+**Then its review of the result found the serious one.**
+
+> **The terms on screen are not the terms that get recorded.** The acceptance
+> request carries only the invite token
+> (`src/lib/contracts.js:262-275`). The server re-reads the contract and builds
+> the snapshot from **that** row (`validate-invite-token/index.ts:135-149`), and
+> `row_version` guards only its own read-to-write window
+> (`20260928000000_atomic_acceptance.sql:132-144`). So between the invitation
+> loading and the guest clicking — minutes, while someone reads — the owner can
+> edit the agreement, and the guest is recorded as having accepted terms they
+> were never shown. In a product whose whole claim is "this is what was agreed",
+> that is the claim failing.
+
+**Narrowed, not closed, in `0e6ac1f`.** The client re-reads the invitation
+immediately before accepting and refuses on any difference across the displayed
+terms (`shownTermsFingerprint`, 15 unit tests, one per field that can change).
+That shrinks the window from minutes to one round trip. **The real fix is for
+the acceptance request to carry the version the guest saw and for the server to
+refuse a mismatch** — an Edge Function change, so it needs its own approval and
+the whole set deploys together. Until then the window exists and the code says
+so where it is narrowed.
+
 **Open from the second pass, each needing a decision rather than a fix:**
 
-- **Nothing before the checkbox says how or when the payer pays.** It appears
-  only after acceptance, on screen 04, as "Acme Translations will contact you
-  about it". Both passes independently named payment as the thing most likely
-  to produce "that is not what I agreed to".
+- ~~Nothing before the checkbox says how or when the payer pays.~~ **Done**, as
+  above. Two false statements were found in the same area and removed with it:
+  "A copy will be sent to you" (nothing sends mail — `send-acceptance-email` was
+  deleted on 2026-09-26) and "<the other party> has been notified" (nothing
+  notifies anyone).
 - **"No account required *yet*" and "not collecting money for this agreement
   *yet*"** read as a product that will change under someone who has already
   committed.
