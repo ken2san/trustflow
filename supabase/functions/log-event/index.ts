@@ -321,6 +321,49 @@ serve(async (req: Request) => {
 
       if (!insertError) return json({ event: inserted, deduplicated: false }, 201)
 
+      // The agreement is not in a state where this event can follow. Raised
+      // by `enforce_performance_order`, inside the insert's own transaction
+      // and under a lock on the contract row — see that migration for why an
+      // Edge-side check would not have been enough.
+      //
+      // Answered here rather than falling through to `insert_failed`/500,
+      // which is what a migration alone would have produced: a refusal that
+      // reads as a server fault teaches the caller to retry something that
+      // can never succeed. It is deliberately NOT routed into the retry below
+      // — the loop exists for a contested chain tip, and retrying a
+      // wrong-state refusal does nothing the caller did not already do. (Not
+      // "refused identically forever": a later re-assertion after a rejection
+      // legitimately changes the state. What is wrong is retrying it here,
+      // automatically, inside one request.)
+      if (insertError.code === 'TF001') {
+        // ...unless this IS the operation that moved the state. Two requests
+        // carrying the same idempotency key can both miss the lookup above;
+        // one inserts and changes the state, the other waits on the lock and
+        // is then refused by the trigger for a state its own twin created.
+        // Answering 409 there would break the contract that a retry of one
+        // operation returns what was written. Codex found this, 2026-11-06.
+        //
+        // Matched on type and actor as well as the key, so a different
+        // operation that happens to reuse a key is still refused rather than
+        // handed someone else's event.
+        if (idempotency_key) {
+          const { data: twin } = await admin
+            .from('events')
+            .select('*')
+            .eq('contract_id', contract_id)
+            .eq('idempotency_key', idempotency_key as string)
+            .maybeSingle()
+          if (twin && twin.type === type && twin.actor_id === event.actor_id) {
+            return json({ event: twin, deduplicated: true }, 200)
+          }
+        }
+        return json({
+          error: 'wrong_state_for_event_type',
+          detail: insertError.message,
+          hint: insertError.hint ?? null,
+        }, 409)
+      }
+
       // 23505 on the fork index means another event claimed this tip first.
       // Re-read the tip and try again.
       if (insertError.code === '23505') {
