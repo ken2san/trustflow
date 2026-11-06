@@ -4,13 +4,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // and one reader. What it did have was 225 production rows carrying a
 // counterparty's email address. These tests are the boundary that keeps it out.
 
-const insert = vi.fn(() => ({ error: null }))
+const upsert = vi.fn(() => ({ error: null }))
 const limit = vi.fn()
 
 vi.mock('../../src/lib/supabase.js', () => ({
   supabase: {
     from: () => ({
-      insert: (...args) => insert(...args),
+      upsert: (...args) => upsert(...args),
       select: () => ({ eq: () => ({ order: () => ({ limit: (...a) => limit(...a) }) }) }),
     }),
   },
@@ -73,7 +73,7 @@ const PERSONAL_DATA = [
 
 const localStore = {}
 beforeEach(() => {
-  insert.mockClear()
+  upsert.mockClear()
   limit.mockReset()
   for (const k of Object.keys(localStore)) delete localStore[k]
   globalThis.localStorage = {
@@ -82,17 +82,30 @@ beforeEach(() => {
   }
 })
 
+describe('one row per actor', () => {
+  it('replaces its own row rather than appending another', async () => {
+    // 1161 rows existed for 171 actors because this was an INSERT and the
+    // reader only ever takes the newest. The conflict target has to travel
+    // with the write: without it PostgREST cannot know which row to replace,
+    // and the unique index the migration adds turns the second save of every
+    // session into an error.
+    await saveRuntimeSnapshot({ hasOnboarded: true, mode: 'hirer', view: 'home' }, 'actor-1')
+    const [, options] = upsert.mock.calls.at(-1)
+    expect(options).toEqual({ onConflict: 'actor_id' })
+  })
+})
+
 describe('what may leave the browser', () => {
   it('sends only allowlisted keys', async () => {
     await saveRuntimeSnapshot(FULL_STATE, 'actor-1')
-    const sent = insert.mock.calls.at(-1)[0].payload
+    const sent = upsert.mock.calls.at(-1)[0].payload
 
     expect(Object.keys(sent).sort()).toEqual([...CLOUD_SAFE_KEYS].sort())
   })
 
   it('sends no personal data at all', async () => {
     await saveRuntimeSnapshot(FULL_STATE, 'actor-1')
-    const serialized = JSON.stringify(insert.mock.calls.at(-1)[0].payload)
+    const serialized = JSON.stringify(upsert.mock.calls.at(-1)[0].payload)
 
     for (const value of PERSONAL_DATA) {
       expect(serialized).not.toContain(value)
@@ -108,7 +121,7 @@ describe('what may leave the browser', () => {
     // must not reach the server because nobody remembered to exclude it.
     await saveRuntimeSnapshot(
       { ...FULL_STATE, somethingNew: { email: 'future@example.test' } }, 'actor-1')
-    const serialized = JSON.stringify(insert.mock.calls.at(-1)[0].payload)
+    const serialized = JSON.stringify(upsert.mock.calls.at(-1)[0].payload)
 
     expect(serialized).not.toContain('somethingNew')
     expect(serialized).not.toContain('future@example.test')
@@ -151,7 +164,7 @@ describe('what comes back from the server', () => {
     const restored = await loadRuntimeSnapshot('actor-1')
     await saveRuntimeSnapshot(restored, 'actor-1')
 
-    const serialized = JSON.stringify(insert.mock.calls.at(-1)[0].payload)
+    const serialized = JSON.stringify(upsert.mock.calls.at(-1)[0].payload)
     for (const value of PERSONAL_DATA) {
       expect(serialized).not.toContain(value)
     }
@@ -220,7 +233,7 @@ describe('cloudSafeSubset', () => {
 describe('nested fields', () => {
   it('sends no profile object at all, now that nothing in the app writes one', async () => {
     await saveRuntimeSnapshot(FULL_STATE, 'actor-1')
-    const sent = insert.mock.calls.at(-1)[0].payload
+    const sent = upsert.mock.calls.at(-1)[0].payload
 
     expect(sent).not.toHaveProperty('uiProfile')
     expect(sent).not.toHaveProperty('internalProfile')
@@ -268,7 +281,7 @@ describe('nested fields', () => {
       mode: { note: 'leak@example.test' },
       view: 'home',
     }, 'actor-1')
-    const sent = insert.mock.calls.at(-1)[0].payload
+    const sent = upsert.mock.calls.at(-1)[0].payload
 
     expect(JSON.stringify(sent)).not.toContain('leak@example.test')
     expect(sent).not.toHaveProperty('mode')
@@ -286,7 +299,7 @@ describe('nested fields', () => {
       '{"mode":"earner","__proto__":{"polluted":"leak@example.test"},' +
       '"constructor":{"x":1}}')
     await saveRuntimeSnapshot(crafted, 'actor-1')
-    const sent = insert.mock.calls.at(-1)[0].payload
+    const sent = upsert.mock.calls.at(-1)[0].payload
 
     expect(JSON.stringify(sent)).not.toContain('leak@example.test')
     expect(sent).not.toHaveProperty('constructor')
@@ -352,7 +365,7 @@ describe('restoring a legacy row', () => {
     limit.mockResolvedValueOnce({ data: [{ payload: LEGACY_ROW, created_at: 'x' }], error: null })
     const restored = await loadRuntimeSnapshot('actor-1')
     await saveRuntimeSnapshot(restored, 'actor-1')
-    const serialized = JSON.stringify(insert.mock.calls.at(-1)[0].payload)
+    const serialized = JSON.stringify(upsert.mock.calls.at(-1)[0].payload)
 
     for (const value of ['partner@example.test', 'flagged@example.test',
       'Toronto, ON', 'counterparty@example.test', 'slow to reply']) {

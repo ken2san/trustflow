@@ -234,10 +234,24 @@ export async function saveRuntimeSnapshot(snapshot, actorId) {
 
   if (!supabase) return { source: 'local' }
 
-  const { error } = await supabase.from('runtime_snapshots').insert({
+  // One row per actor, replaced in place.
+  //
+  // This used to INSERT, which is why 1161 rows existed for 171 actors on
+  // production with nothing reading any but the newest: loadRuntimeSnapshot
+  // takes `order by created_at desc limit 1`, so every earlier row was
+  // unbounded growth with no reader. Deleted 2026-11-06.
+  //
+  // `onConflict` needs the unique index from
+  // docs/proposals/20261106000000_runtime_snapshot_bounds.sql.draft, so that
+  // migration ships FIRST. Before it exists this call fails with 42P10, and
+  // after it exists a plain insert would fail on the second save — either
+  // order leaves a window, and both windows degrade the same way: the local
+  // cache above has already been written, and the warning below is the only
+  // other effect.
+  const { error } = await supabase.from('runtime_snapshots').upsert({
     actor_id: resolvedActorId,
     payload: cloudSafeSubset(enriched),
-  })
+  }, { onConflict: 'actor_id' })
 
   if (error) {
     console.warn('[TrustFlow] runtime snapshot persist failed:', error.message)
