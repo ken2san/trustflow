@@ -66,7 +66,7 @@ import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { currentActorIdentity, ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
-import { storeGuestAccessToken, listGuestAgreementIds } from './lib/guestSession.js';
+import { storeGuestAccessToken, listGuestAgreementIds, getGuestAgreementLabel } from './lib/guestSession.js';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
@@ -503,7 +503,9 @@ const App = () => {
   // changes when an acceptance writes a credential, and a stale copy would
   // hide the agreement a guest has just joined — which is the exact failure
   // this exists to fix.
-  const guestAgreementIds = view === 'home' ? listGuestAgreementIds() : [];
+  const guestAgreements = view === 'home'
+    ? listGuestAgreementIds().map(id => ({ id, label: getGuestAgreementLabel(id) }))
+    : [];
 
   const openContractFromHome = useCallback(async (contract) => {
     setAgreementError(null);
@@ -552,7 +554,8 @@ const App = () => {
     // it is filed now. From here this browser behaves like the one that
     // accepted — the link does not have to be kept.
     if (tokenOverride && evidence.contract?.id) {
-      storeGuestAccessToken(String(evidence.contract.id), tokenOverride);
+      storeGuestAccessToken(String(evidence.contract.id), tokenOverride,
+        evidence.contract?.project_name ?? null);
     }
     setAgreement({
       // A guest has no auth.users row, so RLS gives them nothing from `events`
@@ -1246,7 +1249,7 @@ const App = () => {
             authStatus={auth.status}
             authEmail={auth.email}
             onSignIn={() => setView('signin')}
-            guestAgreementIds={guestAgreementIds}
+            guestAgreements={guestAgreements}
             onOpenGuestAgreement={openAgreementAsGuest}
           />
         )}
@@ -1313,7 +1316,10 @@ const App = () => {
               // The guest Hirer's credential for this contract. Without it the
               // log-event function has no way to tell this browser apart from
               // any other, and the acceptance record below is rejected.
-              storeGuestAccessToken(contractId, accepted.guest_access_token);
+              // The name travels with the credential so the list of accepted
+              // agreements can say what each one is. A counterparty holding
+              // three of them could not tell which was which (2026-11-06).
+              storeGuestAccessToken(contractId, accepted.guest_access_token, accepted.project_name);
               setSelectedItem({
                 id: contractId,
                 title: accepted.project_name,

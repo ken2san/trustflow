@@ -21,7 +21,8 @@
     "verify:receipt": "node scripts/verify-receipt.mjs",
     "sim:counterparty": "node scripts/sim-counterparty.mjs",
     "lint": "eslint .",
-    "offer:tester": "node scripts/offer-for-tester.mjs"
+    "offer:tester": "node scripts/offer-for-tester.mjs",
+    "smoke:prod": "node scripts/smoke-production.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.1",

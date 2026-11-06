@@ -442,8 +442,14 @@ test('a guest who navigates away can still reach the agreement they accepted', a
   // in the URL. Everything the guest has is what the browser kept.
   await page.goto('/');
 
-  // The agreement is offered, and the id is the one they accepted.
-  const offer = page.getByRole('button', { name: /Open the agreement you accepted/i });
+  // The agreement is offered BY NAME, and the id is the one they accepted.
+  //
+  // This asserted the generic label until 2026-11-06, when a counterparty
+  // holding three entries reported being unable to tell them apart — they all
+  // read "Open the agreement you accepted" over a uuid. The name is now kept
+  // beside the credential at acceptance, so asserting it here covers both
+  // that the entry appears and that it says which agreement it is.
+  const offer = page.getByRole('button', { name: /Return Path Probe/i });
   await expect(offer).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(contract.id, { exact: true })).toBeVisible();
 

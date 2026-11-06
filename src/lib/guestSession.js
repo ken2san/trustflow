@@ -12,13 +12,40 @@
 
 const KEY_PREFIX = 'tf_guest_access_token:'
 
-export function storeGuestAccessToken(contractId, token) {
+const LABEL_PREFIX = 'tf_guest_agreement_label:'
+
+/**
+ * `label` is what the agreement is called, kept beside the credential so the
+ * list of accepted agreements can name them.
+ *
+ * Without it the list showed raw uuids, and a counterparty holding three of
+ * them reported being unable to tell which was the one just accepted
+ * (2026-11-06). Fetching the names instead would be one request per entry on
+ * every render of the home screen, for a value that is known for free at the
+ * moment of acceptance.
+ *
+ * It is a convenience, not a record: the agreement's real name lives on the
+ * server and is read when one is opened. A stale or missing label costs a
+ * line of display and nothing else.
+ */
+export function storeGuestAccessToken(contractId, token, label = null) {
   if (!contractId || !token) return
   try {
     localStorage.setItem(KEY_PREFIX + contractId, token)
+    if (label) localStorage.setItem(LABEL_PREFIX + contractId, String(label).slice(0, 200))
   } catch {
     // Private mode / quota — the guest simply loses the ability to record
     // further events on this contract. Non-fatal.
+  }
+}
+
+/** The remembered name of an agreement, or null. Display only. */
+export function getGuestAgreementLabel(contractId) {
+  if (!contractId) return null
+  try {
+    return localStorage.getItem(LABEL_PREFIX + contractId)
+  } catch {
+    return null
   }
 }
 
@@ -44,6 +71,9 @@ export function storeGuestAccessToken(contractId, token) {
  */
 export function listGuestAgreementIds() {
   const ids = []
+  // NOTE: label keys share this store and must not be mistaken for
+  // credentials — hence two prefixes rather than one with a suffix.
+
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)

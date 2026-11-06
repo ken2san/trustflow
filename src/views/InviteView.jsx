@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ShieldCheck, ArrowRight, X, Download, Lock, CheckCircle2, User, AlertTriangle, Clock } from "lucide-react";
+import { ShieldCheck, ArrowRight, X, Download, Lock, CheckCircle2, User, AlertTriangle, Clock, Loader2 } from "lucide-react";
 
 // Each of these says only what the system does. The three cards here used to
 // promise a Trust Passport that builds over time, records "you own
@@ -47,6 +47,9 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
   const [stage, setStage] = useState('review'); // 'review' | 'identify'
   const [displayName, setDisplayName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
+  // In flight, so the one irreversible button on this screen cannot be pressed
+  // again while it is working and cannot look dead while it does.
+  const [submitting, setSubmitting] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
 
   // Each stage is a new screen on one scrolled page, so without this the
@@ -97,7 +100,12 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       // "it keeps your access and lists the agreement" promised something the
       // storage can fail at silently (guestSession.js swallows a write
       // failure), so it is conditional now. Codex, 2026-11-06.
-      ? 'An invitation can only be accepted once. If that was you, open this site on the browser you accepted in — if it still holds your access, the agreement is listed there. If it does not, or you are on another device, ask whoever invited you to re-send your access link. If it was not you, say so to them before anything else happens.'
+      // The last sentence used to be "If it was not you, say so to them before
+      // anything else happens." Two counterparties who HAD just accepted read
+      // it and were unsettled — one called it frightening. It is addressed to
+      // a different reader than the one most likely to be here, so it goes
+      // last and quietly, after the route back.
+      ? 'An invitation can only be accepted once. If that was you, open this site on the browser you accepted in — if it still holds your access, the agreement is listed there. If it does not, or you are on another device, ask whoever invited you to re-send your access link. If you have not accepted anything, the person who sent this will want to know.'
       : cannotCheck
       ? 'Nothing was accepted, and nothing is wrong with the agreement. This page was loaded from an older version of TrustFlow than the one now running, so it could not confirm that the terms on screen are still the terms on offer. Reload the page and read them again.'
       : termsChanged
@@ -280,13 +288,32 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               I have reviewed the terms above — the work, what counts as done, the amount and the deadline — and I agree to them. I understand that my acceptance will be timestamped and recorded as a binding agreement.
             </span>
           </label>
+          {/* The button had no busy state at all: acceptance does a pre-flight
+              re-read and then a server round trip, and for those seconds
+              nothing on screen changed. A counterparty pressed it three times
+              and could not tell whether anything had happened (2026-11-06).
+              The protocol held — the invitation is single-use and the
+              acceptance carries an idempotency key, so nothing was recorded
+              twice — but "did I just bind myself to this?" is the one
+              question this screen must never leave open. */}
           <button
-            onClick={() => onAccept(displayName.trim() || 'Guest', acceptingEmail)}
-            disabled={!displayName.trim() || !acceptingEmail || !consentChecked}
+            onClick={async () => {
+              if (submitting) return;
+              setSubmitting(true);
+              try {
+                await onAccept(displayName.trim() || 'Guest', acceptingEmail);
+              } finally {
+                // The parent navigates away on success; this matters on the
+                // paths where it does not, so a refusal leaves a live button.
+                setSubmitting(false);
+              }
+            }}
+            disabled={submitting || !displayName.trim() || !acceptingEmail || !consentChecked}
             className="w-full py-5 bg-white text-[#020617] rounded-[24px] font-black text-lg flex items-center justify-center gap-3 hover:bg-indigo-400 hover:text-white transition-all shadow-2xl disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-[#020617]"
           >
-            I Agree — Join This Contract
-            <ArrowRight className="w-5 h-5" />
+            {submitting
+              ? <><Loader2 className="w-5 h-5 animate-spin" /> Recording your acceptance…</>
+              : <>I Agree — Join This Contract<ArrowRight className="w-5 h-5" /></>}
           </button>
           <button
             onClick={() => setStage('review')}

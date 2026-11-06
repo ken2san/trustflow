@@ -218,7 +218,7 @@ export default function ContractsHomeView({
   // Agreements this browser accepted as an invited counterparty. They are not
   // `contracts` — a guest has no account and RLS returns them nothing — so
   // they arrive as bare ids from localStorage and are offered, not listed.
-  guestAgreementIds = [], onOpenGuestAgreement,
+  guestAgreements = [], onOpenGuestAgreement,
 }) {
   const [showCompleted, setShowCompleted] = React.useState(false);
   const { needsYou, inProgress, completed } = React.useMemo(
@@ -312,7 +312,7 @@ export default function ContractsHomeView({
           Offered rather than listed, because the id is all that is kept. The
           title, the amount and whether the token still works are the server's
           to answer, and it answers when one is opened. */}
-      {guestAgreementIds.length > 0 && onOpenGuestAgreement && (
+      {guestAgreements.length > 0 && onOpenGuestAgreement && (
         <section className="rounded-[28px] border border-white/5 bg-white/[0.02] px-6 py-5 space-y-3">
           <h3 className="text-[11px] font-black tracking-[0.2em] text-slate-400 uppercase">
             Accepted on this device
@@ -324,13 +324,21 @@ export default function ContractsHomeView({
             your access link.
           </p>
           <ul className="space-y-2">
-            {guestAgreementIds.map(id => (
+            {/* Named, not numbered. Three entries reading "Open the agreement
+                you accepted" above three uuids left a counterparty unable to
+                tell which was the one they had just joined (2026-11-06). The
+                name is remembered at acceptance; an entry that predates that,
+                or whose label was lost, falls back to the id rather than
+                pretending to know. */}
+            {guestAgreements.map(({ id, label }) => (
               <li key={id}>
                 <button
                   onClick={() => onOpenGuestAgreement(id)}
                   className="w-full text-left px-4 py-3 rounded-2xl border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all"
                 >
-                  <span className="text-sm font-bold text-slate-200">Open the agreement you accepted</span>
+                  <span className="text-sm font-bold text-slate-200">
+                    {label || 'An agreement you accepted'}
+                  </span>
                   <span className="block text-[11px] text-slate-500 font-mono pt-0.5">{id}</span>
                 </button>
               </li>
