@@ -1338,12 +1338,60 @@ verification. The five open record items were done together and the suite ran
 afterwards, on the owner's instruction — "通しテストでそれやると途中の確認
 全くの無駄になる".
 
+### The second blind run, and the defect it reached because it accepted — 2026-11-06
+
+The first blind counterparty declined, so it never saw anything past the
+invitation. The second was given a situation that matched the contract — the
+first run's brief contradicted it, which was a fixture error, not a product
+one — and was asked to accept and then look for its own record.
+
+**It found the day's worst product defect.** After accepting and navigating
+away, there was no route back to its own agreement. The credential was in its
+browser the whole time, stored under the contract id, and every reader of it
+needed an id first; nothing could ask which ids were present. The invitation,
+revisited, said the record was reachable from "the access link you were given
+when you accepted" — **no such link is given**. Fixed by
+`listGuestAgreementIds`, which adds no mechanism: it asks localStorage what is
+already there.
+
+It also reported two things that were not defects, and separating them cost
+nothing because both were checked before being acted on: it saw "someone
+else's contracts" (the browser it drove held a session; the fourth artefact of
+that class) and it could not tell whether a download had happened (true, and
+fixed — but the first fix claimed the save, which nothing observes).
+
+**Both promoted findings were then mutation-tested rather than assumed.**
+Making `listGuestAgreementIds` return nothing fails the return-path test;
+sending decline back to `home` fails the decline test. A regression test that
+has never been seen to fail is a regression test in name.
+
+### Where this leaves the product — 2026-11-06
+
+Implementation for a full two-party run is **done and has been for longer than
+this session believed**. The cycle create → accept → perform → reject →
+re-deliver → accept → terminate runs today; `PERFORMANCE_ACCEPTED` is terminal
+and 75 E2E contracts have reached it. `SETTLED` and `CANCELLED` were never
+used by anything and their writers are retired. Cancellation does not block
+completion and should not be built until a run needs it.
+
+What remains is quality, found by running the thing: the acting counterparty
+(Next Priority #1), and the production smoke check that twice would have
+caught what every suite missed.
+
 ## The four patterns everything found today fell into
 
 Tallied 2026-11-06 after a day that produced, among other things, two defects
 shipped to production and fixed the same day. The point of counting is that
 **the same four shapes account for all of it** — so the next session can look
 for the shape instead of rediscovering the instance.
+
+**Then the count doubled, and how it doubled is the most useful thing here.**
+The six instances of pattern 1 were fixed by rewriting the claims. Codex was
+asked to check whether the *new* claims were true. Six of them were not. **The
+work of correcting pattern 1 produced pattern 1**, because a rewritten
+sentence is a new claim about code and nothing had checked it. Any pass that
+rewrites user-facing copy has to put the new copy through the same check as
+the old.
 
 ### 1. Something says an implementation exists that does not — 5 instances
 
@@ -1358,9 +1406,25 @@ production defects.
 | `GuestEvidenceView` | "not a document you can re-verify yourself" | the export carries every canonical input precisely so it can be |
 | `HANDOFF.md` | the fabricated-identity header is "not fixed here" | it had been fixed; a session re-investigated it |
 
+**Then six more, every one written the same day while fixing the first six:**
+
+| where | what it claimed | what was true |
+|---|---|---|
+| the download toast | "Record saved to your downloads" | the export builds a Blob and clicks an anchor; **nothing observes the save** |
+| the decline screen | "Nothing was recorded and nothing was sent" | changing view saves a runtime snapshot, and that snapshot is **upserted** |
+| the decline screen | "this link still works" | declining does not spend it; expiry, withdrawal and another tab still can |
+| `InviteView` | "it keeps your access and lists the agreement" | `guestSession.js` **swallows a storage write failure** |
+| `GuestEvidenceView` | "every server-attested event" | the response is capped at `MAX_EVENTS` and reports `truncated`; a check over a prefix is not a check over all |
+| `GuestEvidenceView` | "the one thing you cannot check" | there are others, and `guestEventView.ts` already lists them |
+
+And the stale "a guest cannot recompute a hash" survived in **three** places —
+a comment, `Protocol.md` and `Decisions.md` — long after the response gained
+canonical blocks. The real exception is `payload_hash` alone.
+
 **The rule:** a comment, a screen or a handoff is a claim about code, and a
-claim is checked, not read. Three of these five were caught by someone other
-than the author — two by Codex, one by a blind counterparty.
+claim is checked, not read. **This includes a claim written to replace one
+that was false.** Nine of these twelve were caught by someone other than the
+author — Codex seven, a blind counterparty two.
 
 ### 2. A suite is green because of what it cannot see — 4 instances
 
@@ -1376,8 +1440,17 @@ than the author — two by Codex, one by a blind counterparty.
   (`/Hash chain verified/`), so the screen could not be corrected without the
   test objecting.
 
+Two more arrived the same day, in tests written that day:
+
+- the promoted decline test asserted **the screen said the right words**, never
+  that they were true. A handler that wrote an event or consumed the invitation
+  would have passed it. It now reads the `events` table and the invitation row.
+- correcting a screen's copy then **broke the test that pinned the old copy** —
+  the second time in one day a test objected to a screen being made honest.
+
 **The rule:** ask what a passing test would still allow. If the answer is "the
-thing that broke", the test is measuring something else.
+thing that broke", the test is measuring something else. A test that asserts
+wording asserts wording; if the claim matters, check the claim.
 
 ### 3. The camera, not the product — 4 instances
 
