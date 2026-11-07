@@ -1378,7 +1378,7 @@ What remains is quality, found by running the thing: the acting counterparty
 (Next Priority #1), and the production smoke check that twice would have
 caught what every suite missed.
 
-### Open, and the most serious thing standing: the server does not enforce the order it projects — 2026-11-06
+### Closed: the server now enforces the order it projects — 2026-11-06
 
 **Found by Codex's review of the owner-side flow — the half nobody had
 examined from outside — and then reproduced against E2E rather than argued
@@ -1415,17 +1415,39 @@ the record says what happened. A history in which acceptance precedes any
 claim is not a record of anything; `PERFORMANCE_ACCEPTED` is called terminal
 in two places and the server does not make it so.
 
-**The fix needs a decision, and both halves need approval:**
+**Fixed and deployed the same day**, design-reviewed before writing and
+implementation-reviewed before applying. `enforce_performance_order` is a
+BEFORE INSERT trigger on `events` covering the three `performance.*` types
+only, locking the contract row — Codex corrected the first design on exactly
+that point, since being inside one transaction does not serialise two inserts
+that read the same old state. `log-event` maps its `TF001` to 409 rather than
+the 500 a migration alone would have produced, and does not feed it to the
+chain-tip retry loop.
 
-- The honest place is the database, inside the transaction that inserts the
-  event — an Edge-only check leaves exactly the read-to-write race the
-  acceptance path already uses `row_version` to close.
-- A narrower Edge check would close the ordinary case today and leave the
-  race. It deploys with the four-function set.
+Measured on E2E after applying, with the same probe that found it:
 
-Neither was done. **Nothing here is urgent in the sense of ongoing damage —
-no counterparty exists yet — and all of it is urgent before one does**,
-because every defect of this class writes something permanent.
+```
+before: performance.accepted -> HTTP 201, state PERFORMANCE_ACCEPTED, no assertion recorded
+after : performance.accepted -> HTTP 409 wrong_state_for_event_type, state unchanged
+```
+
+and the whole legitimate cycle, plus the two guards that matter:
+
+```
+asserted (performer)    -> 201  AWAITING_CONFIRMATION
+accepted (receiver)     -> 201  PERFORMANCE_ACCEPTED
+re-assert from terminal -> 409  still terminal
+payment after terminal  -> 201  still terminal      <- must not break, and does not
+```
+
+The last line is why the scope is three event types and not "terminal means
+nothing more": money moves outside TrustFlow, so reporting a payment after the
+work is accepted is the ordinary case.
+
+Production carries the trigger and the four functions; `contracts` 1321 and
+`events` 2396 are unchanged, since nothing repairs or re-projects existing
+rows. A contract already past the hole simply refuses further performance
+events.
 
 Codex's other findings in the same pass, each recorded and none acted on:
 re-issue has a TOCTOU window where a write authorised under the old token can
@@ -1435,6 +1457,42 @@ re-verification instructions do not match the builder's own sort or cover v3
 and v4 canonical forms, and its header still speaks of signatures, TSA tokens
 and on-chain anchors that this builder does not produce; owner-side retries
 send no idempotency key, so a lost response can record one intention twice.
+
+### A disclosure found by looking for something else — 2026-11-06
+
+Codex was asked to sweep for missing transaction boundaries. The worst thing
+it found is not one, which is why every pass that looked for them had missed
+it.
+
+`log-event`'s idempotency lookup matched `contract_id` + key and returned the
+row **raw**. A key is scoped to an operation; this treated it as scoped to a
+contract. So a caller supplying a key another party had used received that
+party's event in full — payload, internal fields and all — **bypassing the
+allowlist projection `guest-contract-events` exists to apply.**
+
+Measured on E2E before the fix:
+
+```
+owner wrote            : HTTP 201      (performance.asserted, internal note in the payload)
+guest reused the key   : HTTP 200 deduplicated = true
+secret visible to guest: *** YES ***
+returned event type    : performance.asserted   <- not even the type they asked to write
+```
+
+and after:
+
+```
+guest reused the key   : HTTP 409
+secret visible to guest: no
+```
+
+**It was not reachable through the product, and the reason is the important
+part.** The owner UI sends no idempotency key at all, and the only server-set
+key is `acceptance:<contract id>`, whose actor is the guest themselves. Codex's
+same sweep recommends **adding owner-side keys**, because a lost response
+currently records one intention twice — and doing that would have opened this.
+**The two have an order, and it is now on the record: the disclosure fix lands
+first.** It has.
 
 ## The four patterns everything found today fell into
 
