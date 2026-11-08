@@ -15,6 +15,7 @@
     "capture:guest": "playwright test tests/e2e/guest-path-capture.spec.js",
     "check:migrations": "node scripts/check-migrations.mjs",
     "test:api": "node scripts/api-e2e.mjs",
+    "test:race": "node scripts/race-delete-vs-append.mjs",
     "verify:chain": "node scripts/verify-chain.mjs",
     "check:sql-draft": "node scripts/check-sql-draft.mjs",
     "receipt": "node scripts/make-receipt.mjs",
