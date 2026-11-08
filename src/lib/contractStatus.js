@@ -331,7 +331,7 @@ export function nextActionFor(contract, now = new Date()) {
   if (state === CONTRACT_STATES.DRAFTING) {
     return {
       owner: 'you', label: 'Send the invite',
-      detail: 'This agreement has never been sent.',
+      detail: 'No invitation has been issued for this agreement.',
       since: since(contract.created_at, 'Created'),
     }
   }
@@ -340,18 +340,28 @@ export function nextActionFor(contract, now = new Date()) {
     // Waiting on the client is normal and not something to nag about — but an
     // invite link that has expired, or is about to, is dead weight only the
     // Earner can clear. That is the Earner's move, not the client's.
+    //
+    // None of the detail strings below says the invitation was SENT, for the
+    // same reason `since` says "Created": delivery is manual and client-side,
+    // so the server cannot observe it. "Invite sent." was the last of these to
+    // go (ADA spotted it after the first fix), and "The invite was opened."
+    // went with it — `invite_token_used_at` is stamped when the invitation is
+    // CONSUMED at acceptance, so it never meant opened. That branch is also
+    // close to unreachable, since consuming the token moves the agreement out
+    // of this state; it is left in place rather than removed, because this
+    // function surfaces states it does not expect rather than hiding them.
     const expiresAt = inviteExpiry(contract)
     if (contract.invite_token_used_at) {
       return {
         owner: 'client', label: 'Waiting on your client',
-        detail: 'The invite was opened.',
+        detail: 'The invitation has been used.',
         since: since(contract.created_at, 'Created'),
       }
     }
     if (!expiresAt) {
       return {
         owner: 'client', label: 'Waiting on your client',
-        detail: 'Invite sent.',
+        detail: 'Invite link created.',
         since: since(contract.created_at, 'Created'),
       }
     }

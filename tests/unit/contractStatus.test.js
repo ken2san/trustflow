@@ -268,14 +268,14 @@ describe('relativeAge', () => {
 
 describe('sinceText', () => {
   it('takes the "ago" suffix only where it is grammatical', () => {
-    expect(sinceText({ what: 'Sent', ago: '4 days' })).toBe('Sent 4 days ago')
-    expect(sinceText({ what: 'Sent', ago: 'today' })).toBe('Sent today')
+    expect(sinceText({ what: 'Created', ago: '4 days' })).toBe('Created 4 days ago')
+    expect(sinceText({ what: 'Created', ago: 'today' })).toBe('Created today')
     expect(sinceText({ what: 'Accepted', ago: 'yesterday' })).toBe('Accepted yesterday')
   })
 
   it('is null when there is no stamp to describe', () => {
     expect(sinceText(null)).toBeNull()
-    expect(sinceText({ what: 'Sent', ago: null })).toBeNull()
+    expect(sinceText({ what: 'Created', ago: null })).toBeNull()
   })
 })
 
@@ -391,6 +391,24 @@ describe('nextActionFor says since when', () => {
     }), NOW)
     expect(action.since).toBeNull()
     expect(sinceText(action.since)).toBeNull()
+  })
+
+  it('never says the invitation was sent, in any branch', () => {
+    // Delivery is manual and client-side, so the server cannot observe it.
+    // ADA found "Invite sent." surviving the first pass at this, which is why
+    // the guard is now over every branch rather than over the one word.
+    const branches = [
+      contract({ state: CONTRACT_STATES.DRAFTING }),
+      contract({ invite_token_used_at: NOW.toISOString() }),
+      contract({ invite_token_expires_at: null }),
+      contract({ invite_token_expires_at: hoursFromNow(-1) }),
+      contract({ invite_token_expires_at: hoursFromNow(6) }),
+      contract({ invite_token_expires_at: hoursFromNow(48) }),
+    ]
+    for (const c of branches) {
+      const action = nextActionFor(c, NOW)
+      expect(`${action.detail ?? ''} ${action.since?.what ?? ''}`).not.toMatch(/\bsent\b/i)
+    }
   })
 
   it('has no since for an agreement that is over', () => {
