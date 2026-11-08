@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  guestCredentialStillValid, idempotencyOutcome,
+  createdAtFollows, guestCredentialStillValid, idempotencyOutcome,
 } from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
@@ -134,5 +134,50 @@ describe('guestCredentialStillValid — revocation has to survive a slow request
     for (const presented of [TOKEN.toUpperCase(), ` ${TOKEN}`, TOKEN.slice(0, -1), `${TOKEN}x`]) {
       expect(guestCredentialStillValid(live, presented, NOW)).toBe(false)
     }
+  })
+})
+
+describe('createdAtFollows — the chain and the clock must not disagree', () => {
+  const PREV = '2026-11-07T04:00:00.000Z'
+
+  it('accepts a stamp later than its predecessor', () => {
+    expect(createdAtFollows(PREV, '2026-11-07T04:00:00.001Z')).toBe(true)
+    expect(createdAtFollows(PREV, '2026-11-07T04:00:01.000Z')).toBe(true)
+  })
+
+  it('accepts anything when there is no predecessor', () => {
+    expect(createdAtFollows(null, '2020-01-01T00:00:00.000Z')).toBe(true)
+    expect(createdAtFollows(undefined, PREV)).toBe(true)
+    expect(createdAtFollows('', PREV)).toBe(true)
+  })
+
+  // The inversion. A chained successor stamped earlier than its predecessor
+  // makes the tip read return the wrong row and derive_contract_state project
+  // the state the inverted event names.
+  it('refuses a stamp earlier than its predecessor', () => {
+    expect(createdAtFollows(PREV, '2026-11-07T03:59:59.999Z')).toBe(false)
+    expect(createdAtFollows(PREV, '2026-11-06T04:00:00.000Z')).toBe(false)
+  })
+
+  // Needs no skewed clock: toISOString() has millisecond resolution, and the
+  // readers break a tie on a random UUID, so two equal stamps are ordered
+  // arbitrarily. That is not better than an inversion, so it is refused too.
+  it('refuses a stamp equal to its predecessor', () => {
+    expect(createdAtFollows(PREV, PREV)).toBe(false)
+  })
+
+  it('compares instants, not strings', () => {
+    // Same instant, written two legal ways. A string comparison would call
+    // the second one later.
+    expect(createdAtFollows('2026-11-07T04:00:00.000Z', '2026-11-07T04:00:00Z')).toBe(false)
+    // An hour earlier, expressed in an offset that sorts above 'Z'.
+    expect(createdAtFollows(PREV, '2026-11-07T04:00:00.000+01:00')).toBe(false)
+    expect(createdAtFollows('2026-11-07T04:00:00.000+01:00', PREV)).toBe(true)
+  })
+
+  it('refuses a stamp it cannot read, on either side', () => {
+    expect(createdAtFollows(PREV, 'tomorrow')).toBe(false)
+    expect(createdAtFollows('tomorrow', '2026-11-07T04:00:01.000Z')).toBe(false)
+    expect(createdAtFollows(PREV, '')).toBe(false)
   })
 })

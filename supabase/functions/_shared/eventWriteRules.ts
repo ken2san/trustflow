@@ -83,3 +83,56 @@ export function guestCredentialStillValid(
   if (Number.isNaN(expiresAt.getTime())) return false
   return expiresAt.getTime() >= now.getTime()
 }
+
+/**
+ * May an event stamped `createdAt` follow a predecessor stamped `prevCreatedAt`?
+ *
+ * `events.created_at` is assigned in the Edge Function, from the clock of
+ * whichever isolate served the request, and it is covered by the event hash —
+ * so it cannot be corrected afterwards by the database or by anyone. Every
+ * reader in the system nevertheless orders by it: the chain-tip read in
+ * log-event and reissue-guest-access, `derive_contract_state()`, and the trail
+ * both parties are shown.
+ *
+ * Nothing constrained it to advance. Two ways it does not:
+ *
+ *   * Two isolates whose clocks disagree. An event chained after its
+ *     predecessor carries an earlier stamp, so the tip read returns the
+ *     predecessor, the next write links to a tip that is not last, and
+ *     `events_chain_no_fork_idx` refuses it — a chain that cannot be extended
+ *     at all. Worse first: `derive_contract_state()` takes the latest
+ *     performance event by that same ordering, so the agreement's state
+ *     becomes the one the inverted event names. An acceptance followed by a
+ *     rejection reads as a rejection followed by an acceptance.
+ *   * Two events inside one millisecond, which `toISOString()` cannot tell
+ *     apart. The readers break that tie on `id`, a random UUID, so the order
+ *     of two equally-stamped events is whichever way the UUIDs happened to
+ *     sort — arbitrary, and no better than an inversion. This one needs no
+ *     skewed clock and no second region; an agent that retries quickly is
+ *     enough.
+ *
+ * Hence strictly greater, which forbids both. A tie is transient and the
+ * writer's next attempt resolves it; a skew is not, and the writer must
+ * refuse rather than commit a record whose order cannot be read back.
+ *
+ * Refusing is not the only defensible answer, and the other two were left to
+ * the owner rather than taken here: clamp the stamp to just after its
+ * predecessor (fixes the order, but makes `created_at` something other than
+ * the server's reading of its own clock, inside the hash, permanently), or
+ * order every reader by the chain instead of the clock (correct, and a
+ * migration to `derive_contract_state` plus every reader).
+ */
+export function createdAtFollows(
+  prevCreatedAt: string | null | undefined,
+  createdAt: string,
+): boolean {
+  if (!prevCreatedAt) return true
+  const prev = new Date(prevCreatedAt).getTime()
+  const next = new Date(createdAt).getTime()
+  // An unreadable stamp is not a licence to write. The predecessor is a row
+  // this server wrote, so a bad value there means something worse than
+  // disorder, and treating it as "no predecessor" would wave the write past
+  // the one check that would have shown it.
+  if (Number.isNaN(prev) || Number.isNaN(next)) return false
+  return next > prev
+}

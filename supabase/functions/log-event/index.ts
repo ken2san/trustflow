@@ -33,7 +33,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord, roleInAgreement } from '../_shared/eventRecord.ts'
-import { guestCredentialStillValid, idempotencyOutcome } from '../_shared/eventWriteRules.ts'
+import {
+  createdAtFollows, guestCredentialStillValid, idempotencyOutcome,
+} from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
 } from '../_shared/authAssurance.ts'
@@ -302,10 +304,18 @@ serve(async (req: Request) => {
       if (outcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)
     }
 
+    // Set when an attempt was abandoned because this isolate's clock was not
+    // ahead of the chain tip, so the refusal at the end of the loop can say
+    // which of the two things went wrong. Cleared whenever an attempt gets
+    // past that check, since a later contention failure is a different fault.
+    let behindTip: string | null = null
+
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
       const { data: tip } = await admin
         .from('events')
-        .select('event_hash')
+        // created_at comes back too: the stamp this event will carry has to be
+        // later than its predecessor's, and this is the predecessor.
+        .select('event_hash, created_at')
         .eq('contract_id', contract_id)
         .not('event_hash', 'is', null)
         // Same ordering as accept_invitation and derive_contract_state. Two
@@ -333,6 +343,29 @@ serve(async (req: Request) => {
         prevEventHash: prevHash,
         idempotencyKey: (idempotency_key as string | null) ?? null,
       })
+
+      // The stamp this event carries must be later than the one it follows.
+      //
+      // `created_at` is this isolate's clock, it is inside the event hash, and
+      // every reader in the system orders by it — the tip read above,
+      // `derive_contract_state()`, and the trail both parties are shown.
+      // Nothing made it advance. Two events in the same millisecond are
+      // ordered by a random UUID, and two isolates whose clocks disagree can
+      // write a chain whose stamps run backwards: the tip read then returns
+      // the wrong row, the fork index refuses every later write, and the
+      // projected state is the one the inverted event names.
+      //
+      // So it is checked here, where the predecessor is in hand, and the
+      // attempt is abandoned rather than written. A tie resolves itself on
+      // the next pass, one round trip later; a real skew does not, and ends
+      // as a refusal that names itself. See createdAtFollows for the two
+      // alternatives — clamping the stamp, or ordering every reader by the
+      // chain — and why neither was taken without the owner.
+      if (!createdAtFollows(tip?.created_at as string | null | undefined, event.created_at)) {
+        behindTip = (tip?.created_at as string | null) ?? null
+        continue
+      }
+      behindTip = null
 
       // The credential is re-read here, immediately before the write.
       //
@@ -449,6 +482,12 @@ serve(async (req: Request) => {
       return json({ error: 'insert_failed', detail: insertError.message }, 500)
     }
 
+    if (behindTip) {
+      // Not contention. This isolate's clock is not ahead of the chain, and
+      // no number of retries fixes that. Said plainly so it is diagnosed as
+      // the infrastructure fault it is rather than as a busy contract.
+      return json({ error: 'clock_behind_chain', detail: `chain tip is stamped ${behindTip}` }, 409)
+    }
     return json({ error: 'chain_contention' }, 409)
 
   } catch (err) {

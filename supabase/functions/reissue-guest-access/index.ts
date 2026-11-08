@@ -33,6 +33,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { buildEventRecord } from '../_shared/eventRecord.ts'
 import { assuranceFromClaims, claimsFromVerifiedJwt } from '../_shared/authAssurance.ts'
+import { createdAtFollows } from '../_shared/eventWriteRules.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -122,10 +123,16 @@ serve(async (req: Request) => {
       Date.now() + GUEST_ACCESS_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString()
 
+    // See log-event for what this guards. The same rule has to hold here: a
+    // reissue is an event in the same chain, read back by the same readers,
+    // and this function is as likely as any other to run on an isolate whose
+    // clock is not ahead of the chain tip.
+    let behindTip: string | null = null
+
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
       const { data: tip } = await admin
         .from('events')
-        .select('event_hash')
+        .select('event_hash, created_at')
         .eq('contract_id', contract_id)
         .not('event_hash', 'is', null)
         .order('created_at', { ascending: false })
@@ -148,6 +155,15 @@ serve(async (req: Request) => {
         payload: {},
         prevEventHash: prevHash,
       })
+
+      // Abandoned rather than written: a stamp that is not later than its
+      // predecessor's inverts the order every reader of this chain uses, and
+      // it is inside the event hash, so it cannot be corrected later.
+      if (!createdAtFollows(tip?.created_at as string | null | undefined, event.created_at)) {
+        behindTip = (tip?.created_at as string | null) ?? null
+        continue
+      }
+      behindTip = null
 
       const { data: result, error: rpcError } = await admin.rpc('reissue_guest_access', {
         p_contract_id:         contract_id,
@@ -178,6 +194,9 @@ serve(async (req: Request) => {
       }, 200)
     }
 
+    if (behindTip) {
+      return json({ error: 'clock_behind_chain', detail: `chain tip is stamped ${behindTip}` }, 409)
+    }
     return json({ error: 'chain_contention' }, 409)
 
   } catch (err) {
