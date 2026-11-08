@@ -393,7 +393,7 @@ describe('nextActionFor says since when', () => {
     expect(sinceText(action.since)).toBeNull()
   })
 
-  it('never says the invitation was sent, in any branch', () => {
+  it('never says the invitation was sent or opened, in any invite branch', () => {
     // Delivery is manual and client-side, so the server cannot observe it.
     // ADA found "Invite sent." surviving the first pass at this, which is why
     // the guard is now over every branch rather than over the one word.
@@ -407,7 +407,13 @@ describe('nextActionFor says since when', () => {
     ]
     for (const c of branches) {
       const action = nextActionFor(c, NOW)
-      expect(`${action.detail ?? ''} ${action.since?.what ?? ''}`).not.toMatch(/\bsent\b/i)
+      const words = `${action.detail ?? ''} ${action.since?.what ?? ''}`
+      expect(words).not.toMatch(/\bsent\b/i)
+      // And not "opened" either: `invite_token_used_at` is stamped when the
+      // invitation is consumed at acceptance, so it never meant opened. Codex
+      // pointed out the first version of this guard would have let that one
+      // back in.
+      expect(words).not.toMatch(/\bopened\b/i)
     }
   })
 
@@ -423,28 +429,81 @@ describe('nextActionFor says since when', () => {
 // and said "today" about a day that had ended.
 
 describe('days are counted as calendar days', () => {
-  it('a deadline that ended yesterday is late, across a DST change', () => {
-    // America/Toronto springs forward on 2026-03-08, so local midnight on the
-    // 8th to 00:30 on the 9th is 23.5 hours. Elapsed-millisecond arithmetic
-    // floors that to zero and calls a finished day "today"; this is the exact
-    // instant Codex named, so the assertion has to be made at it.
-    const justAfterMidnight = new Date('2026-03-09T04:30:00.000Z')
-    const late = deadlineStatus(contract({ deadline: '2026-03-08' }), justAfterMidnight)
-    expect(late.status).toBe('passed')
-    expect(late.days).toBe(1)
-  })
+  // These instants are built with the LOCAL-time constructor on purpose, so
+  // the test means the same thing in every zone the suite runs in. An earlier
+  // version hard-coded Toronto's UTC offsets and would have passed vacuously
+  // on a UTC runner — Codex caught that, and a test whose premise depends on
+  // an unset environment variable is not a test.
 
-  it('an event late yesterday evening is yesterday, not today', () => {
-    const justBeforeMidnight = new Date('2026-09-24T03:30:00.000Z') // 23:30 on the 23rd in Toronto
-    const shortlyAfter = new Date('2026-09-24T04:30:00.000Z')       // 00:30 on the 24th
-    // One hour apart, but either side of midnight.
+  it('an event an hour before midnight is yesterday, not today', () => {
+    // One hour apart, either side of local midnight. This is the case that
+    // elapsed-millisecond arithmetic gets wrong in every zone.
+    const justBeforeMidnight = new Date(2026, 8, 23, 23, 30, 0)
+    const shortlyAfter = new Date(2026, 8, 24, 0, 30, 0)
     expect(relativeAge(justBeforeMidnight.toISOString(), shortlyAfter)).toBe('yesterday')
   })
 
-  it('still reads the same day as today', () => {
-    const morning = new Date('2026-09-24T13:00:00.000Z')
-    const evening = new Date('2026-09-24T23:00:00.000Z')
-    expect(relativeAge(morning.toISOString(), evening)).toBe('today')
+  it('still reads the same calendar day as today, however many hours apart', () => {
+    expect(relativeAge(new Date(2026, 8, 24, 0, 5, 0).toISOString(),
+      new Date(2026, 8, 24, 23, 55, 0))).toBe('today')
+  })
+
+  it('a deadline whose day has ended is late by one', () => {
+    // In a zone that springs forward on 2026-03-08 this gap is 23.5 hours, and
+    // elapsed-millisecond arithmetic floored it to zero — the original defect.
+    // In a zone with no DST it is 24.5 hours, where the old arithmetic also
+    // answered 1, so it is the test above that catches the bug everywhere and
+    // this one that pins the DST instance of it.
+    const late = deadlineStatus(contract({ deadline: '2026-03-08' }),
+      new Date(2026, 2, 9, 0, 30, 0))
+    expect(late.status).toBe('passed')
+    expect(late.days).toBe(1)
+  })
+})
+
+describe('the counterparty access clock is an instant, not a calendar day', () => {
+  // The regression the DST fix introduced, and the reason the two clocks must
+  // not share arithmetic: `deadline` is a date, `guest_access_token_expires_at`
+  // is a moment the server enforces.
+  const accepted = overrides => contract({
+    state: CONTRACT_STATES.TERMS_ACCEPTED,
+    invite_token_used_at: NOW.toISOString(),
+    ...overrides,
+  })
+  const access = (contractRow, now) =>
+    clocksFor(contractRow, now).find(c => c.kind === CLOCKS.GUEST_ACCESS)
+
+  it('is not expired when it still has hours left on the same day', () => {
+    const now = new Date(2026, 8, 24, 10, 0, 0)
+    const clock = access(accepted({
+      guest_access_token_expires_at: new Date(2026, 8, 24, 23, 0, 0).toISOString(),
+    }), now)
+    expect(clock.status).toBe('soon')
+    expect(clock.text).not.toBe('expired')
+  })
+
+  it('is expired once the moment has passed, not once the day has', () => {
+    const now = new Date(2026, 8, 24, 10, 0, 0)
+    const clock = access(accepted({
+      guest_access_token_expires_at: new Date(2026, 8, 24, 9, 59, 0).toISOString(),
+    }), now)
+    expect(clock).toMatchObject({ status: 'passed', text: 'expired' })
+  })
+
+  it('counts a day as a day, and says so in the singular', () => {
+    const now = new Date(2026, 8, 24, 10, 0, 0)
+    const clock = access(accepted({
+      guest_access_token_expires_at: new Date(2026, 8, 25, 9, 0, 0).toISOString(),
+    }), now)
+    expect(clock.text).toBe('1 day left')
+  })
+
+  it('stays quiet while the credential is nowhere near running out', () => {
+    const now = new Date(2026, 8, 24, 10, 0, 0)
+    const clock = access(accepted({
+      guest_access_token_expires_at: new Date(2026, 11, 24, 10, 0, 0).toISOString(),
+    }), now)
+    expect(clock).toMatchObject({ status: 'ok', text: null })
   })
 })
 

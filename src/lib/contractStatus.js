@@ -265,14 +265,25 @@ export function clocksFor(contract, now = new Date()) {
 
   const accessExpires = instant(contract.guest_access_token_expires_at)
   if (!over && accessExpires && contract.invite_token_used_at) {
-    const daysLeft = -daysBetween(accessExpires, now)
+    // An INSTANT comparison, deliberately not the calendar-day arithmetic the
+    // deadline uses. `guest_access_token_expires_at` is a timestamptz — a
+    // moment the server enforces — where `deadline` is a date with no time of
+    // day. Counting calendar days here was a regression introduced by the DST
+    // fix and caught by Codex: a credential expiring at 23:00 today is zero
+    // calendar days away, so it was reported as already expired while it still
+    // had thirteen hours of life. The two clocks look alike and are not.
+    const msLeft = accessExpires.getTime() - now.getTime()
+    const daysLeft = Math.ceil(msLeft / 86_400_000)
     out.push({
       kind: CLOCKS.GUEST_ACCESS,
       label: 'Their access',
       at: accessExpires,
       on: formatStamp(accessExpires),
-      status: daysLeft <= 0 ? 'passed' : daysLeft <= GUEST_ACCESS_WARNING_DAYS ? 'soon' : 'ok',
-      text: daysLeft <= 0 ? 'expired' : daysLeft <= GUEST_ACCESS_WARNING_DAYS ? `${daysLeft} days left` : null,
+      status: msLeft <= 0 ? 'passed' : daysLeft <= GUEST_ACCESS_WARNING_DAYS ? 'soon' : 'ok',
+      text: msLeft <= 0 ? 'expired'
+        : daysLeft <= GUEST_ACCESS_WARNING_DAYS
+          ? `${daysLeft} day${daysLeft === 1 ? '' : 's'} left`
+          : null,
     })
   }
 
