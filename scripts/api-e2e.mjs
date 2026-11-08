@@ -336,6 +336,91 @@ async function main() {
     guestIds.length > 0 && JSON.stringify(guestIds) === JSON.stringify(ownerIds),
     guestIds.length ? `owner ${ownerIds.length} / guest ${guestIds.length}` : 'guest view exposes no event ids');
 
+  // ── 10. A deletable draft is one with no evidence ─────────────────────────
+  //
+  // `owner_delete_unaccepted_draft` used to allow a delete on
+  // AWAITING_ACCEPTANCE with invite_token_used_at null, and justified that as
+  // equivalent to "has no events" because the acceptance event is the first
+  // row ever written. Nothing enforced the equivalence. log-event has no
+  // acceptance check, and contract.initiated carries no role requirement and
+  // no state requirement — so an owner can append to a draft, and
+  // derive_contract_state() leaves it in the deletable set.
+  //
+  // events.contract_id is text with no foreign key (20260313000000,
+  // deliberate: pre-migration demo ids) and delete on events is revoked
+  // outright, so deleting such a contract leaves permanent, undeletable,
+  // hash-chained rows pointing at an id that no longer exists — in a product
+  // whose whole claim is an append-only evidence log. 20261104204009 added
+  // `not exists (select 1 from events ...)` to the predicate. Reachable then,
+  // reached here.
+  const draft = await rest(ownerToken, 'contracts?select=id', {
+    method: 'POST',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      earner_user_id: ownerId,
+      earner_display_name: 'API Harness Owner',
+      project_name: `${RUN} — deletable draft`,
+      dod: ['A draft that will be deleted'],
+      amount_jpy: 10000,
+      currency: 'JPY',
+      deadline: tomorrowLocalISO(),
+      invited_hirer_email: 'harness-guest@example.invalid',
+      performed_by: 'creator',
+    }),
+  });
+  const draftId = (Array.isArray(draft.body) ? draft.body[0] : null)?.id ?? null;
+  ok('the owner creates a second draft', draft.status === 201 && Boolean(draftId),
+    `HTTP ${draft.status}`);
+
+  // The control, and it is not optional. Without it a refusal below proves
+  // only that delete never works — which is exactly the shape of a test that
+  // passes for the wrong reason, the failure this suite was written after.
+  const emptyDraft = await rest(ownerToken, 'contracts?select=id', {
+    method: 'POST',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      earner_user_id: ownerId,
+      earner_display_name: 'API Harness Owner',
+      project_name: `${RUN} — deletable draft, no events`,
+      dod: ['A draft with nothing recorded against it'],
+      amount_jpy: 10000,
+      currency: 'JPY',
+      deadline: tomorrowLocalISO(),
+      invited_hirer_email: 'harness-guest@example.invalid',
+      performed_by: 'creator',
+    }),
+  });
+  const emptyDraftId = (Array.isArray(emptyDraft.body) ? emptyDraft.body[0] : null)?.id ?? null;
+  await rest(ownerToken, `contracts?id=eq.${emptyDraftId}`, { method: 'DELETE' });
+  const emptyGone = await rest(ownerToken, `contracts?id=eq.${emptyDraftId}&select=id`);
+  ok('a draft with no events is deletable',
+    Array.isArray(emptyGone.body) && emptyGone.body.length === 0,
+    `${(emptyGone.body ?? []).length} rows remain`);
+
+  const draftEvent = await invoke('log-event', {
+    ownerToken,
+    body: {
+      type: 'contract.initiated', contract_id: draftId,
+      payload: { note: 'Harness — evidence against a contract still at AWAITING_ACCEPTANCE' },
+    },
+  });
+  ok('an owner can record an event against an unaccepted draft',
+    draftEvent.status < 300 && Boolean(draftEvent.data?.event),
+    `HTTP ${draftEvent.status} ${draftEvent.reason ?? ''}`);
+
+  await rest(ownerToken, `contracts?id=eq.${draftId}`, { method: 'DELETE' });
+  const stillThere = await rest(ownerToken, `contracts?id=eq.${draftId}&select=id,state`);
+  ok('a draft that carries evidence cannot be deleted out from under it',
+    Array.isArray(stillThere.body) && stillThere.body.length === 1,
+    `${(stillThere.body ?? []).length} rows remain`);
+
+  // And the point of refusing: the event is still attached to something.
+  const draftEvents = await rest(ownerToken,
+    `events?contract_id=eq.${draftId}&select=id`);
+  ok('the evidence is not orphaned',
+    Array.isArray(draftEvents.body) && draftEvents.body.length >= 1,
+    `${(draftEvents.body ?? []).length} events still reachable from the contract`);
+
   // ── measured, not asserted ────────────────────────────────────────────────
   // Whether the counterparty can check the record for themselves, instead of
   // being told the server checked it. This is deliberately NOT an ok() check:
