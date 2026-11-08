@@ -267,12 +267,21 @@ async function main() {
     say('events now', events === null ? 'READBACK FAILED' : events.length);
 
     const blocked = append.ms >= BLOCKED_THRESHOLD_MS;
-    const namedTF003 = /TF003|does not follow the chain/.test(`${append.detail ?? ''}`);
+    // Two wordings, both correct, and the second only appeared once the new
+    // build was deployed: the trigger's own message ("… does not follow the
+    // chain, whose last event is stamped X") when the insert is what refused,
+    // or `clock_behind_chain` with the Edge-side pre-check's sentence ("chain
+    // tip is stamped X") when the retry after TF003 sees the moved tip before
+    // writing again. Measured on E2E, 2026-11-08, immediately after deploying
+    // the mapping — the old build could only produce the first.
+    const namedTF003 = /TF003|does not follow the chain/.test(`${append.detail ?? ''}`)
+      || append.reason === 'clock_behind_chain';
     // Exactly the held one, and demonstrably the held one: the refusal names
     // the stamp it could not follow, so the single surviving row has to carry
     // that same stamp. "1 event" alone would also be satisfied by the waiter
     // having replaced it — the defect wearing the right count.
-    const tipStamp = /last event is stamped ([^\s]+ [^\s]+)/.exec(append.detail ?? '')?.[1];
+    const tipStamp = (/last event is stamped ([^\s]+ [^\s]+)/.exec(append.detail ?? '')
+      ?? /chain tip is stamped (\S+)/.exec(append.detail ?? ''))?.[1];
     const survivorIsTheHeldOne = events !== null && events.length === 1
       && Boolean(tipStamp)
       && Number.isFinite(instantOf(tipStamp))
