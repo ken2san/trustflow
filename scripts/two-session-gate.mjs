@@ -184,6 +184,34 @@ function say(label, value) {
   console.log(`  ${label.padEnd(22)} ${value}`);
 }
 
+/**
+ * A readback is only evidence if it succeeded.
+ *
+ * The first version of this script read `contracts?id=eq.…` and treated any
+ * non-empty answer as "still there" — so a failed request, whose body is an
+ * error object rather than an array, read as survival. A gate whose PASS can
+ * be produced by a broken readback is not a gate. Codex, 2026-11-08.
+ */
+/**
+ * One instant from a stamp written either way.
+ *
+ * PostgREST returns `2026-11-08T13:53:41.629859+00:00`; the database's own
+ * error message says `2026-11-08 13:53:41.629859+00`. A space instead of T,
+ * and an offset without minutes, which `Date.parse` rejects outright — so the
+ * first version of the identity check below compared a number against NaN and
+ * failed on two stamps that were the same instant. Found by the check itself,
+ * which is the one good thing about a test that refuses to pass.
+ */
+function instantOf(stamp) {
+  if (typeof stamp !== 'string') return NaN;
+  return Date.parse(stamp.trim().replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00'));
+}
+
+function rowsOf(result) {
+  if (result.status !== 200 || !Array.isArray(result.body)) return null;
+  return result.body;
+}
+
 async function main() {
   const [kase, arg, ...rest_] = process.argv.slice(2);
 
@@ -229,42 +257,61 @@ async function main() {
     const append = await logEvent(ownerToken, {
       contract_id: contractId, type: 'contract.initiated', payload: { gate: 'd' },
     });
-    const events = await rest(ownerToken, `events?contract_id=eq.${contractId}&select=id,created_at`);
-    const rows = Array.isArray(events.body) ? events.body : null;
+    const events = rowsOf(await rest(ownerToken,
+      `events?contract_id=eq.${contractId}&select=id,created_at`));
 
     console.log('');
     say('append', `HTTP ${append.status} ${append.reason ?? ''} (${append.ms}ms)`);
     say('detail', append.detail ?? '(none)');
     say('blocked on the lock', append.ms >= BLOCKED_THRESHOLD_MS ? `yes, ${append.ms}ms` : 'NO');
-    say('events now', rows === null ? 'READBACK FAILED' : rows.length);
+    say('events now', events === null ? 'READBACK FAILED' : events.length);
 
     const blocked = append.ms >= BLOCKED_THRESHOLD_MS;
     const namedTF003 = /TF003|does not follow the chain/.test(`${append.detail ?? ''}`);
-    // Exactly the held one. A second row would mean the waiter was written
-    // behind its own predecessor, which is the defect.
-    const onlyTheHeldOne = rows !== null && rows.length === 1;
+    // Exactly the held one, and demonstrably the held one: the refusal names
+    // the stamp it could not follow, so the single surviving row has to carry
+    // that same stamp. "1 event" alone would also be satisfied by the waiter
+    // having replaced it — the defect wearing the right count.
+    const tipStamp = /last event is stamped ([^\s]+ [^\s]+)/.exec(append.detail ?? '')?.[1];
+    const survivorIsTheHeldOne = events !== null && events.length === 1
+      && Boolean(tipStamp)
+      && Number.isFinite(instantOf(tipStamp))
+      && instantOf(events[0].created_at) === instantOf(tipStamp);
+    if (events !== null && events.length === 1) {
+      say('surviving stamp', events[0].created_at);
+      say('refusal named', tipStamp ?? '(not parsed)');
+    }
 
     console.log('');
     if (!blocked) {
       console.log('NOT RUN — the append did not wait, so the held session was not holding.');
       process.exit(1);
     }
-    console.log(namedTF003 && onlyTheHeldOne
+    if (events === null) {
+      console.log('NOT RUN — the readback failed, so nothing here is evidence.');
+      process.exit(1);
+    }
+    console.log(namedTF003 && survivorIsTheHeldOne
       ? 'PASS — the waiter blocked, the guard re-read the tip after the wait, and refused with TF003.'
-      : onlyTheHeldOne
-        ? 'NOT RUN — nothing was written, but the refusal does not name TF003.'
-        : 'FAIL — an event was written at or before the one it follows.');
-    process.exit(namedTF003 && onlyTheHeldOne ? 0 : 1);
+      : events.length === 1 && namedTF003
+        ? 'NOT RUN — one event survived, but it is not the one the refusal named.'
+        : events.length === 1
+          ? 'NOT RUN — nothing was written, but the refusal does not name TF003.'
+          : 'FAIL — an event was written at or before the one it follows.');
+    process.exit(namedTF003 && survivorIsTheHeldOne ? 0 : 1);
   }
 
   if (kase === 'a') {
     const append = await logEvent(ownerToken, {
       contract_id: contractId, type: 'contract.initiated', payload: { gate: 'a' },
     });
-    const events = await rest(ownerToken, `events?contract_id=eq.${contractId}&select=id`);
-    const contract = await rest(ownerToken, `contracts?id=eq.${contractId}&select=id`);
-    const eventCount = Array.isArray(events.body) ? events.body.length : -1;
-    const gone = Array.isArray(contract.body) && contract.body.length === 0;
+    const events = rowsOf(await rest(ownerToken, `events?contract_id=eq.${contractId}&select=id`));
+    const contract = rowsOf(await rest(ownerToken, `contracts?id=eq.${contractId}&select=id`));
+    const readable = events !== null && contract !== null;
+    const eventCount = events === null ? -1 : events.length;
+    // "Gone" has to come from a readback that worked: a failed request is not
+    // a deleted row.
+    const gone = contract !== null && contract.length === 0;
 
     console.log('');
     say('append', `HTTP ${append.status} ${append.reason ?? ''} (${append.ms}ms)`);
@@ -280,6 +327,10 @@ async function main() {
     console.log('');
     if (!blocked) {
       console.log('NOT RUN — the append did not wait, so the held session was not holding.');
+      process.exit(1);
+    }
+    if (!readable) {
+      console.log('NOT RUN — a readback failed, so nothing here is evidence.');
       process.exit(1);
     }
     console.log(invariant && eventCount === 0 && gone && namedTF002
@@ -307,10 +358,15 @@ async function main() {
   const remove = await rest(ownerToken, `contracts?id=eq.${contractId}`, { method: 'DELETE' });
   const ms = Date.now() - started;
   const body = typeof remove.body === 'string' ? remove.body : JSON.stringify(remove.body ?? '');
-  const events = await rest(ownerToken, `events?contract_id=eq.${contractId}&select=id`);
-  const contract = await rest(ownerToken, `contracts?id=eq.${contractId}&select=id`);
-  const eventCount = Array.isArray(events.body) ? events.body.length : -1;
-  const gone = Array.isArray(contract.body) && contract.body.length === 0;
+  const events = rowsOf(await rest(ownerToken, `events?contract_id=eq.${contractId}&select=id`));
+  const contract = rowsOf(await rest(ownerToken, `contracts?id=eq.${contractId}&select=id`));
+  const readable = events !== null && contract !== null;
+  const eventCount = events === null ? -1 : events.length;
+  // Survival is a row that came back, not merely the absence of an empty
+  // array. That asymmetry with `gone` is the fix: both now require a readback
+  // that actually worked.
+  const survived = contract !== null && contract.length === 1;
+  const gone = contract !== null && contract.length === 0;
 
   console.log('');
   say('delete', `HTTP ${remove.status} (${ms}ms)`);
@@ -328,10 +384,14 @@ async function main() {
     console.log('NOT RUN — the delete did not wait, so the held session was not holding.');
     process.exit(1);
   }
-  const passed = invariant && eventCount > 0 && !gone && namedTF004;
+  if (!readable) {
+    console.log('NOT RUN — a readback failed, so nothing here is evidence.');
+    process.exit(1);
+  }
+  const passed = invariant && eventCount > 0 && survived && namedTF004;
   console.log(passed
     ? 'PASS — the delete blocked on the held append, then was refused with TF004.'
-    : invariant && eventCount > 0 && !gone
+    : invariant && eventCount > 0 && survived
       // Exit 1, not 0. This case exists to prove the delete-side TRIGGER
       // refused; a delete that RLS rowed out of scope leaves the same data
       // behind and is not what is being tested. The first version of this
