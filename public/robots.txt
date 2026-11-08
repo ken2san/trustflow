@@ -1,0 +1,26 @@
+# TrustFlow — crawling policy
+#
+# This is a hint to well-behaved crawlers, NOT access control. The agreement
+# screens are reached by holding a token, and a token in a URL is a credential:
+# if one leaks, nothing here protects it. Revoking is what protects it —
+# re-issue the counterparty's access, or let the 72-hour invite window close.
+#
+# Note what this file does NOT list. The app has no path router: every screen
+# lives at `/` and is React state, so there is no /contract, /dashboard,
+# /settings or auth callback path to disallow. The only crawlable surface that
+# carries a credential is a query string, which is why the rules below are
+# parameter patterns. `*` and `$` are extensions that Google and Bing honour
+# and that a strictly-RFC crawler ignores, so these lines reduce exposure and
+# do not remove it.
+
+User-agent: *
+
+# An invitation link and a re-issued access link. Both carry the credential
+# itself in `?token=` / `?guest=`.
+Disallow: /*?*token=
+Disallow: /*?*guest=
+
+# Everything else is public: the landing page, and whatever an agent should be
+# able to read about what this service is. /llms.txt does not exist yet.
+Allow: /llms.txt
+Allow: /$
