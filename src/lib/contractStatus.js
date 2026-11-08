@@ -117,9 +117,27 @@ export const CLOCKS = {
   GUEST_ACCESS: 'guest_access',
 }
 
-/** Days between two instants, floored. Negative when `at` is in the future. */
+/**
+ * Whole days between two instants, counted as CALENDAR days in the reader's
+ * own zone. Negative when `at` is in the future.
+ *
+ * Not elapsed milliseconds over 86,400,000, which was the first version and
+ * was wrong twice over. A day is 23 or 25 hours on a DST change, so in
+ * America/Toronto a deadline of 2026-03-08 read at 00:30 on 2026-03-09 is
+ * 23.5 hours old and floors to 0 — the screen said "today" about a day that
+ * had already ended. And "today"/"yesterday" are calendar words: an event an
+ * hour before midnight is yesterday whatever the elapsed hours say. Found by
+ * Codex, 2026-11-08.
+ *
+ * Date.UTC over the LOCAL year/month/day gives each calendar day a stable
+ * number, with no zone arithmetic of our own.
+ */
+function calendarDay(at) {
+  return Math.floor(Date.UTC(at.getFullYear(), at.getMonth(), at.getDate()) / 86_400_000)
+}
+
 function daysBetween(at, now) {
-  return Math.floor((now.getTime() - at.getTime()) / 86_400_000)
+  return calendarDay(now) - calendarDay(at)
 }
 
 function instant(value) {
@@ -131,9 +149,10 @@ function instant(value) {
 /**
  * How long ago, in the fewest words that are still true.
  *
- * Deliberately coarse. "4 days" is the fact someone acts on; "4 days, 3 hours"
- * is noise, and a precise figure computed in the browser against a server
- * timestamp invites a precision the pair does not have. Returns null rather
+ * Deliberately coarse, and counted in calendar days: "4 days" is the fact
+ * someone acts on, "4 days, 3 hours" is noise, and a precise figure computed
+ * in the browser against a server timestamp invites a precision the pair does
+ * not have. Returns null rather
  * than a guess for a missing or unparseable stamp — see the note on
  * `last_performance_at` in contracts.js: null there can mean "no such event
  * yet" OR "the read failed", and neither is "since now".
@@ -200,8 +219,14 @@ export const DEADLINE_SOON_DAYS = 7
  * actually is.
  *
  * Only the ones that mean something right now: the invite link stops mattering
- * once it is used, the counterparty's access stops mattering before they have
- * any, and nothing matters once the agreement is over. Each entry carries its
+ * once it is used, and the counterparty's access stops mattering before they
+ * have any.
+ *
+ * Once the agreement is over the credential clocks are hidden and the deadline
+ * loses its lateness note. That is a presentation choice, not a claim that the
+ * clocks stopped: a finished agreement's access credential still expires on its
+ * own date, and the counterparty still loses their view of the record when it
+ * does. It is simply not something either party is waiting on. Each entry carries its
  * own date, so a caller never has to decide which "expires" it is looking at.
  */
 export function clocksFor(contract, now = new Date()) {
@@ -285,6 +310,12 @@ function formatStamp(at) {
  */
 export function nextActionFor(contract, now = new Date()) {
   const state = contract?.state
+  // `created_at` is labelled "Created", never "Sent". Whether the invitation
+  // was ever delivered is not knowable server-side — the token exists from the
+  // moment the row does, and copying the link is client-side (Decisions.md,
+  // 2026-09-29) — so "Sent 5 days ago" would state an unobserved fact about an
+  // agreement that may have been shared with nobody. Codex caught it, and it is
+  // the same class of claim this file's own comments exist to prevent.
   const since = (at, what) => {
     const ago = relativeAge(at, now)
     return ago ? { at, what, ago } : null
@@ -314,14 +345,14 @@ export function nextActionFor(contract, now = new Date()) {
       return {
         owner: 'client', label: 'Waiting on your client',
         detail: 'The invite was opened.',
-        since: since(contract.created_at, 'Sent'),
+        since: since(contract.created_at, 'Created'),
       }
     }
     if (!expiresAt) {
       return {
         owner: 'client', label: 'Waiting on your client',
         detail: 'Invite sent.',
-        since: since(contract.created_at, 'Sent'),
+        since: since(contract.created_at, 'Created'),
       }
     }
     const hoursLeft = (expiresAt - now) / 3_600_000
@@ -329,7 +360,7 @@ export function nextActionFor(contract, now = new Date()) {
       return {
         owner: 'you', label: 'Send a new invite',
         detail: 'The invite link has expired.',
-        since: since(contract.created_at, 'Sent'),
+        since: since(contract.created_at, 'Created'),
       }
     }
     if (hoursLeft <= EXPIRY_WARNING_HOURS) {
@@ -337,13 +368,13 @@ export function nextActionFor(contract, now = new Date()) {
         owner: 'you',
         label: 'Invite expires soon',
         detail: `The link expires in ${Math.max(1, Math.round(hoursLeft))} hour${Math.round(hoursLeft) === 1 ? '' : 's'}.`,
-        since: since(contract.created_at, 'Sent'),
+        since: since(contract.created_at, 'Created'),
       }
     }
     return {
       owner: 'client', label: 'Waiting on your client',
       detail: 'They have not accepted yet.',
-      since: since(contract.created_at, 'Sent'),
+      since: since(contract.created_at, 'Created'),
     }
   }
 

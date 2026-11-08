@@ -345,9 +345,12 @@ describe('clocksFor keeps the three clocks apart', () => {
 })
 
 describe('nextActionFor says since when', () => {
-  it('dates an unaccepted invite from when it was created', () => {
+  it('dates an unaccepted invite from when it was created, and says "Created"', () => {
+    // NOT "Sent". Whether the link was ever delivered is not knowable
+    // server-side, so an agreement shared with nobody must not read as sent.
     const action = nextActionFor(contract({ created_at: daysFromNow(-5) }), NOW)
-    expect(sinceText(action.since)).toBe('Sent 5 days ago')
+    expect(sinceText(action.since)).toBe('Created 5 days ago')
+    expect(JSON.stringify(action.since)).not.toContain('Sent')
   })
 
   it('dates a delivery from the assertion, not from the row', () => {
@@ -393,5 +396,56 @@ describe('nextActionFor says since when', () => {
   it('has no since for an agreement that is over', () => {
     expect(nextActionFor(contract({ state: CONTRACT_STATES.PERFORMANCE_ACCEPTED }), NOW).since).toBeNull()
     expect(nextActionFor(contract({ state: CONTRACT_STATES.CANCELLED }), NOW).since).toBeNull()
+  })
+})
+
+// ── Calendar days, not elapsed hours ───────────────────────────────────────
+// Guard: a day is 23 or 25 hours on a DST change, and "today"/"yesterday" are
+// calendar words. Dividing elapsed milliseconds by 86,400,000 got both wrong
+// and said "today" about a day that had ended.
+
+describe('days are counted as calendar days', () => {
+  it('a deadline that ended yesterday is late, across a DST change', () => {
+    // America/Toronto springs forward on 2026-03-08, so local midnight on the
+    // 8th to 00:30 on the 9th is 23.5 hours. Elapsed-millisecond arithmetic
+    // floors that to zero and calls a finished day "today"; this is the exact
+    // instant Codex named, so the assertion has to be made at it.
+    const justAfterMidnight = new Date('2026-03-09T04:30:00.000Z')
+    const late = deadlineStatus(contract({ deadline: '2026-03-08' }), justAfterMidnight)
+    expect(late.status).toBe('passed')
+    expect(late.days).toBe(1)
+  })
+
+  it('an event late yesterday evening is yesterday, not today', () => {
+    const justBeforeMidnight = new Date('2026-09-24T03:30:00.000Z') // 23:30 on the 23rd in Toronto
+    const shortlyAfter = new Date('2026-09-24T04:30:00.000Z')       // 00:30 on the 24th
+    // One hour apart, but either side of midnight.
+    expect(relativeAge(justBeforeMidnight.toISOString(), shortlyAfter)).toBe('yesterday')
+  })
+
+  it('still reads the same day as today', () => {
+    const morning = new Date('2026-09-24T13:00:00.000Z')
+    const evening = new Date('2026-09-24T23:00:00.000Z')
+    expect(relativeAge(morning.toISOString(), evening)).toBe('today')
+  })
+})
+
+// ── The guest's contract is a narrower object ──────────────────────────────
+// It arrives shaped from guest-contract-events and carries no token stamps and
+// no created_at. The screens must render less, not break.
+
+describe('a guest-shaped contract', () => {
+  const shaped = {
+    id: 'c1', project_name: 'Probe', dod: [], amount_jpy: 1000, currency: 'JPY',
+    deadline: '2026-10-01', state: CONTRACT_STATES.TERMS_ACCEPTED,
+    performed_by: 'creator', earner_display_name: 'E', hirer_email: 'h@example.test',
+  }
+
+  it('yields the deadline clock alone, and no invented credential clocks', () => {
+    expect(clocksFor(shaped, NOW).map(c => c.kind)).toEqual([CLOCKS.DEADLINE])
+  })
+
+  it('has no since to show, rather than a wrong one', () => {
+    expect(nextActionFor(shaped, NOW).since).toBeNull()
   })
 })

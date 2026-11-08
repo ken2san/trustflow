@@ -156,9 +156,11 @@ async function withChainMarkers(contracts) {
   for (const event of events ?? []) {
     // Ordered newest-first, so the first one seen for a contract is its latest.
     if (event.type === ACCEPTANCE_TYPE) {
-      // There is only ever one acceptance per agreement, and it is the chain's
-      // first event — so the newest-first scan reaches it last and the guard is
-      // belt-and-braces rather than a tie-break.
+      // There is only ever one acceptance per agreement, so this guard is
+      // belt-and-braces. It is NOT because the acceptance is the chain's first
+      // event: the owner can record `contract.initiated` on an agreement
+      // nobody has accepted, so it need not be first. The Map does not depend
+      // on the order either way.
       if (!accepted.has(event.contract_id)) accepted.set(event.contract_id, event)
       continue
     }

@@ -9,9 +9,12 @@
 # lives at `/` and is React state, so there is no /contract, /dashboard,
 # /settings or auth callback path to disallow. The only crawlable surface that
 # carries a credential is a query string, which is why the rules below are
-# parameter patterns. `*` and `$` are extensions that Google and Bing honour
-# and that a strictly-RFC crawler ignores, so these lines reduce exposure and
-# do not remove it.
+# parameter patterns. `*` and `$` are part of RFC 9309 (section 2.2.3) and a
+# conforming crawler supports them — an earlier version of this comment called
+# them non-standard extensions, which was simply wrong. What remains true is
+# that nothing here is enforcement: a crawler that ignores this file, or anyone
+# the link was forwarded to, is unaffected, and a URL already indexed is not
+# removed by adding a rule.
 
 User-agent: *
 

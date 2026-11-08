@@ -2130,10 +2130,13 @@ assertions described the old lie and were updated to the new truth.
    rotates `invite_token` in one transaction — to be built the first time a real
    invitation goes to the wrong person. The 2026-11-08 entry in `Decisions.md`
    holds the conditions that design has to meet. The
-   question that made withdrawal expensive is still open and is the real
-   prerequisite: the product cannot tell "nothing was shared" from "a link went
-   out", because `invite_token` exists from row creation and copying is
-   client-side.
+   question that made withdrawal expensive is still open: the product cannot
+   tell "nothing was shared" from "a link went out", because `invite_token`
+   exists from row creation and copying is client-side. That is a prerequisite
+   for deciding withdrawal-versus-delete AUTOMATICALLY — it is not a
+   prerequisite for B2, where the owner says the address was wrong and the
+   server records the correction without having to infer whether anything was
+   shared.
 
    **The predicate was hardened anyway** —
    `20261104204009_delete_requires_no_events.sql` adds `not exists (select 1
@@ -2195,8 +2198,16 @@ assertions described the old lie and were updated to the new truth.
   So a guest who typed `Bob@Corp.com` does not match
   `party_read_contract_events`' `=` comparison (20260924000002). Latent today
   because guests read through their token rather than an account, but it
-  cannot be repaired by normalising the stored value: `hirer_email` is inside
-  the hashed agreement snapshot and the log is append-only. Any fix has to
+  cannot be repaired by normalising the stored value — though not for the
+  reason this used to give. `hirer_email` is NOT in the hashed agreement
+  snapshot (`buildAgreementSnapshot` covers project name, DoD, amount,
+  currency, deadline, `performed_by` and `offered_by`): the value at
+  acceptance is hashed inside that event's payload, as `_claimed_identity`.
+  So what cannot be changed is the input already hashed into an existing
+  acceptance event. Normalising today's row would break no hash, and
+  comparing case-insensitively in code while the RLS policy uses `=`
+  remains a live design choice rather than something append-only forbids.
+  Corrected 2026-11-08. Any fix has to
   decide whether code compares case-insensitively while the RLS policy does
   not.
 
