@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { idempotencyOutcome } from '../../supabase/functions/_shared/eventWriteRules.ts'
+import {
+  guestCredentialStillValid, idempotencyOutcome,
+} from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
 // each, with the copies disagreeing. A unit test is the only check they can
@@ -71,5 +73,66 @@ describe('idempotencyOutcome — a key belongs to an operation, not a contract',
     expect(idempotencyOutcome({ actor_id: OWNER }, {
       type: 'performance.asserted', actorId: OWNER,
     })).toBe('conflict')
+  })
+})
+
+describe('guestCredentialStillValid — revocation has to survive a slow request', () => {
+  const TOKEN = 'fe482c1a-0000-4000-8000-0123456789ab'
+  const NOW = new Date('2026-11-07T04:00:00.000Z')
+  const live = {
+    guest_access_token: TOKEN,
+    guest_access_token_expires_at: '2026-12-01T00:00:00.000Z',
+  }
+
+  it('accepts the token the contract currently carries', () => {
+    expect(guestCredentialStillValid(live, TOKEN, NOW)).toBe(true)
+  })
+
+  // The defect: reissue-guest-access overwrites the token, and a request that
+  // checked the old one before the overwrite used to write after it.
+  it('refuses a token the contract has since replaced', () => {
+    const reissued = { ...live, guest_access_token: '6697b900-0000-4000-8000-0123456789ab' }
+    expect(guestCredentialStillValid(reissued, TOKEN, NOW)).toBe(false)
+  })
+
+  it('refuses once the window has closed', () => {
+    const expired = { ...live, guest_access_token_expires_at: '2026-11-07T03:59:59.999Z' }
+    expect(guestCredentialStillValid(expired, TOKEN, NOW)).toBe(false)
+  })
+
+  it('accepts the instant the expiry names, and nothing past it', () => {
+    const atExpiry = { ...live, guest_access_token_expires_at: NOW.toISOString() }
+    expect(guestCredentialStillValid(atExpiry, TOKEN, NOW)).toBe(true)
+    expect(guestCredentialStillValid(atExpiry, TOKEN, new Date(NOW.getTime() + 1))).toBe(false)
+  })
+
+  // Absent is refused, never waved through: a contract with no guest
+  // credential has no counterparty who may write on it.
+  it('refuses when there is nothing to compare', () => {
+    expect(guestCredentialStillValid(null, TOKEN, NOW)).toBe(false)
+    expect(guestCredentialStillValid(undefined, TOKEN, NOW)).toBe(false)
+    expect(guestCredentialStillValid({}, TOKEN, NOW)).toBe(false)
+    expect(guestCredentialStillValid(live, null, NOW)).toBe(false)
+    expect(guestCredentialStillValid(live, '', NOW)).toBe(false)
+    expect(guestCredentialStillValid(
+      { guest_access_token: TOKEN, guest_access_token_expires_at: null }, TOKEN, NOW)).toBe(false)
+  })
+
+  it('refuses an expiry it cannot read rather than reading it as forever', () => {
+    const unparseable = { ...live, guest_access_token_expires_at: 'next Tuesday' }
+    expect(guestCredentialStillValid(unparseable, TOKEN, NOW)).toBe(false)
+  })
+
+  // A null token in the row must not match a null token in the header.
+  it('does not let two absent credentials match each other', () => {
+    expect(guestCredentialStillValid(
+      { guest_access_token: null, guest_access_token_expires_at: '2026-12-01T00:00:00.000Z' },
+      null, NOW)).toBe(false)
+  })
+
+  it('matches the credential exactly, not loosely', () => {
+    for (const presented of [TOKEN.toUpperCase(), ` ${TOKEN}`, TOKEN.slice(0, -1), `${TOKEN}x`]) {
+      expect(guestCredentialStillValid(live, presented, NOW)).toBe(false)
+    }
   })
 })

@@ -49,3 +49,37 @@ export function idempotencyOutcome(
     ? 'replay'
     : 'conflict'
 }
+
+/**
+ * Is this guest capability still the one the contract carries, and still live?
+ *
+ * The same test as at the start of the request, meant to be applied again
+ * against a row read later. A guest's authority is a bearer token held in one
+ * browser's localStorage; `reissue-guest-access` replaces it, and replacing it
+ * is the only credential revocation this system has. If the token is checked
+ * once and the row is written some round trips later, a credential revoked in
+ * between still writes — which makes revocation a cache invalidation rather
+ * than a withdrawal of authority.
+ *
+ * Strict equality, not a prefix or a case-insensitive compare: the stored
+ * value is a UUID the server minted, and anything looser would widen what
+ * counts as the credential. A row with no token, no expiry, or an expiry that
+ * does not parse is not a credential — absent is refused, never waved through.
+ */
+export function guestCredentialStillValid(
+  contract: {
+    guest_access_token?: unknown
+    guest_access_token_expires_at?: unknown
+  } | null | undefined,
+  presentedToken: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!contract || !presentedToken) return false
+  if (typeof contract.guest_access_token !== 'string') return false
+  if (contract.guest_access_token !== presentedToken) return false
+  const expires = contract.guest_access_token_expires_at
+  if (typeof expires !== 'string' || !expires) return false
+  const expiresAt = new Date(expires)
+  if (Number.isNaN(expiresAt.getTime())) return false
+  return expiresAt.getTime() >= now.getTime()
+}

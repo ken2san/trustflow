@@ -33,7 +33,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord, roleInAgreement } from '../_shared/eventRecord.ts'
-import { idempotencyOutcome } from '../_shared/eventWriteRules.ts'
+import { guestCredentialStillValid, idempotencyOutcome } from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
 } from '../_shared/authAssurance.ts'
@@ -153,13 +153,9 @@ async function resolveActor(
 ): Promise<{ actorId: string; role: 'earner' | 'guest_hirer'; assurance: AuthAssurance } | null> {
   const guestToken = req.headers.get('x-guest-access-token')
   if (guestToken) {
-    if (
-      contract.guest_access_token !== guestToken ||
-      !contract.guest_access_token_expires_at ||
-      new Date(contract.guest_access_token_expires_at as string) < new Date()
-    ) {
-      return null
-    }
+    // One statement of what a live guest capability is, shared with the
+    // re-check made just before the insert. See eventWriteRules.ts.
+    if (!guestCredentialStillValid(contract, guestToken)) return null
     // The accepting email is the guest's established identity on this
     // contract — recorded by validate-invite-token, not chosen by the client.
     const hirerEmail = contract.hirer_email as string | null
@@ -258,6 +254,7 @@ serve(async (req: Request) => {
     if (contractError) return json({ error: 'lookup_failed' }, 500)
     if (!contract) return json({ error: 'contract_not_found' }, 404)
 
+    const presentedGuestToken = req.headers.get('x-guest-access-token')
     const actor = await resolveActor(req, admin, contract)
     if (!actor) return json({ error: 'not_a_party' }, 403)
 
@@ -336,6 +333,40 @@ serve(async (req: Request) => {
         prevEventHash: prevHash,
         idempotencyKey: (idempotency_key as string | null) ?? null,
       })
+
+      // The credential is re-read here, immediately before the write.
+      //
+      // WHAT THIS CLOSES
+      // A guest's authority was tested once, against the contract row read at
+      // the top of the handler, and then the request went on: resolve the
+      // actor, look up the idempotency key, read the chain tip, hash the
+      // event — and up to five of those rounds on a contested tip. A token
+      // the owner revoked anywhere in that window still wrote, because
+      // nothing looked again. Revocation by overwrite is the only credential
+      // withdrawal this system has (see reissue-guest-access), so a
+      // revocation that a request in flight can outlive is not one.
+      //
+      // Narrowing, not closing: between this read and the insert there is
+      // still a window, and shutting it entirely needs the check inside the
+      // insert's own transaction — which is what enforce_performance_order
+      // does for ordering, and which the event row cannot do here because it
+      // does not carry the token that was presented. Named in the report;
+      // not decided alone.
+      if (actor.role === 'guest_hirer') {
+        const { data: credential } = await admin
+          .from('contracts')
+          .select('guest_access_token, guest_access_token_expires_at')
+          .eq('id', contract_id)
+          .maybeSingle()
+        if (!guestCredentialStillValid(credential, presentedGuestToken)) {
+          // Deliberately its own reason rather than the `not_a_party` the
+          // same failure answers at the top of the handler. A credential that
+          // was good when the request arrived and is not good now is a
+          // different event from one that was never good, and a log that
+          // cannot tell them apart cannot show a revocation taking effect.
+          return json({ error: 'guest_credential_revoked' }, 403)
+        }
+      }
 
       const { data: inserted, error: insertError } = await admin
         .from('events')
