@@ -55,6 +55,32 @@ export const CURRENCY_MINOR_DIGITS: Record<SupportedCurrency, number> = {
   GBP: 2,
 }
 
+/**
+ * The symbol each currency is SHOWN with, and why this table exists at all.
+ *
+ * Three of the six are dollars, and "$12.50" does not say which. Kenji
+ * transacts in Canada, Hong Kong and Japan (2026-11-08), so a bare dollar sign
+ * on an agreement is a real ambiguity about a real amount of money, not a
+ * typographic preference. Every dollar is therefore disambiguated — US$, CA$,
+ * HK$ — and the three currencies that own their symbol outright keep it.
+ *
+ * WHY NOT LET Intl CHOOSE. `Intl.NumberFormat` picks the symbol from the
+ * formatting locale, not from the currency: in `en-US` the USD symbol is a
+ * bare "$", and in `en-CA` it is CAD that gets the bare "$" while USD becomes
+ * "US$". So the ambiguity moves around with the reader's locale, and the one
+ * currency rendered ambiguously is whichever one that reader is most likely to
+ * assume. Declaring the symbols here makes an amount read identically to
+ * everyone, which is what an agreement needs.
+ */
+export const CURRENCY_SYMBOLS: Record<SupportedCurrency, string> = {
+  JPY: '¥',
+  CAD: 'CA$',
+  HKD: 'HK$',
+  USD: 'US$',
+  EUR: '€',
+  GBP: '£',
+}
+
 /** What a form starts on, and what every pre-2026-11 contract is. */
 export const DEFAULT_CURRENCY: SupportedCurrency = 'JPY'
 
@@ -80,6 +106,15 @@ export function isSupportedCurrency(value: unknown): value is SupportedCurrency 
 /** Decimal places for a currency, or null if we do not support it. */
 export function minorDigitsOf(currency: unknown): number | null {
   return isSupportedCurrency(currency) ? CURRENCY_MINOR_DIGITS[currency] : null
+}
+
+/**
+ * The symbol a currency is shown with, or null if we do not support it.
+ * Exported because the create form labels its currency picker with it, so the
+ * symbol on the picker and the symbol on the amount cannot drift apart.
+ */
+export function symbolOf(currency: unknown): string | null {
+  return isSupportedCurrency(currency) ? CURRENCY_SYMBOLS[currency] : null
 }
 
 /** Why a typed amount could not become minor units. Stable strings: an API. */
@@ -167,7 +202,8 @@ export function majorStringFrom(minor: unknown, currency: unknown): string {
 }
 
 /**
- * An amount as a reader of that currency expects to see it.
+ * An amount as a reader of that currency expects to see it, with a symbol that
+ * says WHICH currency.
  *
  * The fraction digits are the currency's own, stated explicitly in both
  * directions. Intl.NumberFormat already knows them, but GuestEvidenceView used
@@ -175,6 +211,19 @@ export function majorStringFrom(minor: unknown, currency: unknown): string {
  * amount into a rounded whole number on the one screen whose entire job is to
  * show what was agreed. Pinning both bounds makes that failure impossible to
  * reintroduce by passing the wrong one.
+ *
+ * THE SYMBOL IS OURS, THE NUMBER IS Intl's. `style: 'currency'` would hand the
+ * symbol to the formatting locale, which renders exactly one of the three
+ * dollars ambiguously and picks a different one per locale (see
+ * CURRENCY_SYMBOLS). So the number is formatted as a plain decimal — Intl still
+ * owns grouping and the decimal mark, which is genuinely locale business — and
+ * the symbol is prefixed from our own table.
+ *
+ * The cost of that choice, stated: a locale that writes its currency symbol
+ * after the number, or that uses a different dollar notation, now gets our
+ * prefixed form anyway. That is deliberate. An agreement is read by two parties
+ * who may be in different places, and it is worth more that they both see the
+ * same string than that each sees their local convention.
  *
  * Falls back to "<amount> <CODE>" rather than throwing: a display helper that
  * can throw takes a screen down over a currency code, and an unformatted
@@ -185,14 +234,15 @@ export function formatMinor(minor: unknown, currency: unknown, locale?: string):
   if (typeof minor !== 'number' || !Number.isFinite(minor)) return '—'
   if (digits === null) return `${minor} ${typeof currency === 'string' ? currency : ''}`.trim()
   const major = digits === 0 ? minor : minor / 10 ** digits
+  const symbol = CURRENCY_SYMBOLS[currency as SupportedCurrency]
   try {
-    return new Intl.NumberFormat(locale, {
-      style: 'currency',
-      currency: currency as string,
+    const number = new Intl.NumberFormat(locale, {
+      style: 'decimal',
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,
     }).format(major)
+    return `${symbol}${number}`
   } catch {
-    return `${major.toFixed(digits)} ${currency as string}`
+    return `${symbol}${major.toFixed(digits)}`
   }
 }

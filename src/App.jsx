@@ -69,7 +69,7 @@ import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite,
 import { storeGuestAccessToken, listGuestAgreementIds, getGuestAgreementLabel } from './lib/guestSession.js';
 import {
   SUPPORTED_CURRENCIES, CURRENCY_MINOR_DIGITS, DEFAULT_CURRENCY,
-  minorUnitsFrom, formatMinor,
+  minorUnitsFrom, formatMinor, symbolOf,
 } from '../supabase/functions/_shared/money.ts';
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
@@ -1087,8 +1087,14 @@ const App = () => {
                       aria-label="Currency"
                       className="bg-slate-800 border-l border-white/10 pl-3 pr-2 py-4 text-slate-300 text-sm font-bold outline-none cursor-pointer"
                     >
+                      {/* Symbol and code together, from the same table the
+                          amount is formatted with, so the picker cannot come
+                          to disagree with what the amount above it shows. The
+                          code alone was already unambiguous between CAD and
+                          USD, but it did not tell you which symbol you were
+                          about to commit to on the counterparty's screen. */}
                       {SUPPORTED_CURRENCIES.map(code => (
-                        <option key={code} value={code}>{code}</option>
+                        <option key={code} value={code}>{symbolOf(code)} {code}</option>
                       ))}
                     </select>
                   </div>

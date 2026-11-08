@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
-  SUPPORTED_CURRENCIES, CURRENCY_MINOR_DIGITS, DEFAULT_CURRENCY, AMOUNT_MINOR_MAX,
-  isSupportedCurrency, minorDigitsOf, minorUnitsFrom, majorStringFrom, formatMinor,
+  SUPPORTED_CURRENCIES, CURRENCY_MINOR_DIGITS, CURRENCY_SYMBOLS, DEFAULT_CURRENCY,
+  AMOUNT_MINOR_MAX, isSupportedCurrency, minorDigitsOf, symbolOf, minorUnitsFrom,
+  majorStringFrom, formatMinor,
 } from '../../supabase/functions/_shared/money.ts'
 
 // WHY THESE TESTS EXIST
@@ -148,7 +149,7 @@ describe('an amount on screen', () => {
   it('uses the currency\'s own symbol and decimals', () => {
     expect(formatMinor(63500, 'JPY', 'en-US')).toBe('¥63,500')
     expect(formatMinor(1250, 'CAD', 'en-US')).toBe('CA$12.50')
-    expect(formatMinor(1250, 'USD', 'en-US')).toBe('$12.50')
+    expect(formatMinor(1250, 'USD', 'en-US')).toBe('US$12.50')
     // The defect this replaces: maximumFractionDigits: 0 for every currency
     // showed CA$12.50 as CA$13 — and the same integer read as yen would have
     // been ¥1,250, a hundredfold error in the other direction.
@@ -205,5 +206,70 @@ describe('the migration agrees with this module', () => {
     )
     expect(sql).toContain('new.amount_minor := new.amount_jpy')
     expect(sql).toContain('create trigger contracts_fill_amount_minor')
+  })
+})
+
+
+// ── Every dollar says which dollar ──────────────────────────────────────────
+//
+// Kenji's decision, 2026-11-08: three of the six currencies are dollars, and
+// "$12.50" does not say which one. On an agreement that is an ambiguity about
+// a real amount of money, so each dollar is disambiguated and the three
+// currencies that own their symbol outright keep it.
+//
+// These are the tests that would have caught the old behaviour: `Intl` with
+// `style: 'currency'` renders USD as a bare "$" in en-US and CAD as a bare "$"
+// in en-CA — so the ambiguous one moved with the reader, and it was always the
+// currency that reader was most likely to assume.
+describe('the symbol says which currency', () => {
+  const CASES = [
+    ['USD', 1250, 'US$12.50'],
+    ['CAD', 1250, 'CA$12.50'],
+    ['HKD', 1250, 'HK$12.50'],
+    ['JPY', 63500, '¥63,500'],
+    ['EUR', 1250, '€12.50'],
+    ['GBP', 1250, '£12.50'],
+  ]
+
+  it.each(CASES)('%s %d reads as %s', (currency, minor, expected) => {
+    expect(formatMinor(minor, currency, 'en-US')).toBe(expected)
+  })
+
+  it('reads the same whatever locale the reader is in', () => {
+    // The symbol must not move with the locale, because the two parties to an
+    // agreement may be in different ones and must see the same amount. Only
+    // grouping and the decimal mark stay local.
+    for (const [currency, minor] of CASES.map(c => [c[0], c[1]])) {
+      const symbol = CURRENCY_SYMBOLS[currency]
+      for (const locale of ['en-US', 'en-CA', 'ja-JP', 'fr-CA', 'de-DE', 'zh-HK']) {
+        expect(formatMinor(minor, currency, locale).startsWith(symbol),
+          `${currency} in ${locale} was ${formatMinor(minor, currency, locale)}`).toBe(true)
+      }
+    }
+    // The number itself is still formatted locally: a French decimal comma.
+    expect(formatMinor(1250, 'CAD', 'fr-CA')).toBe('CA$12,50')
+  })
+
+  it('never shows a bare dollar sign for any dollar currency', () => {
+    for (const currency of ['USD', 'CAD', 'HKD']) {
+      for (const locale of ['en-US', 'en-CA', 'en-HK', 'ja-JP', 'fr-CA']) {
+        expect(formatMinor(1250, currency, locale)).not.toMatch(/^\$/)
+      }
+    }
+  })
+
+  it('states a symbol for every supported currency, and only those', () => {
+    expect(Object.keys(CURRENCY_SYMBOLS).sort()).toEqual([...SUPPORTED_CURRENCIES].sort())
+    for (const code of SUPPORTED_CURRENCIES) {
+      expect(symbolOf(code)).toBe(CURRENCY_SYMBOLS[code])
+      expect(symbolOf(code)).toBeTruthy()
+    }
+    expect(symbolOf('CHF')).toBeNull()
+    expect(symbolOf(null)).toBeNull()
+  })
+
+  it('the three dollars are distinguishable from each other', () => {
+    const shown = ['USD', 'CAD', 'HKD'].map(c => formatMinor(1250, c, 'en-US'))
+    expect(new Set(shown).size).toBe(3)
   })
 })
