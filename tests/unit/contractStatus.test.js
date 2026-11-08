@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
-  CONTRACT_STATES, EXPIRY_WARNING_HOURS,
+  CONTRACT_STATES, EXPIRY_WARNING_HOURS, CLOCKS, GUEST_ACCESS_WARNING_DAYS,
   statusLabel, isTerminal, nextActionFor, groupContracts, stepForState,
-  formatAmount, formatDeadline,
+  formatAmount, formatDeadline, relativeAge, deadlineStatus, clocksFor, sinceText,
 } from '../../src/lib/contractStatus.js'
 
 const NOW = new Date('2026-09-24T12:00:00.000Z')
@@ -232,5 +232,166 @@ describe('completed agreements', () => {
 
   it('read as completed rather than as a protocol state name', () => {
     expect(statusLabel(CONTRACT_STATES.PERFORMANCE_ACCEPTED)).toBe('Completed')
+  })
+})
+
+// ── Since when, and which clock ─────────────────────────────────────────────
+// Guard: every value here is a server timestamp the list query already loads.
+// The failure to protect against is not an ugly string — it is a screen that
+// states a time it does not have, or that shows three unrelated dates as
+// though they were one.
+
+const daysFromNow = d => new Date(NOW.getTime() + d * 86_400_000).toISOString()
+
+describe('relativeAge', () => {
+  it('is coarse on purpose, and grammatical at both ends', () => {
+    expect(relativeAge(NOW.toISOString(), NOW)).toBe('today')
+    expect(relativeAge(daysFromNow(-1), NOW)).toBe('yesterday')
+    expect(relativeAge(daysFromNow(-4), NOW)).toBe('4 days')
+    expect(relativeAge(daysFromNow(-8), NOW)).toBe('1 week')
+    expect(relativeAge(daysFromNow(-20), NOW)).toBe('3 weeks')
+    expect(relativeAge(daysFromNow(-70), NOW)).toBe('2 months')
+  })
+
+  it('answers null rather than a guess for what it does not know', () => {
+    // last_performance_at is null both when no such event exists and when the
+    // read failed. Neither of those is "since now", so nothing may be shown.
+    expect(relativeAge(null, NOW)).toBeNull()
+    expect(relativeAge(undefined, NOW)).toBeNull()
+    expect(relativeAge('not a date', NOW)).toBeNull()
+  })
+
+  it('does not render a future stamp as a negative age', () => {
+    expect(relativeAge(daysFromNow(3), NOW)).toBe('just now')
+  })
+})
+
+describe('sinceText', () => {
+  it('takes the "ago" suffix only where it is grammatical', () => {
+    expect(sinceText({ what: 'Sent', ago: '4 days' })).toBe('Sent 4 days ago')
+    expect(sinceText({ what: 'Sent', ago: 'today' })).toBe('Sent today')
+    expect(sinceText({ what: 'Accepted', ago: 'yesterday' })).toBe('Accepted yesterday')
+  })
+
+  it('is null when there is no stamp to describe', () => {
+    expect(sinceText(null)).toBeNull()
+    expect(sinceText({ what: 'Sent', ago: null })).toBeNull()
+  })
+})
+
+describe('the contractual deadline', () => {
+  it('reports lateness as a fact about the agreed date', () => {
+    expect(deadlineStatus(contract({ deadline: '2026-09-20' }), NOW))
+      .toMatchObject({ status: 'passed', days: 4, text: '4 days late' })
+  })
+
+  it('counts down only once it is close', () => {
+    expect(deadlineStatus(contract({ deadline: '2026-09-27' }), NOW))
+      .toMatchObject({ status: 'soon', text: '3 days left' })
+    expect(deadlineStatus(contract({ deadline: '2026-12-01' }), NOW))
+      .toMatchObject({ status: 'ok', text: null })
+  })
+
+  it('is absent rather than invented when no deadline was agreed', () => {
+    expect(deadlineStatus(contract({ deadline: null }), NOW)).toBeNull()
+  })
+})
+
+describe('clocksFor keeps the three clocks apart', () => {
+  // The whole point: only `deadline` is part of what was agreed. A reader who
+  // cannot tell them apart concludes the agreement lapses when a link does.
+  it('labels an unaccepted invite\u2019s link separately from the deadline', () => {
+    const clocks = clocksFor(contract({ deadline: '2026-10-01' }), NOW)
+    expect(clocks.map(c => c.kind)).toEqual([CLOCKS.DEADLINE, CLOCKS.INVITE_LINK])
+    expect(clocks.map(c => c.label)).toEqual(['Due', 'Invite link'])
+  })
+
+  it('drops the invite link once it has been used, and shows their access instead', () => {
+    const accepted = contract({
+      state: CONTRACT_STATES.TERMS_ACCEPTED,
+      invite_token_used_at: NOW.toISOString(),
+      guest_access_token_expires_at: daysFromNow(90),
+    })
+    expect(clocksFor(accepted, NOW).map(c => c.kind)).toEqual([CLOCKS.GUEST_ACCESS])
+    expect(clocksFor(accepted, NOW)[0].label).toBe('Their access')
+  })
+
+  it('warns on the counterparty\u2019s access before they are locked out', () => {
+    const nearly = contract({
+      state: CONTRACT_STATES.TERMS_ACCEPTED,
+      invite_token_used_at: NOW.toISOString(),
+      guest_access_token_expires_at: daysFromNow(GUEST_ACCESS_WARNING_DAYS - 1),
+    })
+    expect(clocksFor(nearly, NOW)[0]).toMatchObject({ status: 'soon' })
+  })
+
+  it('says nothing about either credential once the agreement is over', () => {
+    const done = contract({
+      state: CONTRACT_STATES.PERFORMANCE_ACCEPTED,
+      deadline: '2026-09-20',
+      invite_token_used_at: NOW.toISOString(),
+      guest_access_token_expires_at: daysFromNow(10),
+    })
+    const clocks = clocksFor(done, NOW)
+    expect(clocks.map(c => c.kind)).toEqual([CLOCKS.DEADLINE])
+    // And a finished agreement is not late. Nothing is waiting on that date.
+    expect(clocks[0].text).toBeNull()
+  })
+
+  it('is empty for a contract with no dates at all', () => {
+    expect(clocksFor(contract({ invite_token_expires_at: null }), NOW)).toEqual([])
+    expect(clocksFor(null, NOW)).toEqual([])
+  })
+})
+
+describe('nextActionFor says since when', () => {
+  it('dates an unaccepted invite from when it was created', () => {
+    const action = nextActionFor(contract({ created_at: daysFromNow(-5) }), NOW)
+    expect(sinceText(action.since)).toBe('Sent 5 days ago')
+  })
+
+  it('dates a delivery from the assertion, not from the row', () => {
+    const action = nextActionFor(contract({
+      state: CONTRACT_STATES.AWAITING_CONFIRMATION,
+      performed_by: 'creator',
+      created_at: daysFromNow(-30),
+      last_performance_at: daysFromNow(-2),
+    }), NOW)
+    expect(sinceText(action.since)).toBe('Marked delivered 2 days ago')
+  })
+
+  it('dates an accepted agreement from the acceptance event', () => {
+    const action = nextActionFor(contract({
+      state: CONTRACT_STATES.TERMS_ACCEPTED,
+      performed_by: 'creator',
+      accepted_at: daysFromNow(-3),
+    }), NOW)
+    expect(sinceText(action.since)).toBe('Accepted 3 days ago')
+  })
+
+  it('dates a correction from when it was asked for', () => {
+    const action = nextActionFor(contract({
+      state: CONTRACT_STATES.TERMS_ACCEPTED,
+      performed_by: 'creator',
+      last_performance_type: 'performance.rejected',
+      last_performance_at: daysFromNow(-1),
+    }), NOW)
+    expect(action.label).toBe('Correction requested')
+    expect(sinceText(action.since)).toBe('Asked yesterday')
+  })
+
+  it('shows nothing where the stamp is missing, and never falls back to now', () => {
+    const action = nextActionFor(contract({
+      state: CONTRACT_STATES.AWAITING_CONFIRMATION,
+      performed_by: 'creator',
+      last_performance_at: null,
+    }), NOW)
+    expect(action.since).toBeNull()
+    expect(sinceText(action.since)).toBeNull()
+  })
+
+  it('has no since for an agreement that is over', () => {
+    expect(nextActionFor(contract({ state: CONTRACT_STATES.PERFORMANCE_ACCEPTED }), NOW).since).toBeNull()
+    expect(nextActionFor(contract({ state: CONTRACT_STATES.CANCELLED }), NOW).since).toBeNull()
   })
 })

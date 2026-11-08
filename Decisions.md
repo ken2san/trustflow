@@ -185,6 +185,8 @@ Do not record that any of these is the chosen model. Do not wire a cancel button
 before the semantics are decided, because the event it writes is permanent.
 
 **Decided 2026-11-04 — the counterparty's 404 is the accepted answer, for now.**
+**Superseded in part on 2026-11-08 — see the next entry. The 404 still stands;
+"delete the draft" is no longer the intended answer to a wrong address.**
 Kenji's instruction, given the first goal is a product he can use himself: if
 withdrawal is costly to specify, a retracted offer may leave the counterparty
 with the bare `not_found` that `validate-invite-token` already returns. So the
@@ -218,6 +220,80 @@ orphan rows. The predicate now also requires `not exists (select 1 from events
 …)`. It changes nothing about which contracts are deletable today — all of them
 have zero events — and makes that equivalence structural instead of a property
 of which code paths happen to be called.
+
+---
+
+### [2026-11-08] — A wrong address is kept on the record, not deleted away
+
+**Status**: direction decided by Kenji; the mechanism is designed and **not
+built**. This narrows the 2026-09-29 entry above rather than reversing it.
+
+Kenji, 09:28: *「直さないってのもあり、間違った記録として、再送とかね。記録が大事な
+システムだから」* — records are what this system is for. The intended answer to an
+invitation addressed to the wrong person is therefore **to keep the mistake and
+append the re-send**, not to delete the agreement so that nothing records the
+offer was ever made.
+
+**So "`owner_delete_unaccepted_draft` is the whole answer to 'I sent this to the
+wrong person'" is withdrawn as a statement of intent.** The policy itself is
+unchanged and is still the right predicate for withdrawing a draft nobody has
+responded to; what changes is that deleting is no longer described as the answer
+to a wrong address, because it destroys the only trace of the mistake.
+
+**What is true today, measured** (`docs/proposals/web-ux-waiting-and-wrong-email.md`,
+2026-11-08, with file and line citations):
+
+- `authenticated` holds **no UPDATE privilege on `contracts`**, on any column,
+  and there is **no UPDATE policy**. Correcting the address is therefore not a
+  UI change; it needs a new server-side writer.
+- Nothing rotates `invite_token`. A link that reached the wrong person stays
+  usable until it is used or the 72 hours run out.
+- So keeping the agreement and stopping that link **now** are not both possible
+  today. Waiting is a third path — the acceptance RPC refuses an expired token
+  — but it does not stop the wrong person accepting in the meantime.
+- Before acceptance nothing records the invitation at all: `createContract`
+  writes no event, so in practice there is no mistake on the record to keep.
+  (`contract.initiated` *is* accepted on an unaccepted agreement, so the gap is
+  a missing caller rather than a missing destination — but appending one makes
+  the contract undeletable, since the delete predicate requires no events.)
+
+**The planned design, if a real case appears: option B2 of that proposal.** One
+new Edge Function plus one `SECURITY DEFINER` RPC, modelled on
+`reissue_guest_access`, which in a single transaction appends an `invite.resent`
+event carrying the old and the new address as server-derived fields, corrects
+`invited_hirer_email`, and rotates `invite_token` with a fresh 72-hour window —
+so the mistake is permanent **and** the wrong link stops working. Conditions
+that came out of review and are part of the design rather than footnotes to it:
+
+- The row must be locked (`for update`) and owner / `AWAITING_ACCEPTANCE` /
+  `invite_token_used_at is null` re-checked **under that lock**, because the
+  acceptance RPC takes the same lock. A pre-check in the Edge Function races it.
+- It must **not** copy the delete predicate's `not exists (… events …)` clause:
+  an unaccepted agreement that already carries evidence is exactly the case B2
+  has to serve.
+- `freeze_accepted_terms` does not protect `invited_hirer_email` or
+  `hirer_email`, so nothing in the database would stop a service-role writer
+  rewriting who was invited on an **accepted** agreement — which would
+  contradict the hashed `_invited_recipient` in that agreement's acceptance
+  event. The state check above is what prevents it, and that is a property of
+  this writer, not a database guarantee.
+- The wrong address must not reach the new counterparty. The per-event payload
+  allowlist is not sufficient on its own: `guest-contract-events` returns
+  `acceptance_identity.invited_recipient` as a separate block outside that
+  filter, so the projection and the export both have to be checked.
+
+**Not scheduled.** The frequency is unmeasured — the invited-vs-claimed mismatch
+holds on 723 of production's 859 accepted contracts, but all of that is QA data,
+so the real rate is unknown. Build B2 the first time a real invitation goes to
+the wrong person. Until then the manual path is to leave the agreement alone and
+send a new invitation; deleting the draft remains available for the case where
+nothing was shared at all, and is simply no longer the recommended answer to a
+wrong address.
+
+**After acceptance this entry does not apply.** The counterparty's access is
+replaced with `reissue-guest-access`, which records `access.reissued`, and the
+divergence between the invited and the claimed address is already shown to the
+owner by `AgreementView`'s mismatch banner. History is not rewritten either way.
 
 ---
 

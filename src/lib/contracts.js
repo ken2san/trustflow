@@ -102,39 +102,66 @@ export async function listContracts() {
     .select(
       'id, project_name, dod, amount_jpy, currency, deadline, state, '
       + 'earner_display_name, invited_hirer_email, hirer_email, '
-      + 'invite_token, invite_token_expires_at, invite_token_used_at, created_at, performed_by',
+      + 'invite_token, invite_token_expires_at, invite_token_used_at, created_at, performed_by, '
+      // When the counterparty's credential lapses. Already SELECT-granted and
+      // already visible to a party under RLS — it was simply never asked for,
+      // so the owner could not see their counterparty about to be locked out.
+      + 'guest_access_token_expires_at',
     )
     .order('created_at', { ascending: false })
 
   if (error || !data?.length) return { contracts: data ?? [], error: error ?? null }
 
-  return { contracts: await withLatestPerformance(data), error: null }
+  return { contracts: await withChainMarkers(data), error: null }
 }
 
 /**
- * Attach the most recent performance statement to each contract.
+ * Attach the chain stamps the home screen needs to each contract.
  *
- * The state column cannot express this on its own: a rejection returns the
+ * Two things the state column cannot express on its own.
+ *
+ * WHICH of two identical-looking states this is: a rejection returns the
  * agreement to TERMS_ACCEPTED, which is indistinguishable from one that was
  * never delivered at all. "They asked for a correction and I have not
  * re-delivered" and "I have not started" are very different things to see in a
  * list, and only the event log knows which is which.
  *
+ * And SINCE WHEN the current wait began. `accepted_at` is kept separate from
+ * `last_performance_at` rather than folded into it: the acceptance is not a
+ * performance statement, and a field named for performance that sometimes holds
+ * an acceptance is the kind of quiet drift this project has paid for.
+ *
+ * Any of these can be null, and null is not a time. It means "no such event
+ * yet" OR "this read failed" — the query's error is deliberately not surfaced,
+ * because a missing stamp must degrade to showing nothing rather than fail a
+ * list that is otherwise fine. A caller must never read null as "since now".
+ *
  * One extra query for the whole list rather than one per contract. Nothing is
  * denormalised and no semantics change — this is a read-time convenience, and
  * the state projection remains the authority on where the protocol stands.
  */
-async function withLatestPerformance(contracts) {
+const PERFORMANCE_TYPES = ['performance.asserted', 'performance.accepted', 'performance.rejected']
+const ACCEPTANCE_TYPE = 'dod.consent_recorded'
+
+async function withChainMarkers(contracts) {
   const { data: events } = await supabase
     .from('events')
     .select('contract_id, type, created_at')
     .in('contract_id', contracts.map(c => c.id))
-    .in('type', ['performance.asserted', 'performance.accepted', 'performance.rejected'])
+    .in('type', [...PERFORMANCE_TYPES, ACCEPTANCE_TYPE])
     .order('created_at', { ascending: false })
 
   const latest = new Map()
+  const accepted = new Map()
   for (const event of events ?? []) {
     // Ordered newest-first, so the first one seen for a contract is its latest.
+    if (event.type === ACCEPTANCE_TYPE) {
+      // There is only ever one acceptance per agreement, and it is the chain's
+      // first event — so the newest-first scan reaches it last and the guard is
+      // belt-and-braces rather than a tie-break.
+      if (!accepted.has(event.contract_id)) accepted.set(event.contract_id, event)
+      continue
+    }
     if (!latest.has(event.contract_id)) latest.set(event.contract_id, event)
   }
 
@@ -142,6 +169,7 @@ async function withLatestPerformance(contracts) {
     ...contract,
     last_performance_type: latest.get(contract.id)?.type ?? null,
     last_performance_at: latest.get(contract.id)?.created_at ?? null,
+    accepted_at: accepted.get(contract.id)?.created_at ?? null,
   }))
 }
 

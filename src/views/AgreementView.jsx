@@ -21,6 +21,7 @@
 
 import React from 'react';
 import { ArrowLeft, CheckCircle2, Send, Loader2, AlertTriangle, Download, Copy } from 'lucide-react';
+import { clocksFor, relativeAge, sinceText, CLOCKS } from '../lib/contractStatus.js';
 
 /** Human wording for the attested event types, from the reader's side. */
 const RECORD_LABELS = {
@@ -134,6 +135,23 @@ export default function AgreementView({
 
   const state = contract.state;
   const performs = viewerRole === 'performer';
+  // The three clocks, named rather than merged — see contractStatus.js. The
+  // guest's contract comes shaped from guest-contract-events and carries no
+  // token stamps, so for them this is the deadline alone. That is a narrower
+  // answer, not a wrong one, and it renders as nothing where there is nothing.
+  const clocks = clocksFor(contract);
+  const deadlineClock = clocks.find(c => c.kind === CLOCKS.DEADLINE) ?? null;
+  const credentialClocks = clocks.filter(c => c.kind !== CLOCKS.DEADLINE);
+  // When anything last happened here, read off the trail both sides are shown
+  // rather than from a column — so it answers for the guest too.
+  // Compared as instants, not as strings: PostgREST sends '+00:00' where the
+  // shaped guest view can carry a trailing 'Z', and those two orderings are not
+  // the same for the same moment.
+  const lastRecordedAt = (events ?? []).reduce((latest, e) => (
+    latest === null || Date.parse(e.created_at) > Date.parse(latest) ? e.created_at : latest), null);
+  // One statement of the "ago" grammar, shared with the home screen, so the
+  // two cannot drift into disagreeing about "today ago".
+  const lastRecorded = sinceText({ what: 'Last recorded', ago: relativeAge(lastRecordedAt) });
   const dod = Array.isArray(contract.dod) ? contract.dod : [];
   // Same condition ContractsHomeView uses for its own "Copy invite link" —
   // the invite exists and nobody has used it yet. Repeated here because this
@@ -202,7 +220,11 @@ export default function AgreementView({
         <p className="text-sm text-slate-400">
           {performs ? 'You are doing the work' : 'The other party is doing the work'}
           {contract.amount_jpy ? <> · ¥{Number(contract.amount_jpy).toLocaleString()}</> : null}
-          {contract.deadline ? <> · due {contract.deadline}</> : null}
+          {deadlineClock ? (
+            <span className={deadlineClock.status === 'passed' ? 'text-amber-400/80' : undefined}>
+              {' · '}due {deadlineClock.on}{deadlineClock.text && <> · {deadlineClock.text}</>}
+            </span>
+          ) : null}
         </p>
         {canReshare && (
           <button
@@ -301,6 +323,23 @@ export default function AgreementView({
           </p>
         )}
         {waitingText && <p className="text-sm text-slate-400">{waitingText}</p>}
+        {/* One line, muted: how long this has been sitting, and the credential
+            clocks that are nobody's business until they are. Deliberately not
+            a second copy of the deadline, which the header already carries. */}
+        {(lastRecorded || credentialClocks.length > 0) && (
+          <p className="flex flex-wrap gap-x-2 text-xs text-slate-600">
+            {lastRecorded && <span>{lastRecorded}</span>}
+            {credentialClocks.map(clock => (
+              <React.Fragment key={clock.kind}>
+                {lastRecorded && <span className="text-slate-700">·</span>}
+                <span className={clock.status === 'passed' ? 'text-amber-400/80'
+                  : clock.status === 'soon' ? 'text-amber-400/60' : undefined}>
+                  {clock.label} {clock.on}{clock.text && <> · {clock.text}</>}
+                </span>
+              </React.Fragment>
+            ))}
+          </p>
+        )}
 
         {canAssert && !assertingDelivery && (
           <>

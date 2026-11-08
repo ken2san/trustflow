@@ -98,6 +98,171 @@ function inviteExpiry(contract) {
 }
 
 /**
+ * The three clocks this product has. They are kept apart on purpose, because
+ * they mean entirely different things and only one of them is part of the
+ * agreement:
+ *
+ *   deadline     — a term of the deal, inside the hashed agreement snapshot.
+ *                  Nothing in the product acts on it; it is shown, not enforced.
+ *   invite_link  — how long the invitation URL works (72h). Not a term.
+ *   guest_access — how long the counterparty's credential works (90d). Not a
+ *                  term either, and until now visible to nobody at all.
+ *
+ * Collapsing them into one "expires" line is how a reader comes to believe the
+ * agreement lapses when a link does.
+ */
+export const CLOCKS = {
+  DEADLINE:     'deadline',
+  INVITE_LINK:  'invite_link',
+  GUEST_ACCESS: 'guest_access',
+}
+
+/** Days between two instants, floored. Negative when `at` is in the future. */
+function daysBetween(at, now) {
+  return Math.floor((now.getTime() - at.getTime()) / 86_400_000)
+}
+
+function instant(value) {
+  if (!value) return null
+  const at = new Date(value)
+  return Number.isNaN(at.getTime()) ? null : at
+}
+
+/**
+ * How long ago, in the fewest words that are still true.
+ *
+ * Deliberately coarse. "4 days" is the fact someone acts on; "4 days, 3 hours"
+ * is noise, and a precise figure computed in the browser against a server
+ * timestamp invites a precision the pair does not have. Returns null rather
+ * than a guess for a missing or unparseable stamp — see the note on
+ * `last_performance_at` in contracts.js: null there can mean "no such event
+ * yet" OR "the read failed", and neither is "since now".
+ */
+export function relativeAge(value, now = new Date()) {
+  const at = instant(value)
+  if (!at) return null
+  const days = daysBetween(at, now)
+  if (days < 0) return 'just now'
+  if (days === 0) return 'today'
+  if (days === 1) return 'yesterday'
+  if (days < 7) return `${days} days`
+  if (days < 31) {
+    const weeks = Math.round(days / 7)
+    return `${weeks} week${weeks === 1 ? '' : 's'}`
+  }
+  const months = Math.round(days / 30)
+  return `${months} month${months === 1 ? '' : 's'}`
+}
+
+/**
+ * The contractual deadline, and whether it has passed.
+ *
+ * `deadline` is a date with no time of day, so it is read at local midnight —
+ * the same way formatDeadline reads it — and "passed" means the day itself is
+ * over. `status` is never anything stronger than an observation: nothing in
+ * TrustFlow acts on a deadline, so a passed one is a fact about the agreed
+ * date and not a protocol consequence.
+ */
+export function deadlineStatus(contract, now = new Date()) {
+  if (!contract?.deadline) return null
+  const at = instant(`${contract.deadline}T00:00:00`)
+  if (!at) return null
+  const daysLate = daysBetween(at, now)
+  if (daysLate > 0) {
+    return { at, status: 'passed', days: daysLate, text: `${daysLate} day${daysLate === 1 ? '' : 's'} late` }
+  }
+  const daysLeft = -daysLate
+  if (daysLeft === 0) return { at, status: 'today', days: 0, text: 'today' }
+  if (daysLeft <= DEADLINE_SOON_DAYS) {
+    return { at, status: 'soon', days: daysLeft, text: `${daysLeft} day${daysLeft === 1 ? '' : 's'} left` }
+  }
+  return { at, status: 'ok', days: daysLeft, text: null }
+}
+
+/**
+ * A `since` as one short phrase.
+ *
+ * Kept here rather than in a view because both screens say it and the grammar
+ * is the whole subtlety: "Sent 4 days ago" is right and "Sent today ago" is
+ * not, so the phrases that are already adverbs take no suffix.
+ */
+export function sinceText(since) {
+  if (!since?.ago) return null
+  const bare = since.ago === 'today' || since.ago === 'yesterday' || since.ago === 'just now'
+  return bare ? `${since.what} ${since.ago}` : `${since.what} ${since.ago} ago`
+}
+
+/** How close a deadline has to be before the days remaining are worth saying. */
+export const DEADLINE_SOON_DAYS = 7
+
+/**
+ * Every clock that currently applies to this contract, each named for what it
+ * actually is.
+ *
+ * Only the ones that mean something right now: the invite link stops mattering
+ * once it is used, the counterparty's access stops mattering before they have
+ * any, and nothing matters once the agreement is over. Each entry carries its
+ * own date, so a caller never has to decide which "expires" it is looking at.
+ */
+export function clocksFor(contract, now = new Date()) {
+  const out = []
+  if (!contract) return out
+  const over = isTerminal(contract.state)
+
+  const deadline = deadlineStatus(contract, now)
+  if (deadline) {
+    out.push({
+      kind: CLOCKS.DEADLINE,
+      label: 'Due',
+      at: deadline.at,
+      on: formatDeadline(contract),
+      status: over ? 'ok' : deadline.status,
+      text: over ? null : deadline.text,
+    })
+  }
+
+  const inviteExpires = inviteExpiry(contract)
+  if (!over && inviteExpires && !contract.invite_token_used_at) {
+    const hoursLeft = (inviteExpires - now) / 3_600_000
+    out.push({
+      kind: CLOCKS.INVITE_LINK,
+      label: 'Invite link',
+      at: inviteExpires,
+      on: formatStamp(inviteExpires),
+      status: hoursLeft <= 0 ? 'passed' : hoursLeft <= EXPIRY_WARNING_HOURS ? 'soon' : 'ok',
+      text: hoursLeft <= 0
+        ? 'expired'
+        : hoursLeft <= EXPIRY_WARNING_HOURS
+          ? `${Math.max(1, Math.round(hoursLeft))}h left`
+          : null,
+    })
+  }
+
+  const accessExpires = instant(contract.guest_access_token_expires_at)
+  if (!over && accessExpires && contract.invite_token_used_at) {
+    const daysLeft = -daysBetween(accessExpires, now)
+    out.push({
+      kind: CLOCKS.GUEST_ACCESS,
+      label: 'Their access',
+      at: accessExpires,
+      on: formatStamp(accessExpires),
+      status: daysLeft <= 0 ? 'passed' : daysLeft <= GUEST_ACCESS_WARNING_DAYS ? 'soon' : 'ok',
+      text: daysLeft <= 0 ? 'expired' : daysLeft <= GUEST_ACCESS_WARNING_DAYS ? `${daysLeft} days left` : null,
+    })
+  }
+
+  return out
+}
+
+/** When the counterparty losing access becomes the owner's problem. */
+export const GUEST_ACCESS_WARNING_DAYS = 14
+
+/** A date, short, in the reader's own locale. */
+function formatStamp(at) {
+  return at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/**
  * What happens next on this contract, and whose move it is.
  *
  * `owner` is 'you' when the viewing account has to do something, 'client' when
@@ -108,22 +273,36 @@ function inviteExpiry(contract) {
  * the performer or the receiver comes from performed_by, so the same state
  * produces opposite answers for the two sides — which is the point.
  *
+ * `since` is when the current wait began, as the chain records it, with null
+ * for anything the data cannot answer. It is read from stamps the list query
+ * already loads — `created_at`, `accepted_at` and `last_performance_at` — so
+ * no state needs a timestamp of its own.
+ *
  * @param {object} contract  a row from listContracts()
  * @param {Date}   [now]
- * @returns {{ owner: 'you'|'client'|'none', label: string, detail: string|null }}
+ * @returns {{ owner: 'you'|'client'|'none', label: string, detail: string|null,
+ *            since: { at: string|null, what: string, ago: string|null }|null }}
  */
 export function nextActionFor(contract, now = new Date()) {
   const state = contract?.state
+  const since = (at, what) => {
+    const ago = relativeAge(at, now)
+    return ago ? { at, what, ago } : null
+  }
 
   if (state === CONTRACT_STATES.SETTLED) {
-    return { owner: 'none', label: 'Completed', detail: null }
+    return { owner: 'none', label: 'Completed', detail: null, since: null }
   }
   if (state === CONTRACT_STATES.CANCELLED) {
-    return { owner: 'none', label: 'Cancelled', detail: null }
+    return { owner: 'none', label: 'Cancelled', detail: null, since: null }
   }
 
   if (state === CONTRACT_STATES.DRAFTING) {
-    return { owner: 'you', label: 'Send the invite', detail: 'This agreement has never been sent.' }
+    return {
+      owner: 'you', label: 'Send the invite',
+      detail: 'This agreement has never been sent.',
+      since: since(contract.created_at, 'Created'),
+    }
   }
 
   if (state === CONTRACT_STATES.AWAITING_ACCEPTANCE) {
@@ -132,28 +311,45 @@ export function nextActionFor(contract, now = new Date()) {
     // Earner can clear. That is the Earner's move, not the client's.
     const expiresAt = inviteExpiry(contract)
     if (contract.invite_token_used_at) {
-      return { owner: 'client', label: 'Waiting on your client', detail: 'The invite was opened.' }
+      return {
+        owner: 'client', label: 'Waiting on your client',
+        detail: 'The invite was opened.',
+        since: since(contract.created_at, 'Sent'),
+      }
     }
     if (!expiresAt) {
-      return { owner: 'client', label: 'Waiting on your client', detail: 'Invite sent.' }
+      return {
+        owner: 'client', label: 'Waiting on your client',
+        detail: 'Invite sent.',
+        since: since(contract.created_at, 'Sent'),
+      }
     }
     const hoursLeft = (expiresAt - now) / 3_600_000
     if (hoursLeft <= 0) {
-      return { owner: 'you', label: 'Send a new invite', detail: 'The invite link has expired.' }
+      return {
+        owner: 'you', label: 'Send a new invite',
+        detail: 'The invite link has expired.',
+        since: since(contract.created_at, 'Sent'),
+      }
     }
     if (hoursLeft <= EXPIRY_WARNING_HOURS) {
       return {
         owner: 'you',
         label: 'Invite expires soon',
         detail: `The link expires in ${Math.max(1, Math.round(hoursLeft))} hour${Math.round(hoursLeft) === 1 ? '' : 's'}.`,
+        since: since(contract.created_at, 'Sent'),
       }
     }
-    return { owner: 'client', label: 'Waiting on your client', detail: 'They have not accepted yet.' }
+    return {
+      owner: 'client', label: 'Waiting on your client',
+      detail: 'They have not accepted yet.',
+      since: since(contract.created_at, 'Sent'),
+    }
   }
 
   if (state === CONTRACT_STATES.PERFORMANCE_ACCEPTED) {
     // The end of the story where money moves outside TrustFlow.
-    return { owner: 'none', label: 'Completed', detail: null }
+    return { owner: 'none', label: 'Completed', detail: null, since: null }
   }
 
   // From here the answer depends on which side does the work, so the same
@@ -166,28 +362,39 @@ export function nextActionFor(contract, now = new Date()) {
     // asked to fix something would lose the only fact that matters.
     const afterCorrection = contract?.last_performance_type === 'performance.rejected'
     if (afterCorrection) {
+      const asked = since(contract.last_performance_at, 'Asked')
       return youPerform
-        ? { owner: 'you', label: 'Correction requested', detail: 'They asked for a change. Deliver again when ready.' }
-        : { owner: 'client', label: 'Correction requested', detail: 'You asked for a change. Waiting on them.' }
+        ? { owner: 'you', label: 'Correction requested', detail: 'They asked for a change. Deliver again when ready.', since: asked }
+        : { owner: 'client', label: 'Correction requested', detail: 'You asked for a change. Waiting on them.', since: asked }
     }
+    const agreed = since(contract.accepted_at, 'Accepted')
     return youPerform
-      ? { owner: 'you', label: 'Ready for you to deliver', detail: 'They accepted the terms.' }
-      : { owner: 'client', label: 'Waiting on them to deliver', detail: 'They accepted the terms.' }
+      ? { owner: 'you', label: 'Ready for you to deliver', detail: 'They accepted the terms.', since: agreed }
+      : { owner: 'client', label: 'Waiting on them to deliver', detail: 'They accepted the terms.', since: agreed }
   }
 
   if (state === CONTRACT_STATES.AWAITING_CONFIRMATION) {
+    const delivered = since(contract.last_performance_at, 'Marked delivered')
     return youPerform
-      ? { owner: 'client', label: 'Waiting on them to review', detail: 'You marked the work delivered.' }
-      : { owner: 'you', label: 'Review the delivery', detail: 'They marked the work delivered.' }
+      ? { owner: 'client', label: 'Waiting on them to review', detail: 'You marked the work delivered.', since: delivered }
+      : { owner: 'you', label: 'Review the delivery', detail: 'They marked the work delivered.', since: delivered }
   }
 
   if (state === CONTRACT_STATES.DELIVERED) {
-    return { owner: 'client', label: 'Waiting on their review', detail: 'Delivery is with them.' }
+    return {
+      owner: 'client', label: 'Waiting on their review',
+      detail: 'Delivery is with them.',
+      since: since(contract.last_performance_at, 'Marked delivered'),
+    }
   }
 
   // An unrecognised state is surfaced, not hidden: a contract in a state this
   // file does not know about still belongs somewhere visible.
-  return { owner: 'you', label: 'Check this agreement', detail: `Unrecognised status: ${state}` }
+  return {
+    owner: 'you', label: 'Check this agreement',
+    detail: `Unrecognised status: ${state}`,
+    since: null,
+  }
 }
 
 /**

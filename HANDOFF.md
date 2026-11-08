@@ -2113,10 +2113,23 @@ assertions described the old lie and were updated to the new truth.
 
    **Settled 2026-11-04, by not building it.** Kenji decided the counterparty's
    bare 404 is the accepted answer for now, the first goal being a product he
-   can use himself — so `owner_delete_unaccepted_draft` is the whole answer to
-   "I sent this to the wrong person", and the withdraw half stays unbuilt. See
-   `Decisions.md` for what that accepts and when to revisit it (Next Priority
-   #1, the first time it will be observed rather than reasoned about). The
+   can use himself, and the withdraw half stays unbuilt. See `Decisions.md` for
+   what that accepts and when to revisit it (Next Priority #1, the first time it
+   will be observed rather than reasoned about).
+
+   **Narrowed 2026-11-08.** This used to add that
+   `owner_delete_unaccepted_draft` is "the whole answer to 'I sent this to the
+   wrong person'". That is no longer the intended answer: records are what this
+   system is for, so a wrong address stays on the record and a re-send is
+   appended beside it. The policy is unchanged and still correct for withdrawing
+   a draft nobody responded to; what changed is that deleting is no longer
+   described as the answer to a wrong address, because it destroys the only
+   trace of the offer. The planned mechanism is option **B2** of
+   `docs/proposals/web-ux-waiting-and-wrong-email.md` — one function plus one
+   `SECURITY DEFINER` RPC that appends `invite.resent`, corrects the address and
+   rotates `invite_token` in one transaction — to be built the first time a real
+   invitation goes to the wrong person. The 2026-11-08 entry in `Decisions.md`
+   holds the conditions that design has to meet. The
    question that made withdrawal expensive is still open and is the real
    prerequisite: the product cannot tell "nothing was shared" from "a link went
    out", because `invite_token` exists from row creation and copying is

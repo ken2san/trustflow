@@ -14,7 +14,7 @@
 import React from 'react';
 import { Plus, Copy, ChevronDown, ChevronRight, Loader2, RefreshCw, AlertTriangle, LogIn, Trash2 } from 'lucide-react';
 import {
-  groupContracts, nextActionFor, statusLabel, formatAmount, formatDeadline,
+  groupContracts, nextActionFor, statusLabel, formatAmount, clocksFor, sinceText, CLOCKS,
 } from '../lib/contractStatus.js';
 
 function StatusDot({ owner }) {
@@ -22,6 +22,33 @@ function StatusDot({ owner }) {
     : owner === 'client' ? 'bg-indigo-400'
     : 'bg-slate-600';
   return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${tone}`} />;
+}
+
+/**
+ * The clocks that apply, each named for what it is.
+ *
+ * Three different dates could all be called "expires" here and only one of
+ * them — the deadline — is part of what was agreed. They are labelled rather
+ * than merged, because a reader who cannot tell them apart will assume the
+ * agreement lapses when a link does.
+ *
+ * `only` keeps the compact row short: it shows the agreed deadline always, and
+ * a credential clock only once it is close enough to be someone's problem. The
+ * full set is on the lead card and the agreement screen.
+ */
+function Clocks({ contract, only = 'all' }) {
+  const clocks = clocksFor(contract)
+    .filter(c => only === 'all' || c.kind === CLOCKS.DEADLINE || c.status !== 'ok');
+  if (!clocks.length) return null;
+  return clocks.map(clock => (
+    <React.Fragment key={clock.kind}>
+      <span className="text-slate-700">·</span>
+      <span className={clock.status === 'passed' ? 'text-amber-400/80'
+        : clock.status === 'soon' ? 'text-amber-400/60' : undefined}>
+        {clock.label} {clock.on}{clock.text && <> · {clock.text}</>}
+      </span>
+    </React.Fragment>
+  ));
 }
 
 function Counterparty({ contract }) {
@@ -38,7 +65,6 @@ function Counterparty({ contract }) {
 /** The expanded row: the one contract most in need of attention. */
 function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
   const action = nextActionFor(contract);
-  const deadline = formatDeadline(contract);
   const canReshare = Boolean(contract.invite_token) && !contract.invite_token_used_at;
   const canDelete = canReshare && Boolean(onDeleteDraft);
   const [confirming, setConfirming] = React.useState(false);
@@ -57,15 +83,20 @@ function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
           {contract.project_name || 'Untitled agreement'}
         </button>
         <p className="text-sm text-slate-400"><Counterparty contract={contract} /></p>
-        <p className="text-sm text-slate-500">
-          {formatAmount(contract)}
-          {deadline && <> · due {deadline}</>}
+        <p className="flex flex-wrap gap-x-2 text-sm text-slate-500">
+          <span>{formatAmount(contract)}</span>
+          <Clocks contract={contract} />
         </p>
       </div>
 
       <div className="rounded-2xl border border-white/5 bg-white/[0.02] px-5 py-4 space-y-1">
         <p className="text-white font-bold text-sm">{action.label}</p>
         {action.detail && <p className="text-xs text-slate-500">{action.detail}</p>}
+        {/* When this wait started, from the stamp the chain already holds. A
+            missing stamp renders nothing rather than "since now". */}
+        {sinceText(action.since) && (
+          <p className="text-xs text-slate-600">{sinceText(action.since)}</p>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-3">
@@ -116,7 +147,6 @@ function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
 /** A single compact line. Everything that isn't the lead contract. */
 function ContractRow({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
   const action = nextActionFor(contract);
-  const deadline = formatDeadline(contract);
   // An invite that exists and has never been consumed: nobody has accepted
   // yet, so there's still a link worth resending and still a draft worth
   // being able to remove. The lead card had "Copy invite link" for this same
@@ -192,9 +222,11 @@ function ContractRow({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
         <span><Counterparty contract={contract} /></span>
         <span className="text-slate-700">·</span>
         <span>{formatAmount(contract)}</span>
-        {deadline && <><span className="text-slate-700">·</span><span>due {deadline}</span></>}
+        <Clocks contract={contract} only="actionable" />
         <span className="text-slate-700">·</span>
-        <span className={action.owner === 'you' ? 'text-amber-400/80' : 'text-slate-500'}>{action.label}</span>
+        <span className={action.owner === 'you' ? 'text-amber-400/80' : 'text-slate-500'}>
+          {action.label}{sinceText(action.since) && <span className="text-slate-600"> · {sinceText(action.since).toLowerCase()}</span>}
+        </span>
       </button>
     </div>
   );
