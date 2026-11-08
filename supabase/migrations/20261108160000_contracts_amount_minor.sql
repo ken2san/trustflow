@@ -67,6 +67,24 @@ comment on column contracts.amount_jpy is
   'Equal to amount_minor on a JPY contract and NULL on any other. Drop it once '
   'no deployed reader asks for it.';
 
+-- ── 2. amount_jpy loses its DEFAULT 0 ──────────────────────────────────────
+--
+-- Here rather than in 20261108161000, where it started, because the trigger
+-- below depends on it: with the default still live, a row that supplies no
+-- amount at all gets amount_jpy = 0, the trigger copies 0 into amount_minor,
+-- NOT NULL is satisfied and the positivity CHECK raises instead — so "no
+-- amount" failed as a check violation rather than a missing value, and this
+-- file's own self-test aborted the migration on its FIRST application.
+-- (Codex found that, 2026-11-08, by reading the default's history rather than
+-- by replaying on a database whose default was already gone.)
+--
+-- Nothing depended on the default. It is older than `amount_jpy > 0`
+-- (20261011215504), which a zero could never satisfy, so every writer has been
+-- obliged to supply the column since then and a default of 0 could only ever
+-- turn a missing amount into a refusal with the wrong name.
+alter table contracts alter column amount_jpy drop default;
+
+-- ── 3. The backfill ─────────────────────────────────────────────────────────
 -- No WHERE clause and no rounding: JPY has no minor unit, so the value is
 -- already in minor units and this is a rename performed as a copy.
 update contracts set amount_minor = amount_jpy where amount_minor is null;
@@ -84,23 +102,36 @@ alter table contracts
   add constraint contracts_amount_jpy_mirror_check
   check (amount_jpy = amount_minor);
 
--- ── 2. A writer that has never heard of it still works ─────────────────────
+-- ── 4. The SERVER owns the mirror, in both directions ──────────────────────
 --
--- WITHOUT THIS, THE MIGRATION BREAKS CONTRACT CREATION THE MOMENT IT COMMITS.
--- `amount_minor` is NOT NULL with no default, and every browser running a
--- bundle from before today sends `amount_jpy` alone (src/lib/contracts.js
--- before 5156225). Those inserts would fail with 23502 until the person
--- reloaded — between this migration and the frontend deploy for certain, and
--- afterwards for anyone on a cached bundle. Codex found this, 2026-11-08; the
--- three-step order in the header did not save it, because the break starts at
--- step 1.
+-- THE NORMALIZATION CONTRACT, in one place, because two places is how the one
+-- production bug this chain has ever had happened:
 --
--- So the server fills the new column from the old one when a caller omits it.
--- This is correct and not a guess: it only ever fires for a row whose currency
--- is JPY, where the two columns are the same integer by CHECK, and the
--- 20261108161000 mirror makes any other currency with an amount_jpy
--- unrepresentable anyway. A row supplying neither still fails NOT NULL, which
--- is the right answer rather than a zero.
+--   amount_minor is the amount. If a writer omits it (or sends NULL), the
+--   server fills it from amount_jpy.
+--   amount_jpy is a JPY-only mirror. If a JPY writer omits it (or sends NULL),
+--   the server fills it from amount_minor.
+--   A writer that states both, disagreeing, is refused — the CHECK, not this
+--   function, because a disagreement is a caller error and must not be
+--   silently resolved in either direction.
+--   A writer that states neither is refused by NOT NULL.
+--
+-- WITHOUT THE FIRST HALF, THIS MIGRATION BREAKS CONTRACT CREATION THE MOMENT
+-- IT COMMITS. amount_minor is NOT NULL with no default, and every browser
+-- running a bundle from before today sends amount_jpy alone. Those inserts
+-- would fail with 23502 until the person reloaded.
+--
+-- WITHOUT THE SECOND HALF, every JPY writer for ever after has to keep writing
+-- a deprecated column by hand, and a validator that says "a JPY proposal needs
+-- only amount_minor" is lying about what the database accepts. Both halves were
+-- Codex's findings, 2026-11-08.
+--
+-- NOTE WHAT THIS IS NOT. There is no currency predicate on the first half: a
+-- non-JPY row that somehow carried an amount_jpy would have it copied, and the
+-- 20261108161000 mirror CHECK is what stops such a row existing at all. And it
+-- is INSERT only — it does not keep a later UPDATE of one column in step with
+-- the other; the CHECK refuses that, which for an accepted agreement is also
+-- freeze_accepted_terms's job.
 --
 -- It is transitional and dies with the column: drop this trigger in the same
 -- migration that drops amount_jpy.
@@ -112,6 +143,8 @@ as $$
 begin
   if new.amount_minor is null then
     new.amount_minor := new.amount_jpy;
+  elsif new.currency = 'JPY' and new.amount_jpy is null then
+    new.amount_jpy := new.amount_minor;
   end if;
   return new;
 end;
@@ -125,13 +158,13 @@ create trigger contracts_fill_amount_minor
 
 revoke execute on function public.fill_amount_minor_from_legacy() from public, anon, authenticated;
 
--- ── 3. The client may supply it ─────────────────────────────────────────────
+-- ── 5. The client may supply it ─────────────────────────────────────────────
 -- Table-level INSERT was revoked in 20260923000000 and re-granted per column,
 -- and a column added later is not covered by that grant. Without this line the
 -- browser's insert fails with 403 on the one field this whole change is about.
 grant insert (amount_minor) on contracts to authenticated;
 
--- ── 4. The freeze trigger learns the new column ─────────────────────────────
+-- ── 6. The freeze trigger learns the new column ─────────────────────────────
 -- Body otherwise unchanged from 20260927000000, where its reasoning lives.
 create or replace function public.freeze_accepted_terms()
 returns trigger
@@ -165,7 +198,7 @@ $$;
 
 revoke execute on function public.freeze_accepted_terms() from public, anon, authenticated;
 
--- ── 5. Both acceptance functions expose it ──────────────────────────────────
+-- ── 7. Both acceptance functions expose it ──────────────────────────────────
 -- `create or replace function` has no other form, so the bodies are restated
 -- verbatim from 20260929000000 (invite_acceptance_context) and 20260929000100
 -- (accept_invitation) with one key added to each returned `contract` object.
@@ -388,7 +421,7 @@ $$;
 -- grants made when each function was introduced still stand and are not
 -- restated here.
 
--- ── 6. Self-test ────────────────────────────────────────────────────────────
+-- ── 8. Self-test ────────────────────────────────────────────────────────────
 -- Every claim above, asked of the database rather than asserted in a comment.
 do $$
 declare
@@ -415,22 +448,47 @@ begin
   values ('migration self-test', '["self-test"]'::jsonb, 300000, 300000, 'JPY', 'AWAITING_ACCEPTANCE')
   returning id into v_id;
 
-  -- A writer that knows only the old column still lands, with amount_minor
-  -- filled from it. This is the case Codex found missing.
-  declare v_legacy uuid;
+  -- The normalization contract, all four cases, against the database.
+  declare
+    v_one uuid;
+    v_two uuid;
   begin
+    -- A writer that knows only the old column: amount_minor is filled from it.
     insert into public.contracts (project_name, dod, amount_jpy, currency, state)
     values ('migration self-test legacy writer', '["self-test"]'::jsonb, 45000, 'JPY',
             'AWAITING_ACCEPTANCE')
-    returning id into v_legacy;
-    if (select amount_minor from public.contracts where id = v_legacy) <> 45000 then
+    returning id into v_one;
+    if (select amount_minor from public.contracts where id = v_one) <> 45000 then
       raise exception 'SELF-TEST FAILED: amount_minor was not filled from amount_jpy'
         using errcode = 'TF900';
     end if;
+
+    -- A writer that knows only the new column: the JPY mirror is filled from
+    -- it. Without this half, every JPY writer has to keep writing a deprecated
+    -- column by hand and the validator cannot honestly say otherwise.
+    insert into public.contracts (project_name, dod, amount_minor, currency, state)
+    values ('migration self-test new writer', '["self-test"]'::jsonb, 45000, 'JPY',
+            'AWAITING_ACCEPTANCE')
+    returning id into v_two;
+    if (select amount_jpy from public.contracts where id = v_two) <> 45000 then
+      raise exception 'SELF-TEST FAILED: the JPY mirror was not filled from amount_minor'
+        using errcode = 'TF900';
+    end if;
+
+    -- An explicit NULL is the same as an omission, in both directions.
+    insert into public.contracts (project_name, dod, amount_minor, amount_jpy, currency, state)
+    values ('migration self-test explicit null', '["self-test"]'::jsonb, null, 45000, 'JPY',
+            'AWAITING_ACCEPTANCE');
+    insert into public.contracts (project_name, dod, amount_minor, amount_jpy, currency, state)
+    values ('migration self-test explicit null', '["self-test"]'::jsonb, 45000, null, 'JPY',
+            'AWAITING_ACCEPTANCE');
   end;
 
-  -- And a writer that supplies neither still fails, rather than recording a
-  -- zero-amount agreement.
+  -- A writer that supplies neither is refused for the right reason: a missing
+  -- value, not a zero one. This is the case that aborted the migration on its
+  -- first application while amount_jpy still had DEFAULT 0 — the default made
+  -- "no amount" arrive as 0 and fail the positivity CHECK instead, which this
+  -- handler does not catch and must not.
   begin
     insert into public.contracts (project_name, dod, currency, state)
     values ('migration self-test', '["self-test"]'::jsonb, 'JPY', 'AWAITING_ACCEPTANCE');
@@ -438,6 +496,18 @@ begin
       using errcode = 'TF900';
   exception
     when not_null_violation then null;
+  end;
+
+  -- A writer that states both, disagreeing, is refused rather than silently
+  -- resolved in either direction.
+  begin
+    insert into public.contracts (project_name, dod, amount_minor, amount_jpy, currency, state)
+    values ('migration self-test', '["self-test"]'::jsonb, 100, 200, 'JPY',
+            'AWAITING_ACCEPTANCE');
+    raise exception 'SELF-TEST FAILED: two disagreeing amounts were accepted'
+      using errcode = 'TF900';
+  exception
+    when check_violation then null;
   end;
 
   -- A row whose two amounts disagree cannot exist.

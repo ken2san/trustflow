@@ -71,6 +71,22 @@ async function createCadContract(request, overrides = {}) {
   return { contract: created.body[0], token, userId };
 }
 
+/**
+ * Accept a non-JPY invitation the way a current client does: with a v2
+ * shown-terms digest. A non-JPY acceptance without one is refused — see the
+ * test for exactly that, below.
+ */
+async function acceptCad(request, contract, { version = 2 } = {}) {
+  return api(request, '/functions/v1/validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token, accept: true,
+      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
+      shown_terms_digest: await shownTermsDigest(contract, version),
+      shown_terms_version: version,
+    },
+  });
+}
+
 // ── The row ─────────────────────────────────────────────────────────────────
 
 test('a CAD contract is stored in cents, with no yen column', async ({ request }) => {
@@ -135,12 +151,7 @@ test('the invitation shows CA$12.50, not ¥1,250 and not CA$1,250', async ({ pag
 test('the acceptance binds the amount in cents and the currency it was agreed in', async ({ request }) => {
   const { contract } = await createCadContract(request);
 
-  const accept = await api(request, '/functions/v1/validate-invite-token', {
-    body: {
-      invite_token: contract.invite_token, accept: true,
-      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
-    },
-  });
+  const accept = await acceptCad(request, contract);
   expect(accept.status, `acceptance failed: ${JSON.stringify(accept.body)}`).toBe(200);
   expect(accept.body.amount_minor).toBe(CAD_MINOR);
   expect(accept.body.currency).toBe('CAD');
@@ -171,12 +182,7 @@ test('the acceptance binds the amount in cents and the currency it was agreed in
 test('the agreed amount cannot be changed after acceptance', async ({ request }) => {
   const { contract, token } = await createCadContract(request);
 
-  const accept = await api(request, '/functions/v1/validate-invite-token', {
-    body: {
-      invite_token: contract.invite_token, accept: true,
-      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
-    },
-  });
+  const accept = await acceptCad(request, contract);
   expect(accept.status).toBe(200);
 
   // freeze_accepted_terms learned about amount_minor in 20261108160000. Before
@@ -195,6 +201,44 @@ test('the agreed amount cannot be changed after acceptance', async ({ request })
 });
 
 // ── The two failures Codex's review of this change found ────────────────────
+
+test('a JPY writer that sends only amount_minor gets the mirror filled', async ({ request }) => {
+  // The other half of the normalization contract: the client stopped writing
+  // amount_jpy (the server owns the mirror in both directions), so this is the
+  // path every current JPY creation takes.
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    prefer: 'return=representation',
+    body: {
+      project_name: 'Mirror fill probe',
+      dod: ['deliverable'],
+      amount_minor: 45000,
+      currency: 'JPY',
+      earner_user_id: userId,
+      earner_display_name: 'Acme Translations',
+    },
+  });
+  expect(created.status, `insert failed: ${JSON.stringify(created.body)}`).toBe(201);
+  expect(created.body[0].amount_minor).toBe(45000);
+  expect(created.body[0].amount_jpy).toBe(45000);
+});
+
+test('two disagreeing amounts are refused rather than resolved', async ({ request }) => {
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    body: {
+      project_name: 'Disagreement probe',
+      dod: ['deliverable'],
+      amount_minor: 100, amount_jpy: 200, currency: 'JPY',
+      earner_user_id: userId,
+      earner_display_name: 'Acme Translations',
+    },
+  });
+  expect(created.status).toBe(400);
+  expect(JSON.stringify(created.body)).toContain('contracts_amount_jpy_mirror_check');
+});
 
 test('a writer that only knows amount_jpy still creates a JPY contract', async ({ request }) => {
   // The break this guards: `amount_minor` is NOT NULL with no default, so
@@ -259,15 +303,54 @@ test('accepting a CAD agreement against the v1 terms digest is refused', async (
   // edited, and saying so would be a claim about the agreement.
   expect(refused.body.error).toBe('terms_check_unsupported');
 
-  // The invitation is still usable, so the refusal costs a reload and nothing
-  // more.
-  const accepted = await api(request, '/functions/v1/validate-invite-token', {
+  // AND NO DIGEST AT ALL IS REFUSED TOO, which is the half that matters: the
+  // whole version check lives inside a test for a non-empty digest, so
+  // refusing v1 alone would leave a stale client able to skip the check
+  // entirely by sending nothing. For JPY that omission is the deliberate
+  // compatibility period; for a currency that only a current client can even
+  // create, it is a stale bundle.
+  const silent = await api(request, '/functions/v1/validate-invite-token', {
     body: {
       invite_token: contract.invite_token, accept: true,
       hirer_email: 'invited@example.test', counterparty_name: 'Guest',
     },
   });
-  expect(accepted.status).toBe(200);
+  expect(silent.status).toBe(409);
+  expect(silent.body.error).toBe('terms_check_unsupported');
+
+  // The invitation is still usable, so the refusal costs a reload and nothing
+  // more.
+  const accepted = await acceptCad(request, contract);
+  expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+});
+
+test('a JPY acceptance with no digest at all is still accepted', async ({ request }) => {
+  // The compatibility period this change must not shorten: a yen contract
+  // accepted by a client that predates the whole mechanism. v1 does cover the
+  // amount of a yen contract, and nothing here makes the digest mandatory for
+  // one.
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    prefer: 'return=representation',
+    body: {
+      project_name: 'Yen no-digest probe',
+      dod: ['deliverable'],
+      amount_minor: 20000, currency: 'JPY',
+      earner_user_id: userId,
+      earner_display_name: 'Acme Translations',
+      invited_hirer_email: 'invited@example.test',
+    },
+  });
+  expect(created.status).toBe(201);
+
+  const accepted = await api(request, '/functions/v1/validate-invite-token', {
+    body: {
+      invite_token: created.body[0].invite_token, accept: true,
+      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
+    },
+  });
+  expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
 });
 
 test('a JPY agreement still accepts the v1 terms digest', async ({ request }) => {

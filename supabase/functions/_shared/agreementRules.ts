@@ -220,7 +220,15 @@ export function violationsOf(
     project_name, dod, amount_minor, amount_jpy, currency, deadline,
     invited_hirer_email, earner_display_name, performed_by,
   } = proposal
-  const amount = amount_minor !== undefined ? amount_minor : amount_jpy
+  // THE NORMALIZATION CONTRACT, as the database performs it
+  // (contracts_fill_amount_minor, 20261108160000): the amount is amount_minor,
+  // or amount_jpy when amount_minor is absent — and an explicit null is the
+  // same as an absent field, in both directions, because that is what the
+  // trigger does. `!== undefined` was wrong here: it made
+  // {amount_minor: null, amount_jpy: 100} an error in this module and a valid
+  // 100-yen row in the database, which is the opposite of what a pre-check is
+  // for. Codex found that, 2026-11-08.
+  const amount = amount_minor ?? amount_jpy
 
   // ── project name ──────────────────────────────────────────────────────────
   const name = typeof project_name === 'string' ? project_name.trim() : ''
@@ -280,12 +288,20 @@ export function violationsOf(
   //   CAD with both set to 1250,
   //   CAD with amount_jpy alone
   // passed, and all three fail contracts_amount_jpy_mirror_check.
+  // Only a STATED value can be wrong. An omitted or null amount_jpy is filled
+  // by the server for JPY and must stay empty for everything else, so there is
+  // nothing to complain about in either case — and complaining would make this
+  // module refuse proposals the database accepts, which is the mismatch it
+  // exists to remove.
   if (amount_jpy !== undefined && amount_jpy !== null) {
     if (currency === 'JPY') {
       // The column that is still read must not disagree with the one that is
       // stored: the same agreement would be two different deals depending on
-      // which reader looked.
-      if (amount_minor !== undefined && amount_jpy !== amount_minor) {
+      // which reader looked. A disagreement is a caller error and is refused
+      // rather than resolved in either direction — by the database's CHECK,
+      // and by this line before the caller gets there.
+      if (amount_minor !== undefined && amount_minor !== null
+          && amount_jpy !== amount_minor) {
         bad.push('amount_jpy_mirror_invalid')
       }
     } else if (minorDigitsOf(currency) !== null) {

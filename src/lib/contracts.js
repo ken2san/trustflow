@@ -71,14 +71,14 @@ export async function createContract({
       // because the tests wrote their own insert bodies instead of calling this
       // function — which is why there is now a test that calls this function.
       //
-      // The amount lives in amount_minor. amount_jpy is written only for a JPY
-      // contract, where a database CHECK requires it to equal amount_minor —
-      // it is the transitional mirror that keeps an Edge Function deployed
-      // before 2026-11-08 able to read the amount. For any other currency it
-      // must be absent: a cent amount in a column called amount_jpy is wrong
-      // by a factor of 100 to anything that trusts the name.
+      // The amount, in the currency's minor unit. The deprecated amount_jpy
+      // mirror is NOT sent: the server fills it for a JPY contract and refuses
+      // it for any other (contracts_fill_amount_minor and
+      // contracts_amount_jpy_mirror_check, 20261108160000/161000). This client
+      // wrote it for a while, which worked, and meant every JPY writer had to
+      // keep a deprecated column in step by hand — one more place for the
+      // mirror to drift. One owner of the mirror, and it is the database.
       amount_minor: amountMinor,
-      ...(currency === 'JPY' ? { amount_jpy: amountMinor } : {}),
       currency,
       deadline: deadline || null,
       invited_hirer_email: invitedHirerEmail,

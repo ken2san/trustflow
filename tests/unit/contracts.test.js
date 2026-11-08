@@ -59,10 +59,7 @@ describe('createContract', () => {
     // Everything else on contracts is server-owned: state, invite_token and its
     // expiry, the guest credential, hirer_email, and every settlement column.
     expect(Object.keys(sentRow()).sort()).toEqual([
-      // amount_jpy is sent as well as amount_minor, and only for JPY: it is
-      // the transitional mirror an Edge Function deployed before 2026-11-08
-      // still reads, and a database CHECK requires the two to be equal.
-      'amount_jpy', 'amount_minor', 'currency', 'deadline', 'dod',
+      'amount_minor', 'currency', 'deadline', 'dod',
       'earner_display_name', 'earner_user_id', 'invited_hirer_email',
       'performed_by', 'project_name',
     ])
@@ -72,13 +69,16 @@ describe('createContract', () => {
     await createContract(base)
     expect(sentRow().amount_minor).toBe(20000)
     expect(sentRow().currency).toBe('JPY')
-    expect(sentRow().amount_jpy).toBe(20000)
   })
 
-  it('omits amount_jpy entirely for a currency that is not yen', async () => {
-    // 1250 in a column called amount_jpy would be read as ¥1,250 by anything
-    // that trusts the name — a hundredfold error on a CA$12.50 agreement. The
-    // database refuses the combination; this is the writer not attempting it.
+  it('never sends the deprecated amount_jpy mirror, in any currency', async () => {
+    // The server owns the mirror in both directions: it fills amount_jpy for a
+    // JPY contract and refuses it for any other. A client that also wrote it
+    // was a second owner of one value — one more place for the two columns to
+    // drift, and 1250 in a column called amount_jpy would be read as ¥1,250
+    // by anything that trusts the name.
+    await createContract(base)
+    expect(sentRow()).not.toHaveProperty('amount_jpy')
     await createContract({ ...base, amountMinor: 1250, currency: 'CAD' })
     expect(sentRow()).not.toHaveProperty('amount_jpy')
     expect(sentRow().amount_minor).toBe(1250)

@@ -42,16 +42,15 @@ alter table contracts
 -- ── 2. amount_jpy: a JPY mirror, or nothing ─────────────────────────────────
 alter table contracts alter column amount_jpy drop not null;
 
--- And its DEFAULT 0, which is older than every rule above it.
+-- Its DEFAULT 0 was dropped in 20261108160000 and is not repeated here.
 --
--- Found by this file's own self-test on the E2E project: the first CAD insert
--- was refused by the mirror CHECK, because a row that supplies no amount_jpy
--- was still getting 0 from the column default rather than NULL. A deprecated
--- column that silently fills itself with a plausible number is exactly the
--- trap the NULL was chosen to avoid, and `amount_jpy > 0` had been masking it
--- since 20261011215504 — a default of 0 could never satisfy that check, so
--- every writer was already obliged to supply the column.
-alter table contracts alter column amount_jpy drop default;
+-- It was found by this file's own self-test on E2E — the first CAD insert was
+-- refused by the mirror CHECK because a row supplying no amount_jpy was still
+-- getting 0 from the column default rather than NULL — and then MOVED to the
+-- previous migration, because the fill trigger there depends on it: with the
+-- default alive, "no amount at all" arrives as 0 and fails the positivity
+-- CHECK rather than NOT NULL. A deprecated column that silently fills itself
+-- with a plausible number is exactly the trap the NULL was chosen to avoid.
 
 alter table contracts drop constraint if exists contracts_amount_positive_check;
 -- Replaced by contracts_amount_minor_positive_check (20261108160000). The old

@@ -241,29 +241,50 @@ describe('constants are what the rules claim', () => {
     expect(violationsOf({ ...cad, amount_minor: 1250 }, AT)).toEqual([])
     // The pre-rename name, still read so a JPY caller that has not been
     // updated is not broken by the rename alone. Only JPY: amount_jpy on any
-    // other currency is refused below.
+    // other currency is refused — see the normalization table below.
     expect(violationsOf({ ...jpy, amount_jpy: 1250 }, AT)).toEqual([])
-    // Both, agreeing, which is what the creation path sends for JPY.
     expect(violationsOf({ ...jpy, amount_minor: 1250, amount_jpy: 1250 }, AT)).toEqual([])
   })
 
-  // The gap Codex found on 2026-11-08: these all passed while all three fail
-  // contracts_amount_jpy_mirror_check, so a caller was told "well-formed" and
-  // then handed a bare check_violation.
-  it('refuses a proposal the database will refuse for its amount_jpy mirror', () => {
+  // THE NORMALIZATION CONTRACT, and the reason this block is a table.
+  //
+  // This module is the machine-readable pre-check for the database, so every
+  // row below is a claim about what `contracts_fill_amount_minor` and
+  // `contracts_amount_jpy_mirror_check` do. Codex checked the two against each
+  // other twice on 2026-11-08 and found a mismatch each time — first that the
+  // mirror was not checked at all, then that an explicit `null` was treated
+  // differently here from in the trigger. Both directions of mismatch are
+  // defects: refusing what the database accepts is as wrong as accepting what
+  // it refuses, because a caller told "well-formed" then gets a bare
+  // check_violation, and a caller told "malformed" never tries.
+  it('accepts and refuses exactly what the database does', () => {
     const base = { project_name: 'p', dod: ['d'], performed_by: 'creator' }
-    expect(violationsOf({ ...base, currency: 'JPY', amount_minor: 100, amount_jpy: 200 }, AT))
+    const jpy = { ...base, currency: 'JPY' }
+    const cad = { ...base, currency: 'CAD' }
+
+    // Accepted — the server fills whichever side was left out.
+    expect(violationsOf({ ...jpy, amount_minor: 100 }, AT)).toEqual([])
+    expect(violationsOf({ ...jpy, amount_minor: 100, amount_jpy: null }, AT)).toEqual([])
+    expect(violationsOf({ ...jpy, amount_jpy: 100 }, AT)).toEqual([])
+    expect(violationsOf({ ...jpy, amount_minor: null, amount_jpy: 100 }, AT)).toEqual([])
+    expect(violationsOf({ ...jpy, amount_minor: 100, amount_jpy: 100 }, AT)).toEqual([])
+    expect(violationsOf({ ...cad, amount_minor: 1250 }, AT)).toEqual([])
+    expect(violationsOf({ ...cad, amount_minor: 1250, amount_jpy: null }, AT)).toEqual([])
+
+    // Refused — two amounts that disagree, resolved in neither direction.
+    expect(violationsOf({ ...jpy, amount_minor: 100, amount_jpy: 200 }, AT))
       .toEqual(['amount_jpy_mirror_invalid'])
-    expect(violationsOf({ ...base, currency: 'CAD', amount_minor: 1250, amount_jpy: 1250 }, AT))
+    // Refused — a cent amount in a column named after yen.
+    expect(violationsOf({ ...cad, amount_minor: 1250, amount_jpy: 1250 }, AT))
       .toEqual(['amount_jpy_mirror_invalid'])
-    expect(violationsOf({ ...base, currency: 'CAD', amount_jpy: 1250 }, AT))
+    // The number itself is well formed — it is being stated in the wrong
+    // column, which is the one thing wrong with it.
+    expect(violationsOf({ ...cad, amount_jpy: 1250 }, AT))
       .toEqual(['amount_jpy_mirror_invalid'])
-    // Omitting it is fine: the creation path fills it for JPY, and the
-    // database fills amount_minor from it for a caller that only knows the
-    // old name.
-    expect(violationsOf({ ...base, currency: 'CAD', amount_minor: 1250 }, AT)).toEqual([])
-    expect(violationsOf({ ...base, currency: 'JPY', amount_minor: 1250 }, AT)).toEqual([])
-    // An unsupported currency says so once; the mirror is not piled on top.
+    // Refused — no amount at all, under either name.
+    expect(violationsOf({ ...jpy }, AT)).toEqual(['amount_not_an_integer'])
+    // An unsupported currency says so once; the mirror is not piled on top,
+    // because without a known currency there is no mirror rule to apply.
     expect(violationsOf({ ...base, currency: 'CHF', amount_jpy: 1250 }, AT))
       .toEqual(['currency_unsupported'])
   })

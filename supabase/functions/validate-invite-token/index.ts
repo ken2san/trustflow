@@ -178,6 +178,32 @@ serve(async (req: Request) => {
       // and not a closed hole — it is closed by requiring the field once no
       // client omits it. The field is caller-supplied and therefore not a
       // security control; it protects an honest guest from an honest edit.
+
+      // A NON-JPY ACCEPTANCE MUST CARRY A v2 DIGEST. Not merely "must not carry
+      // a v1 one" — the whole check below sits inside a test for a non-empty
+      // digest, so a caller that sends none skips it entirely. For JPY that is
+      // the deliberate compatibility period documented above. For any other
+      // currency it is not a compatibility case at all: a contract that is not
+      // in yen can only have been created by a client that also computes v2,
+      // so a non-JPY acceptance arriving with no digest, or with v1, is a stale
+      // bundle — one that cannot even display the price, because its only view
+      // of it is a column that is NULL on such a row.
+      //
+      // So it is refused here, before the conditional, as "I cannot check"
+      // rather than "they changed": nothing is known to have been edited. The
+      // client's answer is to reload, which is also what gets it a bundle that
+      // shows the amount. Codex found both halves of this, 2026-11-08.
+      if (context.contract.currency !== 'JPY') {
+        const askedForNonJpy = typeof shown_terms_version === 'number'
+          ? shown_terms_version
+          : 1
+        const hasDigest = typeof shown_terms_digest === 'string'
+          && shown_terms_digest.length > 0
+        if (!hasDigest || askedForNonJpy < 2) {
+          return json({ error: 'terms_check_unsupported' }, 409)
+        }
+      }
+
       if (typeof shown_terms_digest === 'string' && shown_terms_digest.length > 0) {
         // The version the caller computed, not the one this build prefers. A
         // client shipped before the version travelled separately sends none,
@@ -188,24 +214,6 @@ serve(async (req: Request) => {
         const askedVersion = typeof shown_terms_version === 'number'
           ? shown_terms_version
           : 1
-
-        // v1 CANNOT SEE THE PRICE OF A CONTRACT THAT IS NOT IN YEN, so it is
-        // refused for one. v1 covers `amount_jpy`, which is NULL on every
-        // non-JPY row (20261108161000) — before and after an owner changes
-        // the amount. A guest on an older bundle would therefore have their
-        // acceptance of a CAD agreement checked against a digest that is
-        // blind to its price, which is the exact failure this mechanism
-        // exists to prevent, on exactly the contracts the currency work was
-        // done for. Codex found it, 2026-11-08.
-        //
-        // Reported as "cannot check" rather than "they changed": nothing is
-        // known to have been edited, this build just will not verify a format
-        // that does not cover a term of this deal. The client's answer is to
-        // reload, which is also what gets it a bundle that can display the
-        // price at all.
-        if (askedVersion < 2 && context.contract.currency !== 'JPY') {
-          return json({ error: 'terms_check_unsupported' }, 409)
-        }
 
         const currentDigest = await shownTermsDigest(context.contract, askedVersion)
         if (currentDigest === null) {
