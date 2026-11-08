@@ -68,6 +68,10 @@ import { currentActorIdentity, ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
 import { storeGuestAccessToken, listGuestAgreementIds, getGuestAgreementLabel } from './lib/guestSession.js';
 import {
+  SUPPORTED_CURRENCIES, CURRENCY_MINOR_DIGITS, DEFAULT_CURRENCY,
+  minorUnitsFrom, formatMinor,
+} from '../supabase/functions/_shared/money.ts';
+import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
   describeAuthError,
@@ -145,6 +149,22 @@ import { performsHere } from './lib/contractStatus.js';
 
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
+
+/**
+ * What to say when an amount cannot be recorded.
+ *
+ * One line each, in the terms of the thing the person typed rather than the
+ * code the parser returned: `amount_too_precise` is the interesting one,
+ * because for JPY it means "this currency has no decimals" and for CAD it
+ * means "two at most", and those are different sentences.
+ */
+const AMOUNT_PROBLEMS = {
+  amount_malformed: 'Digits, with an optional decimal point. No currency symbols or commas.',
+  amount_too_precise: 'More decimal places than this currency has.',
+  amount_not_positive: 'An amount has to be more than zero.',
+  amount_too_large: 'Larger than this can record.',
+  currency_unsupported: 'That currency is not one of the ones this records.',
+};
 
 // Today as an <input type="date"> writes it: a calendar date in the viewer's
 // own timezone. toISOString() would be a day early for anyone ahead of UTC —
@@ -799,6 +819,13 @@ const App = () => {
   // Server-owned columns (state, invite_token, expiry, ...) are deliberately not
   // sent — the client no longer holds INSERT privilege on them.
   const persistContractAndLink = useCallback(async () => {
+    // Parsed here too, rather than read off the render: this callback is also
+    // reached from the OTP path, and an amount that cannot be parsed must not
+    // quietly become 0 — the row-level check refuses a non-positive amount, so
+    // it fails loudly either way, but this is where it is named.
+    const parsed = minorUnitsFrom((byocForm.amount ?? '').trim(),
+                                  byocForm.currency ?? DEFAULT_CURRENCY);
+    const amountMinor = parsed.ok ? parsed.minor : null;
     const dodItems = byocForm.dod
       ? byocForm.dod.split('\n').map(line => line.trim()).filter(Boolean)
       : [];
@@ -806,7 +833,7 @@ const App = () => {
       dodText: dodItems.join('\n'),
       hirerId: (byocForm.clientEmail || '').trim(),
       earnerId: (byocForm.earnerEmail || '').trim(),
-      budgetPoints: String(parseInt(byocForm.amount, 10) || 0),
+      budgetPoints: String(amountMinor ?? 0),
       deadline: byocForm.deadline || 'TBD',
     });
     const dodHash = await sha256(canonical);
@@ -816,7 +843,8 @@ const App = () => {
       projectName: (byocForm.description || '').trim(),
       dod: dodItems,
       dodHash,
-      amountJpy: parseInt(byocForm.amount, 10) || 0,
+      amountMinor: amountMinor ?? 0,
+      currency: byocForm.currency ?? DEFAULT_CURRENCY,
       deadline: byocForm.deadline || null,
       invitedHirerEmail: (byocForm.clientEmail || '').trim(),
       performedBy: byocForm.performedBy === 'counterparty' ? 'counterparty' : 'creator',
@@ -901,6 +929,20 @@ const App = () => {
   // correctly as a string.
   const earliestDeadline = todayLocalISO();
   const deadlineIsPast = Boolean(byocForm.deadline) && byocForm.deadline < earliestDeadline;
+
+  // The amount, read as an integer number of the currency's minor units.
+  //
+  // The parser in _shared/money.ts is the only thing that decides what is
+  // payable, and it is the same module the Edge Functions and the DB check
+  // derive from. It is asked here rather than on submit so that "12.5" in a
+  // JPY contract is refused while the person is still looking at the field —
+  // the alternative is a 400 from PostgREST naming a constraint.
+  const amountCurrency = byocForm.currency ?? DEFAULT_CURRENCY;
+  const amountTyped = (byocForm.amount ?? '').trim();
+  const amountParse = amountTyped ? minorUnitsFrom(amountTyped, amountCurrency) : null;
+  const amountProblem = amountParse && !amountParse.ok
+    ? AMOUNT_PROBLEMS[amountParse.reason] ?? 'That is not an amount this can record.'
+    : null;
 
   // The palette used to be where the legacy surface stayed reachable after it
   // left the primary nav — Marketplace, Command Center, Wallet, Trust Passport
@@ -1013,7 +1055,45 @@ const App = () => {
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Client email</label><input type="email" value={byocForm.clientEmail ?? ''} onChange={e => { setByocForm(f => ({ ...f, clientEmail: e.target.value })); setInviteLink(null); }} placeholder="Where this invite is addressed" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Project name</label><input type="text" value={byocForm.description} onChange={e => { setByocForm(f => ({ ...f, description: e.target.value })); setInviteLink(null); }} placeholder="e.g., Mobile app redesign — 3 screens" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Amount (¥ JPY)</label><input type="number" min="0" value={byocForm.amount} onChange={e => { setByocForm(f => ({ ...f, amount: e.target.value })); setInviteLink(null); }} placeholder="e.g., 300000" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
+                {/* Amount and currency are ONE control: a single bordered box
+                    holding the number and the code, rather than two fields
+                    that can disagree about what they describe. The currency
+                    sits with the number because it is part of reading it.
+
+                    The field is text with inputMode="decimal" and not
+                    type="number". A number input's own validity rules do not
+                    know that JPY has no minor unit, so "12.5" would be a valid
+                    number and an unpayable amount; here minorUnitsFrom() is
+                    the single rule and it can say which of the two is wrong.
+
+                    The chosen currency is part of byocForm, which is already
+                    persisted, so the next contract starts on the last one
+                    used — the default only applies to a first-ever draft. */}
+                <div>
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Amount</label>
+                  <div className={`flex items-stretch w-full bg-slate-800 border rounded-2xl overflow-hidden transition-all focus-within:border-indigo-500/50 ${amountProblem ? 'border-amber-500/60' : 'border-white/10'}`}>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={byocForm.amount}
+                      onChange={e => { setByocForm(f => ({ ...f, amount: e.target.value })); setInviteLink(null); }}
+                      placeholder={CURRENCY_MINOR_DIGITS[amountCurrency] === 0 ? 'e.g., 300000' : 'e.g., 1250.00'}
+                      aria-label="Amount"
+                      className="flex-1 min-w-0 bg-transparent px-5 py-4 text-white outline-none"
+                    />
+                    <select
+                      value={amountCurrency}
+                      onChange={e => { setByocForm(f => ({ ...f, currency: e.target.value })); setInviteLink(null); }}
+                      aria-label="Currency"
+                      className="bg-slate-800 border-l border-white/10 pl-3 pr-2 py-4 text-slate-300 text-sm font-bold outline-none cursor-pointer"
+                    >
+                      {SUPPORTED_CURRENCIES.map(code => (
+                        <option key={code} value={code}>{code}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {amountProblem && <p className="text-[11px] text-amber-400 mt-2">{amountProblem}</p>}
+                </div>
                 {/* min only constrains the picker; a date can still be typed
                     straight into the field, so the value is checked as well and
                     Send Invite is blocked on it. A deadline that has already
@@ -1065,7 +1145,9 @@ const App = () => {
                     <span className="text-white font-bold">{byocForm.earnerName.trim()}</span>
                   </p>
                   <p className="text-xs text-slate-500">
-                    {byocForm.amount ? `¥${Number(byocForm.amount).toLocaleString('en-US')}` : 'No amount'}
+                    {amountParse?.ok
+                      ? formatMinor(amountParse.minor, amountCurrency)
+                      : 'No amount'}
                     {' · '}
                     {byocForm.deadline ? `due ${byocForm.deadline}` : 'no deadline'}
                     {' · '}
@@ -1112,6 +1194,11 @@ const App = () => {
                   || !(byocForm.earnerEmail ?? '').trim()
                   || !(byocForm.clientEmail ?? '').trim()
                   || deadlineIsPast
+                  // An unparseable amount is blocked here as well as flagged:
+                  // the alternative is sending 0 and recording an agreement
+                  // for no money, which the row-level check then refuses with
+                  // a constraint name nobody can act on.
+                  || Boolean(amountProblem)
                 }
                 className="flex-1 py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black transition-all text-sm"
               >
@@ -1332,7 +1419,7 @@ const App = () => {
                 id: contractId,
                 title: accepted.project_name,
                 client: accepted.earner_display_name ?? 'Your counterparty',
-                totalPoints: accepted.amount_jpy ?? 0,
+                totalPoints: accepted.amount_minor ?? accepted.amount_jpy ?? 0,
                 acceptanceCriteria: accepted.dod ?? [],
                 deadline: accepted.deadline ?? null,
               });

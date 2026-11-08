@@ -123,7 +123,7 @@ async function main() {
 
   console.log();
   console.log(`agreement_hash ${expectedAgreementHash.slice(0, 16)}… over `
-    + `${contract.currency} ${contract.amount_jpy}, deadline ${contract.deadline ?? '(none)'}, `
+    + `${contract.currency} ${contract.amount_minor ?? contract.amount_jpy}, deadline ${contract.deadline ?? '(none)'}, `
     + `performed_by ${contract.performed_by}`);
   console.log(`${rows.length} events, ${passed} checks passed, ${failures.length} failed`);
 

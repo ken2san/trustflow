@@ -99,7 +99,7 @@ serve(async (req: Request) => {
       // stale by the time it matters.
       const { data: contract, error } = await supabase
         .from('contracts')
-        .select('id, project_name, dod, amount_jpy, currency, deadline, performed_by, '
+        .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, performed_by, '
           + 'earner_display_name, invited_hirer_email, invite_token_expires_at, invite_token_used_at')
         .eq('invite_token', invite_token)
         .maybeSingle()
@@ -118,7 +118,11 @@ serve(async (req: Request) => {
         contract_id: contract.id,
         project_name: contract.project_name,
         dod: contract.dod,
+        // Both names. `amount_minor` is the real column; `amount_jpy` is kept
+        // in the response for a browser still running a bundle that reads it,
+        // and is NULL on a contract that is not in yen (20261108161000).
         amount_jpy: contract.amount_jpy,
+        amount_minor: contract.amount_minor,
         currency: contract.currency,
         deadline: contract.deadline,
         earner_display_name: contract.earner_display_name,
@@ -282,6 +286,7 @@ serve(async (req: Request) => {
         project_name: result.contract.project_name,
         dod: result.contract.dod,
         amount_jpy: result.contract.amount_jpy,
+        amount_minor: result.contract.amount_minor,
         currency: result.contract.currency,
         deadline: result.contract.deadline,
         earner_display_name: result.contract.earner_display_name,

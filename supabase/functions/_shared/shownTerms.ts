@@ -49,7 +49,7 @@ import { sha256Hex, stableStringify } from './eventCanonical.ts'
  * To add a version: add a builder to BUILDERS, bump this constant, ship the
  * server first so it can verify both, then the clients.
  */
-export const SHOWN_TERMS_VERSION = 1
+export const SHOWN_TERMS_VERSION = 2
 
 /** A contract row, or the invitation response built from one. */
 type TermsSource = Record<string, unknown> | null | undefined
@@ -78,7 +78,7 @@ export function shownTerms(
 }
 
 /** Every version this build can verify. */
-export const SUPPORTED_SHOWN_TERMS_VERSIONS = [1]
+export const SUPPORTED_SHOWN_TERMS_VERSIONS = [1, 2]
 
 const BUILDERS: Record<number, (row: Record<string, unknown>) => Record<string, unknown>> = {
   1: (row) => ({
@@ -90,6 +90,33 @@ const BUILDERS: Record<number, (row: Record<string, unknown>) => Record<string, 
     deadline: row.deadline ?? null,
     // The invitation renders 'creator' when the column is absent, so the digest
     // has to read the same default or an older contract would never match.
+    performed_by: row.performed_by ?? 'creator',
+    earner_display_name: row.earner_display_name ?? null,
+  }),
+
+  // v2 — the amount is read from `amount_minor`.
+  //
+  // WHY THE BUMP IS NOT OPTIONAL. v1 covers `amount_jpy`, which on a contract
+  // that is not in yen is NULL for every row (20261108161000). Left on v1, the
+  // digest of a CAD invitation would be the same before and after the owner
+  // changed its price — the one thing this mechanism exists to catch, silently
+  // not caught, on exactly the contracts the currency work was done for. The
+  // currency itself was already covered, so the gap is the amount alone.
+  //
+  // v1 stays verifiable, and that is what makes the deploy safe: a browser on
+  // the previous bundle sends `{digest, version: 1}` and the server still
+  // checks it. Deploy order is the one this file has always specified —
+  // functions first, then the clients.
+  2: (row) => ({
+    v: 2,
+    project_name: row.project_name ?? null,
+    dod: row.dod ?? [],
+    // `amount_jpy` is the fallback for one case only: a contract read through a
+    // path that has not been redeployed yet, where it is still the same integer
+    // as amount_minor by database CHECK.
+    amount_minor: row.amount_minor ?? row.amount_jpy ?? null,
+    currency: row.currency ?? null,
+    deadline: row.deadline ?? null,
     performed_by: row.performed_by ?? 'creator',
     earner_display_name: row.earner_display_name ?? null,
   }),

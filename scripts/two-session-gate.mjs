@@ -70,11 +70,11 @@ const SQL = `
 -- ── Fixture, run first. Prints the contract id to pass to the script. ────
 insert into public.contracts (
   earner_user_id, earner_display_name, project_name, dod, amount_jpy,
-  currency, deadline, invited_hirer_email, performed_by, state, invite_token,
-  invite_token_expires_at
+  amount_minor, currency, deadline, invited_hirer_email, performed_by, state,
+  invite_token, invite_token_expires_at
 ) values (
   '${OWNER_ID}', 'Two-session Gate', 'two-session gate — case X',
-  '["A draft used by the two-session gate"]'::jsonb, 10000, 'JPY',
+  '["A draft used by the two-session gate"]'::jsonb, 10000, 10000, 'JPY',
   current_date + 1, 'harness-guest@example.invalid', 'creator',
   'AWAITING_ACCEPTANCE', gen_random_uuid(), now() + interval '1 day'
 ) returning id, invite_token;

@@ -44,6 +44,7 @@ const TERMS = {
   project_name: 'Atomic acceptance probe',
   dod: ['translate the document'],
   amount_jpy: 20000,
+  amount_minor: 20000,
   currency: 'JPY',
   deadline: '2026-11-30',
 };

@@ -108,7 +108,7 @@ serve(async (req: Request) => {
 
     const { data: contract, error: contractError } = await admin
       .from('contracts')
-      .select('id, project_name, dod, amount_jpy, currency, deadline, performed_by, '
+      .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, performed_by, '
         + 'earner_display_name, earner_user_id, invited_hirer_email, hirer_email, '
         + 'invite_token_used_at')
       .eq('id', contract_id)

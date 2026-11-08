@@ -133,8 +133,18 @@ describe('presentation helpers', () => {
   })
 
   it('formats amounts and deadlines, tolerating missing values', () => {
-    expect(formatAmount({ amount_jpy: 63500 })).toBe('¥63,500')
-    expect(formatAmount({})).toBe('¥0')
+    // A JPY contract reads exactly as it always did, from either column name.
+    expect(formatAmount({ amount_minor: 63500, currency: 'JPY' })).toBe('¥63,500')
+    expect(formatAmount({ amount_jpy: 63500, currency: 'JPY' })).toBe('¥63,500')
+    // Minor units, with the currency's own decimals. The old helper hard-coded
+    // a yen sign, so this row used to read ¥1,250 for CA$12.50 — wrong symbol,
+    // wrong magnitude.
+    expect(formatAmount({ amount_minor: 1250, currency: 'CAD' })).toBe('CA$12.50')
+    // No currency at all is an older row, and those are all JPY.
+    expect(formatAmount({ amount_minor: 63500 })).toBe('¥63,500')
+    // No amount is not an amount of zero: a contract for ¥0 is a different
+    // claim from a contract whose amount this screen could not read.
+    expect(formatAmount({})).toBe('—')
     expect(formatDeadline({ deadline: null })).toBeNull()
     expect(formatDeadline({ deadline: 'not-a-date' })).toBeNull()
     expect(formatDeadline({ deadline: '2026-11-30' })).toBeTruthy()
@@ -513,7 +523,7 @@ describe('the counterparty access clock is an instant, not a calendar day', () =
 
 describe('a guest-shaped contract', () => {
   const shaped = {
-    id: 'c1', project_name: 'Probe', dod: [], amount_jpy: 1000, currency: 'JPY',
+    id: 'c1', project_name: 'Probe', dod: [], amount_jpy: 1000, amount_minor: 1000, currency: 'JPY',
     deadline: '2026-10-01', state: CONTRACT_STATES.TERMS_ACCEPTED,
     performed_by: 'creator', earner_display_name: 'E', hirer_email: 'h@example.test',
   }

@@ -350,7 +350,7 @@ bold; everything else defaults.
 
 | tool | arguments | returns |
 | --- | --- | --- |
-| `create_agreement` | **project_name**, **counterparty_email**, **amount_jpy**, dod[], deadline, performed_by=`creator` | id, the invite URL to send through a channel the user already has |
+| `create_agreement` | **project_name**, **counterparty_email**, **amount_minor** (integer, minor units), **currency** (ISO 4217, default JPY), dod[], deadline, performed_by=`creator` | id, the invite URL to send through a channel the user already has |
 | `agreement_status` | id, or nothing for all of them | state, **waiting_on**, **since**, deadline, invite/access expiry, next action — §3.2 |
 | `record_event` | **id**, **type**, note | the event, or a refusal naming the reason |
 | `list_events` | **id**, after, limit=100 | events oldest-first with a cursor — §4.3 |

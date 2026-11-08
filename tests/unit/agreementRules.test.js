@@ -11,6 +11,7 @@ const WELL_FORMED = {
   project_name: 'Logo animation',
   dod: ['Deliver the animation', 'Matches the brief'],
   amount_jpy: 50000,
+  amount_minor: 50000,
   currency: 'JPY',
   deadline: '2099-12-31',
   invited_hirer_email: 'client@example.com',
@@ -69,8 +70,8 @@ describe('the baseline proposal is accepted', () => {
 describe('the ten inserts that a direct POST accepted', () => {
   const probes = [
     ['deadline in the past',       { deadline: '2020-01-01' },          'deadline_in_the_past'],
-    ['amount zero',               { amount_jpy: 0 },                   'amount_not_positive'],
-    ['amount negative',           { amount_jpy: -50000 },              'amount_not_positive'],
+    ['amount zero',               { amount_minor: 0 },                   'amount_not_positive'],
+    ['amount negative',           { amount_minor: -50000 },              'amount_not_positive'],
     ['empty dod array',           { dod: [] },                         'dod_empty'],
     ['dod is a string',           { dod: 'just do it' },               'dod_not_array'],
     ['empty project_name',        { project_name: '' },                'project_name_required'],
@@ -98,7 +99,7 @@ describe('the ten inserts that a direct POST accepted', () => {
     // Shape is all this layer claims: a large amount is well-FORMED. Whether
     // it is PERMITTED is a different question, asked somewhere else, and this
     // assertion deliberately does not answer it.
-    expect(violationsOf({ ...WELL_FORMED, amount_jpy: 2_000_000_000 }, AT))
+    expect(violationsOf({ ...WELL_FORMED, amount_minor: 2_000_000_000 }, AT))
       .not.toContain('amount_not_an_integer')
   })
 })
@@ -135,7 +136,7 @@ describe('existing data stays valid', () => {
   })
 
   it('accepts the smallest amount in either project', () => {
-    expect(violationsOf({ ...WELL_FORMED, amount_jpy: 1 }, AT)).toEqual([])
+    expect(violationsOf({ ...WELL_FORMED, amount_minor: 1 }, AT)).toEqual([])
   })
 
   it('accepts both performed_by values, and nothing else', () => {
@@ -203,15 +204,15 @@ describe('each rule fires independently', () => {
   })
 
   it('a non-integer amount is not a rounding problem to be silently fixed', () => {
-    expect(violationsOf({ ...WELL_FORMED, amount_jpy: 5000.5 }, AT))
+    expect(violationsOf({ ...WELL_FORMED, amount_minor: 5000.5 }, AT))
       .toContain('amount_not_an_integer')
-    expect(violationsOf({ ...WELL_FORMED, amount_jpy: '50000' }, AT))
+    expect(violationsOf({ ...WELL_FORMED, amount_minor: '50000' }, AT))
       .toContain('amount_not_an_integer')
   })
 
   it('reports every violation at once, not just the first', () => {
     const all = violationsOf({
-      project_name: '', dod: [], amount_jpy: -1, currency: 'USD',
+      project_name: '', dod: [], amount_minor: -1, currency: 'ZZZ',
       deadline: '2020-01-01', invited_hirer_email: 'x', performed_by: 'nobody',
     }, AT)
     // A caller fixing one field per round trip is an agent in a retry loop.
@@ -224,8 +225,36 @@ describe('each rule fires independently', () => {
 })
 
 describe('constants are what the rules claim', () => {
-  it('JPY is the only currency, matching 1466 of 1466 rows', () => {
-    expect([...SUPPORTED_CURRENCIES]).toEqual(['JPY'])
+  // Was 'JPY is the only currency, matching 1466 of 1466 rows' until
+  // 2026-11-08, when Kenji's real use in Canada, Hong Kong and Japan made
+  // JPY-only wrong. Order matters only in that JPY is first: it is the default
+  // a form starts on and what every pre-existing contract is.
+  it('is the six ISO 4217 codes the product records, JPY first', () => {
+    expect([...SUPPORTED_CURRENCIES]).toEqual(['JPY', 'CAD', 'HKD', 'USD', 'EUR', 'GBP'])
+  })
+
+  it('accepts an amount in minor units under either field name', () => {
+    const base = {
+      project_name: 'p', dod: ['d'], currency: 'CAD', performed_by: 'creator',
+    }
+    expect(violationsOf({ ...base, amount_minor: 1250 }, AT)).toEqual([])
+    // The pre-rename name, still read so a caller that has not been updated
+    // is not broken by the rename alone.
+    expect(violationsOf({ ...base, amount_jpy: 1250 }, AT)).toEqual([])
+    // amount_minor wins when both are present: it is the column the database
+    // stores, so reconciling a disagreement here would hide it.
+    expect(violationsOf({ ...base, amount_minor: 1250, amount_jpy: -5 }, AT)).toEqual([])
+  })
+
+  it('refuses an amount past what the integer column can hold', () => {
+    const base = {
+      project_name: 'p', dod: ['d'], currency: 'CAD', performed_by: 'creator',
+    }
+    expect(violationsOf({ ...base, amount_minor: 2_147_483_647 }, AT)).toEqual([])
+    // A reachable bound now that a 2-decimal currency multiplies by 100: this
+    // is CA$21,474,836.48, not CA$21 billion.
+    expect(violationsOf({ ...base, amount_minor: 2_147_483_648 }, AT))
+      .toEqual(['amount_too_large'])
   })
 
   it('the unratified limits sit well clear of every observed value', () => {

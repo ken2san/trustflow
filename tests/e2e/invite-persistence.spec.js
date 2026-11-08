@@ -28,6 +28,7 @@ test.skip(LIVE_SKIPPED,
 const TERMS = {
   project_name: 'Persisted Terms Probe',
   amount_jpy: 63500,
+  amount_minor: 63500,
   deadline: '2026-11-30',
   dod: ['Persisted deliverable A', 'Persisted deliverable B'],
   earner_display_name: 'Persisted Earner Name',

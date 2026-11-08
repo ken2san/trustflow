@@ -36,7 +36,7 @@ const json = (route, body, status = 200) => route.fulfill({
 const OWNER_CONTRACT = {
   id: '11111111-1111-4111-8111-111111111111',
   project_name: 'Owner export check',
-  dod: ['deliver the thing'], amount_jpy: 50000, currency: 'JPY', deadline: '2026-12-01',
+  dod: ['deliver the thing'], amount_jpy: 50000, amount_minor: 50000, currency: 'JPY', deadline: '2026-12-01',
   state: 'TERMS_ACCEPTED',
   earner_display_name: 'Me', invited_hirer_email: 'client@example.test',
   hirer_email: 'client@example.test',

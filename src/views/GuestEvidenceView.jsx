@@ -8,6 +8,7 @@
 // overstating it (see the footnote about payload coverage).
 
 import { ShieldCheck, ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
+import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts';
 
 const TYPE_LABELS = {
   'contract.initiated':   'Agreement created',
@@ -44,15 +45,18 @@ const TERM_LABELS = {
   offered_by:   'who offered it',
 };
 
+/**
+ * The agreed amount, in the currency it was agreed in.
+ *
+ * `agreement.amount` is an integer in that currency's minor unit — yen for
+ * JPY, cents for the others. This used to pass `maximumFractionDigits: 0` for
+ * every currency, which would have shown a CA$12.50 agreement as CA$1,250 on
+ * the one screen whose whole job is to state what was agreed: both the 100x
+ * and the dropped decimals. formatMinor takes the digits from the currency.
+ */
 function formatAmount(amount, currency) {
   if (amount === null || amount === undefined) return null;
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency', currency: currency ?? 'JPY', maximumFractionDigits: 0,
-    }).format(amount);
-  } catch {
-    return `${amount} ${currency ?? ''}`.trim();
-  }
+  return formatMinor(amount, currency ?? DEFAULT_CURRENCY);
 }
 
 /**

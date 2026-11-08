@@ -43,6 +43,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { formatMinor } from '../_shared/money.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -59,7 +60,8 @@ interface EmailPayload {
   project_name: string
   dod: string[]
   dod_hash: string
-  amount_jpy: number
+  amount_minor: number
+  currency: string
   contract_id: string
   settled_at: string // ISO 8601
 }
@@ -69,10 +71,12 @@ function buildHtml(p: EmailPayload): string {
     .map((item, i) => `<li style="margin:6px 0">${i + 1}. ${escHtml(item)}</li>`)
     .join('')
 
-  const formattedAmount = new Intl.NumberFormat('ja-JP', {
-    style: 'currency',
-    currency: 'JPY',
-  }).format(p.amount_jpy)
+  // The contract's own currency, with that currency's own decimals. It used to
+  // be a fixed ja-JP/JPY format, which would have stated a CA$12.50 agreement
+  // as ¥1,250 in a confirmation email. This function is retired in production
+  // (it answers 404); the format is corrected rather than left wrong so that
+  // whoever revives it does not revive the error with it.
+  const formattedAmount = formatMinor(p.amount_minor, p.currency, 'en-CA')
 
   const formattedDate = new Date(p.settled_at).toLocaleString('en-US', {
     timeZone: 'UTC',
@@ -169,7 +173,7 @@ serve(async (req: Request) => {
     // this only ever fires for a contract that is actually SETTLED.
     const { data: contract, error } = await supabase
       .from('contracts')
-      .select('id, project_name, dod, dod_hash, amount_jpy, hirer_email, state, updated_at')
+      .select('id, project_name, dod, dod_hash, amount_minor, currency, hirer_email, state, updated_at')
       .eq('id', contract_id)
       .single()
 
@@ -196,7 +200,8 @@ serve(async (req: Request) => {
       project_name: contract.project_name,
       dod: Array.isArray(contract.dod) ? contract.dod : [],
       dod_hash: contract.dod_hash ?? '',
-      amount_jpy: contract.amount_jpy,
+      amount_minor: contract.amount_minor,
+      currency: contract.currency,
       contract_id: contract.id,
       settled_at: contract.updated_at,
     }

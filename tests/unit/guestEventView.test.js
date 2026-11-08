@@ -14,6 +14,7 @@ const CONTRACT = {
   project_name: 'Certified translation',
   dod: ['translate', 'return a stamped PDF'],
   amount_jpy: 20000,
+  amount_minor: 20000,
   currency: 'JPY',
   deadline: '2026-11-30',
   performed_by: 'creator',

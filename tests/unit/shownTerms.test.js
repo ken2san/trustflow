@@ -17,6 +17,7 @@ const SHOWN = {
   project_name: 'Certified translation of a birth certificate',
   dod: ['translate the document', 'return a stamped PDF'],
   amount_jpy: 20000,
+  amount_minor: 20000,
   currency: 'JPY',
   deadline: '2026-11-30',
   performed_by: 'creator',
@@ -46,8 +47,8 @@ describe('the terms a guest was shown', () => {
   })
 
   const edits = [
-    ['the amount is raised', { amount_jpy: 999999 }],
-    ['the amount is lowered', { amount_jpy: 1 }],
+    ['the amount is raised', { amount_minor: 999999 }],
+    ['the amount is lowered', { amount_minor: 1 }],
     ['the currency is swapped', { currency: 'USD' }],
     ['the deadline is pulled in', { deadline: '2026-11-01' }],
     ['the deadline is removed', { deadline: null }],
@@ -116,7 +117,12 @@ describe('the terms a guest was shown', () => {
 
 describe('version mismatch between a client and a server', () => {
   it('names the version explicitly rather than implying it', async () => {
-    expect(await shownTermsDigest(SHOWN, 1)).toBe(await shownTermsDigest(SHOWN))
+    // Asking for 1 gets 1, whatever this build's own default has moved to.
+    // That is what lets a server verify a client one deploy behind instead of
+    // reporting every one of them as having had its terms edited.
+    expect(shownTerms(SHOWN, 1).v).toBe(1)
+    expect(await shownTermsDigest(SHOWN, 1))
+      .not.toBe(await shownTermsDigest(SHOWN, SHOWN_TERMS_VERSION))
   })
 
   it('answers "cannot check" rather than "they differ" for a version it does not know', async () => {
@@ -124,9 +130,31 @@ describe('version mismatch between a client and a server', () => {
     // assumed its own version would report every client one deploy out of step
     // as having had its terms edited — a claim about the agreement, made on
     // the strength of a release schedule.
-    expect(await shownTermsDigest(SHOWN, 2)).toBeNull()
+    expect(await shownTermsDigest(SHOWN, SHOWN_TERMS_VERSION + 1)).toBeNull()
     expect(await shownTermsDigest(SHOWN, 0)).toBeNull()
     expect(shownTerms(SHOWN, 99)).toBeNull()
+  })
+
+  // ── v2, 2026-11-08: the amount moved to amount_minor ──────────────────────
+  it('v2 covers the amount on a contract that is not in yen, and v1 cannot', async () => {
+    // The row a CAD contract actually produces: amount_jpy is NULL for
+    // anything that is not yen (20261108161000), so v1's only view of the
+    // price is a column that is null before and after an edit.
+    const cad = {
+      ...SHOWN, amount_jpy: null, amount_minor: 1250, currency: 'CAD',
+    }
+    const raised = { ...cad, amount_minor: 999999 }
+
+    expect(await shownTermsDigest(cad, 1)).toBe(await shownTermsDigest(raised, 1))
+    expect(await shownTermsDigest(cad, 2)).not.toBe(await shownTermsDigest(raised, 2))
+  })
+
+  it('v2 still reads the old column when a response predates the rename', async () => {
+    // Equal by database CHECK while amount_jpy is still the mirror, so a
+    // response from a function deployed before 2026-11-08 produces the same
+    // v2 digest as one from after it.
+    expect(await shownTermsDigest({ ...SHOWN, amount_jpy: 20000 }, 2))
+      .toBe(await shownTermsDigest({ ...SHOWN, amount_jpy: null, amount_minor: 20000 }, 2))
   })
 
   it('lists what it can verify, so a deploy can be sequenced', () => {

@@ -21,7 +21,7 @@
 
 import React from 'react';
 import { ArrowLeft, CheckCircle2, Send, Loader2, AlertTriangle, Download, Copy } from 'lucide-react';
-import { clocksFor, relativeAge, sinceText, CLOCKS } from '../lib/contractStatus.js';
+import { clocksFor, relativeAge, sinceText, CLOCKS, formatAmount } from '../lib/contractStatus.js';
 
 /** Human wording for the attested event types, from the reader's side. */
 const RECORD_LABELS = {
@@ -223,8 +223,8 @@ export default function AgreementView({
             rest (blind review of the 2026-11-08 captures). */}
         <p className="text-sm text-slate-400">
           {performs ? 'You are doing the work' : 'The other party is doing the work'}
-          {contract.amount_jpy
-            ? <> · <span className="whitespace-nowrap">¥{Number(contract.amount_jpy).toLocaleString()}</span></>
+          {(contract.amount_minor ?? contract.amount_jpy)
+            ? <> · <span className="whitespace-nowrap">{formatAmount(contract)}</span></>
             : null}
           {deadlineClock ? (
             <span className={deadlineClock.status === 'passed' ? 'text-amber-400/80' : undefined}>
@@ -515,8 +515,8 @@ export default function AgreementView({
                   // Seeded, not just hinted: leaving the note untouched still
                   // records the agreed amount, rather than an empty string
                   // that must be manually re-entered to mean anything.
-                  setPayingNote(contract.amount_jpy
-                    ? `¥${Number(contract.amount_jpy).toLocaleString()} sent via `
+                  setPayingNote((contract.amount_minor ?? contract.amount_jpy)
+                    ? `${formatAmount(contract)} sent via `
                     : '');
                   setReportingPayment(true);
                 }}

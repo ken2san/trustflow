@@ -10,6 +10,7 @@ const OWNER_CONTRACT = {
   project_name: 'Contrast check agreement',
   dod: ['Deliver the final document'],
   amount_jpy: 20000,
+  amount_minor: 20000,
   currency: 'JPY',
   deadline: '2026-12-01',
   state: 'TERMS_ACCEPTED',

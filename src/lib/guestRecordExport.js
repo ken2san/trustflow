@@ -144,6 +144,10 @@ export function buildGuestRecordDocument(evidence) {
       current_terms: {
         project_name:        contract.project_name ?? null,
         dod:                 contract.dod ?? null,
+        // Both names. amount_minor is the column; amount_jpy is kept so an
+        // export opened beside one taken before 2026-11-08 has the same key in
+        // it, and is null on a contract that is not in yen.
+        amount_minor:        contract.amount_minor ?? contract.amount_jpy ?? null,
         amount_jpy:          contract.amount_jpy ?? null,
         currency:            contract.currency ?? null,
         deadline:            contract.deadline ?? null,

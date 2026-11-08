@@ -518,9 +518,9 @@ paths:
       description: |
         A verified (non-anonymous) account session only:
         `verified_earner_only_insert`. The client holds INSERT on exactly nine
-        columns — `project_name`, `dod`, `amount_jpy`, `currency`, `deadline`,
-        `invited_hirer_email`, `earner_display_name`, `earner_user_id`,
-        `performed_by` — and sending any other column fails the whole insert
+        columns — `project_name`, `dod`, `amount_minor`, `amount_jpy`,
+        `currency`, `deadline`, `invited_hirer_email`, `earner_display_name`,
+        `earner_user_id`, `performed_by` — and sending any other column fails the whole insert
         with 403. `state`, `invite_token` (and its 72h expiry),
         `guest_access_token`, `hirer_email`, `dod_hash` and every payment column
         are server-owned.
@@ -539,7 +539,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [earner_user_id, project_name, dod, amount_jpy, currency, performed_by]
+              required: [earner_user_id, project_name, dod, amount_minor, currency, performed_by]
               additionalProperties: false
               description: |
                 Exactly the nine columns the client holds INSERT on. Sending any
@@ -562,11 +562,37 @@ paths:
                   type: array
                   items:
                     type: string
+                amount_minor:
+                  type: integer
+                  minimum: 1
+                  maximum: 2147483647
+                  description: |
+                    The amount as an integer in `currency`'s MINOR unit: yen
+                    for JPY, cents for CAD/HKD/USD/EUR/GBP. CA$12.50 is 1250.
+                    There is no decimal form on the wire and no FX anywhere.
+                    Rejected as `amount_not_an_integer`, `amount_not_positive`
+                    or `amount_too_large`
+                    (supabase/functions/_shared/money.ts).
                 amount_jpy:
                   type: integer
+                  nullable: true
+                  description: |
+                    DEPRECATED 2026-11-08 and transitional. REQUIRED and equal
+                    to `amount_minor` when `currency` is JPY; must be ABSENT or
+                    null for any other currency. A database CHECK enforces both
+                    directions, so a cent amount cannot be stored in a column
+                    named after yen. Drop it from a request once the column is
+                    dropped.
                 currency:
                   type: string
-                  enum: [JPY]
+                  enum: [JPY, CAD, HKD, USD, EUR, GBP]
+                  default: JPY
+                  description: |
+                    ISO 4217. Append-only: the list is
+                    `SUPPORTED_CURRENCIES` in
+                    supabase/functions/_shared/money.ts, mirrored by
+                    `contracts_currency_check`. Anything else is
+                    `currency_unsupported`.
                 deadline:
                   type: string
                   format: date
@@ -1190,10 +1216,16 @@ components:
           type: array
           items:
             type: string
+        amount_minor:
+          type: integer
+          description: Integer in `currency`'s minor unit — yen for JPY, cents otherwise.
         amount_jpy:
           type: integer
+          nullable: true
+          description: Deprecated mirror; null unless `currency` is JPY.
         currency:
           type: string
+          enum: [JPY, CAD, HKD, USD, EUR, GBP]
         deadline:
           type: string
           format: date
@@ -1225,10 +1257,16 @@ components:
           type: array
           items:
             type: string
+        amount_minor:
+          type: integer
+          description: Integer in `currency`'s minor unit — yen for JPY, cents otherwise.
         amount_jpy:
           type: integer
+          nullable: true
+          description: Deprecated mirror; null unless `currency` is JPY.
         currency:
           type: string
+          enum: [JPY, CAD, HKD, USD, EUR, GBP]
         deadline:
           type: string
           format: date

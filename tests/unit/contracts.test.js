@@ -33,7 +33,7 @@ const base = {
   earnerDisplayName: 'Me',
   projectName: 'Translate a document',
   dod: ['translate the document', 'return a PDF'],
-  amountJpy: 20000,
+  amountMinor: 20000,
   deadline: '2026-11-30',
   invitedHirerEmail: 'translator@example.test',
 }
@@ -59,9 +59,37 @@ describe('createContract', () => {
     // Everything else on contracts is server-owned: state, invite_token and its
     // expiry, the guest credential, hirer_email, and every settlement column.
     expect(Object.keys(sentRow()).sort()).toEqual([
-      'amount_jpy', 'currency', 'deadline', 'dod', 'earner_display_name',
-      'earner_user_id', 'invited_hirer_email', 'performed_by', 'project_name',
+      // amount_jpy is sent as well as amount_minor, and only for JPY: it is
+      // the transitional mirror an Edge Function deployed before 2026-11-08
+      // still reads, and a database CHECK requires the two to be equal.
+      'amount_jpy', 'amount_minor', 'currency', 'deadline', 'dod',
+      'earner_display_name', 'earner_user_id', 'invited_hirer_email',
+      'performed_by', 'project_name',
     ])
+  })
+
+  it('writes the amount in minor units, defaulting to JPY', async () => {
+    await createContract(base)
+    expect(sentRow().amount_minor).toBe(20000)
+    expect(sentRow().currency).toBe('JPY')
+    expect(sentRow().amount_jpy).toBe(20000)
+  })
+
+  it('omits amount_jpy entirely for a currency that is not yen', async () => {
+    // 1250 in a column called amount_jpy would be read as ¥1,250 by anything
+    // that trusts the name — a hundredfold error on a CA$12.50 agreement. The
+    // database refuses the combination; this is the writer not attempting it.
+    await createContract({ ...base, amountMinor: 1250, currency: 'CAD' })
+    expect(sentRow()).not.toHaveProperty('amount_jpy')
+    expect(sentRow().amount_minor).toBe(1250)
+    expect(sentRow().currency).toBe('CAD')
+  })
+
+  it('refuses a currency the product does not record, before the database does', async () => {
+    const { contract, error } = await createContract({ ...base, currency: 'CHF' })
+    expect(contract).toBeNull()
+    expect(error?.message).toBe('currency_unsupported')
+    expect(insert).not.toHaveBeenCalled()
   })
 
   it('records who is doing the work', async () => {

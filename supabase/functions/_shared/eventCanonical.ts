@@ -71,6 +71,7 @@ export interface AgreementSnapshot {
   snapshot_version: 1
   project_name: string | null
   dod: unknown
+  /** Integer, in `currency`'s minor unit: yen for JPY, cents for CAD/HKD/USD/EUR/GBP. */
   amount: number | null
   currency: string | null
   deadline: string | null
@@ -90,7 +91,22 @@ export function buildAgreementSnapshot(contract: Record<string, unknown>): Agree
     snapshot_version: 1,
     project_name: (contract.project_name as string | null) ?? null,
     dod: contract.dod ?? [],
-    amount: (contract.amount_jpy as number | null) ?? null,
+    // `amount_minor` is the column; `amount_jpy` is the name it had until
+    // 2026-11-08 and is still read when the newer one is absent, so a caller
+    // that has not been redeployed yet produces the same snapshot it always
+    // did rather than one with a null amount in it.
+    //
+    // THE SNAPSHOT SHAPE DOES NOT CHANGE, AND THAT IS THE POINT. `amount` here
+    // has always been an integer in the currency's minor unit — for JPY that
+    // is yen, which is why the rename is only a rename. The migration backfills
+    // `amount_minor = amount_jpy` for every existing row and a DB CHECK keeps
+    // them equal while any reader is still on the old name, so every stored
+    // agreement_hash recomputes to the same digest and `snapshot_version` stays
+    // at 1. A currency with minor units is new data, not a reinterpretation of
+    // old data: a JPY row means today exactly what it meant when it was written.
+    amount: (contract.amount_minor as number | null)
+      ?? (contract.amount_jpy as number | null)
+      ?? null,
     currency: (contract.currency as string | null) ?? null,
     deadline: (contract.deadline as string | null) ?? null,
     // Who does the work. Flipping this inverts the entire transaction.

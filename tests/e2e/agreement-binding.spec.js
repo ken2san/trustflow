@@ -42,6 +42,7 @@ const TERMS = {
   project_name: 'Certified translation of a birth certificate',
   dod: ['translate the document', 'return a stamped PDF'],
   amount_jpy: 20000,
+  amount_minor: 20000,
   currency: 'JPY',
   deadline: '2026-11-30',
 };
@@ -122,8 +123,8 @@ test('the acceptance event verifies and says that it binds the whole agreement',
 test('two agreements differing only in price produce different bindings', async ({ request }) => {
   // The property that was missing: under v3 these two acceptances were
   // indistinguishable, because only the DoD reached the hash.
-  const cheap = await acceptedAgreement(request, { terms: { amount_jpy: 20000 } });
-  const dear = await acceptedAgreement(request, { terms: { amount_jpy: 30000 } });
+  const cheap = await acceptedAgreement(request, { terms: { amount_jpy: 20000, amount_minor: 20000 } });
+  const dear = await acceptedAgreement(request, { terms: { amount_jpy: 30000, amount_minor: 30000 } });
 
   const a = await api(request, '/functions/v1/log-event', {
     token: cheap.earnerToken, body: { type: 'performance.asserted', contract_id: cheap.contract.id },
@@ -140,7 +141,7 @@ test('two agreements differing only in price produce different bindings', async 
 // ── A term cannot be rewritten after it was agreed ──────────────────────────
 
 for (const [term, change] of [
-  ['the price', { amount_jpy: 999999 }],
+  ['the price', { amount_jpy: 999999, amount_minor: 999999 }],
   ['the deadline', { deadline: '2027-06-30' }],
   ['what counts as finished', { dod: ['just send anything'] }],
   ['which side performs', { performed_by: 'counterparty' }],

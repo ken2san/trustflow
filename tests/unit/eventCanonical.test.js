@@ -159,6 +159,7 @@ describe('the agreement snapshot', () => {
     project_name: 'Certified translation of a birth certificate',
     dod: ['translate the document', 'return a stamped PDF'],
     amount_jpy: 20000,
+    amount_minor: 20000,
     currency: 'JPY',
     deadline: '2026-11-30',
     performed_by: 'counterparty',
@@ -199,7 +200,7 @@ describe('the agreement snapshot', () => {
   })
 
   it.each([
-    ['the price', { amount_jpy: 30000 }],
+    ['the price', { amount_minor: 30000 }],
     ['the currency', { currency: 'USD' }],
     ['the deadline', { deadline: '2026-12-15' }],
     ['what counts as finished', { dod: ['translate the document'] }],

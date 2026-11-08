@@ -76,9 +76,24 @@ serve(async (req: Request) => {
       })
     }
 
+    // Charging is JPY-only, and after 2026-11-08 a contract need not be. The
+    // PaymentIntent below hard-codes `currency: 'jpy'`, so a CAD contract would
+    // be charged its cent amount as yen. Refused rather than converted: there
+    // is no FX anywhere in this system, and adding one at a payment boundary
+    // is a product and compliance decision. Same guard as capture-payment.
+    if (contract.currency !== 'JPY') {
+      return new Response(JSON.stringify({
+        error: 'currency_not_chargeable',
+        detail: `Charging is JPY-only; this contract is in ${contract.currency}`,
+      }), {
+        status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
     // Amount is always the contract's own DB-owned value — a client-supplied
     // amount is never trusted, regardless of what the frontend displays.
-    const amountJpy = contract.amount_jpy
+    // Guarded above: JPY only, where amount_minor and amount_jpy are equal.
+    const amountJpy = contract.amount_minor ?? contract.amount_jpy
     if (!Number.isInteger(amountJpy) || amountJpy < 50 || amountJpy > 10_000_000) {
       return new Response(JSON.stringify({ error: 'Contract has no valid amount' }), {
         status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' },

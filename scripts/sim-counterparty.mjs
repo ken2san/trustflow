@@ -179,6 +179,7 @@ async function runAgreement({ ownerToken, ownerId, label, party }) {
       project_name: `${RUN} — ${label}`,
       dod: ['Deliver the thing', 'Thing matches the brief'],
       amount_jpy: 50000,
+      amount_minor: 50000,
       currency: 'JPY',
       deadline: tomorrowLocalISO(),
       invited_hirer_email: party.email,

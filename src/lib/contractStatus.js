@@ -13,6 +13,8 @@
 // screen and the flow screen can legitimately disagree, and the home screen is
 // the one telling the truth.
 
+import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts'
+
 /** States the system actually writes. */
 export const CONTRACT_STATES = {
   DRAFTING:            'DRAFTING',            // created before invites existed
@@ -526,11 +528,18 @@ export function stepForState(state) {
   }
 }
 
-/** Format an amount the way the contract records it. */
+/**
+ * Format an amount the way the contract records it — in its own currency.
+ *
+ * It used to hard-code a yen sign and `amount_jpy`, which was true of every
+ * row that existed. Since 2026-11-08 a contract carries one of six currencies
+ * and an integer in that currency's minor unit, so both the symbol and the
+ * number of decimals come from the contract rather than from here.
+ */
 export function formatAmount(contract) {
-  const amount = Number(contract?.amount_jpy ?? 0)
-  if (!Number.isFinite(amount)) return '—'
-  return `¥${amount.toLocaleString()}`
+  const minor = contract?.amount_minor ?? contract?.amount_jpy
+  if (minor === null || minor === undefined) return '—'
+  return formatMinor(Number(minor), contract?.currency ?? DEFAULT_CURRENCY)
 }
 
 /** Deadline as a short, readable date. Null when there isn't one. */

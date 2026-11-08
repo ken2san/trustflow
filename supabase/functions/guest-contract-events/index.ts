@@ -127,7 +127,7 @@ serve(async (req: Request) => {
     // The token IS the contract identity. Nothing in the request selects it.
     const { data: contract, error: contractError } = await admin
       .from('contracts')
-      .select('id, project_name, dod, amount_jpy, currency, deadline, state, performed_by, '
+      .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, performed_by, '
         + 'earner_user_id, earner_display_name, hirer_email, guest_access_token_expires_at')
       .eq('guest_access_token', guestToken)
       .maybeSingle()
@@ -258,6 +258,7 @@ serve(async (req: Request) => {
         project_name:        contract.project_name,
         dod:                 contract.dod,
         amount_jpy:          contract.amount_jpy,
+        amount_minor:        contract.amount_minor,
         currency:            contract.currency,
         deadline:            contract.deadline,
         state:               contract.state,

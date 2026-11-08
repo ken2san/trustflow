@@ -50,6 +50,7 @@ async function createContract(request) {
       project_name: 'Event Ingestion Probe',
       dod: ['deliverable'],
       amount_jpy: 1000,
+      amount_minor: 1000,
       currency: 'JPY',
       invited_hirer_email: 'ingestion.invitee@example.test',
     },

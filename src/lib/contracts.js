@@ -15,6 +15,7 @@ import { shownTermsDigest, SHOWN_TERMS_VERSION } from '../../supabase/functions/
 
 export { shownTermsDigest, SHOWN_TERMS_VERSION }
 import { getGuestAccessToken } from './guestSession.js'
+import { DEFAULT_CURRENCY, isSupportedCurrency } from '../../supabase/functions/_shared/money.ts'
 
 const NOT_CONFIGURED = new Error('Supabase is not configured')
 
@@ -27,7 +28,8 @@ const NOT_CONFIGURED = new Error('Supabase is not configured')
  * @param {string}   p.earnerDisplayName
  * @param {string}   p.projectName
  * @param {string[]} p.dod                 completion criteria, one per entry
- * @param {number}   p.amountJpy
+ * @param {number}   p.amountMinor       integer, in `currency`'s minor unit
+ * @param {string}   [p.currency]        ISO 4217, one of SUPPORTED_CURRENCIES
  * @param {string}   [p.deadline]          ISO date (YYYY-MM-DD)
  * @param {string}   p.invitedHirerEmail   address the invite is addressed to
  * @param {'creator'|'counterparty'} [p.performedBy]  which side does the work
@@ -37,12 +39,18 @@ export async function createContract({
   earnerDisplayName,
   projectName,
   dod,
-  amountJpy,
+  amountMinor,
+  currency = DEFAULT_CURRENCY,
   deadline,
   invitedHirerEmail,
   performedBy = 'creator',
 }) {
   if (!supabase) return { contract: null, error: NOT_CONFIGURED }
+  if (!isSupportedCurrency(currency)) {
+    // Named rather than left to the database's check_violation, which arrives
+    // as an opaque 400 with a constraint name in it.
+    return { contract: null, error: new Error('currency_unsupported') }
+  }
 
   const { data: userData, error: userError } = await supabase.auth.getUser()
   if (userError || !userData?.user) {
@@ -62,8 +70,16 @@ export async function createContract({
       // Sending it made every creation fail with a 403 that no test caught,
       // because the tests wrote their own insert bodies instead of calling this
       // function — which is why there is now a test that calls this function.
-      amount_jpy: amountJpy,
-      currency: 'JPY',
+      //
+      // The amount lives in amount_minor. amount_jpy is written only for a JPY
+      // contract, where a database CHECK requires it to equal amount_minor —
+      // it is the transitional mirror that keeps an Edge Function deployed
+      // before 2026-11-08 able to read the amount. For any other currency it
+      // must be absent: a cent amount in a column called amount_jpy is wrong
+      // by a factor of 100 to anything that trusts the name.
+      amount_minor: amountMinor,
+      ...(currency === 'JPY' ? { amount_jpy: amountMinor } : {}),
+      currency,
       deadline: deadline || null,
       invited_hirer_email: invitedHirerEmail,
       // Which side does the work. Normalised here rather than trusted: a check
@@ -100,7 +116,7 @@ export async function listContracts() {
   const { data, error } = await supabase
     .from('contracts')
     .select(
-      'id, project_name, dod, amount_jpy, currency, deadline, state, '
+      'id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, '
       + 'earner_display_name, invited_hirer_email, hirer_email, '
       + 'invite_token, invite_token_expires_at, invite_token_used_at, created_at, performed_by, '
       // When the counterparty's credential lapses. Already SELECT-granted and

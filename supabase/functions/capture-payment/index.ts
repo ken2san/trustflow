@@ -94,6 +94,26 @@ serve(async (req: Request) => {
       })
     }
 
+    // Settlement is JPY-only, and after 2026-11-08 a contract need not be.
+    //
+    // The transfer below hard-codes `currency: 'jpy'` and sends
+    // `contract.amount_jpy` as the amount. For a CAD contract that column is
+    // NULL (20261108161000) and `amount_minor` is cents, so the two ways this
+    // could have gone wrong are a transfer of null yen and a transfer of
+    // 1250 YEN for a CA$12.50 agreement. Payment behaviour is deliberately NOT
+    // being extended here — Stripe settlement is retired in production and
+    // multi-currency payout is a product and compliance decision, not a
+    // formatting one. So this refuses, before the settlement claim is written,
+    // rather than transferring an amount in the wrong unit.
+    if (contract.currency !== 'JPY') {
+      return new Response(JSON.stringify({
+        error: 'currency_not_settleable',
+        detail: `Settlement is JPY-only; this contract is in ${contract.currency}`,
+      }), {
+        status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
     const paymentIntentId = contract.stripe_payment_intent_id
     if (!paymentIntentId) {
       return new Response(JSON.stringify({ error: 'No PaymentIntent on this contract' }), {
@@ -141,7 +161,9 @@ serve(async (req: Request) => {
     let transferId: string
     try {
       const transfer = await stripe.transfers.create({
-        amount: contract.amount_jpy,
+        // Guarded above: this line is only reached for a JPY contract, where
+        // amount_minor and amount_jpy are the same integer by CHECK.
+        amount: contract.amount_minor ?? contract.amount_jpy,
         currency: 'jpy',
         destination: earnerStripeAccountId,
         source_transaction: chargeId,

@@ -110,6 +110,7 @@ async function makeDraft(ownerToken, ownerId, n) {
       project_name: `${RUN} — trial ${n}`,
       dod: ['A draft raced against its own evidence'],
       amount_jpy: 10000,
+      amount_minor: 10000,
       currency: 'JPY',
       deadline: tomorrowLocalISO(),
       invited_hirer_email: 'harness-guest@example.invalid',

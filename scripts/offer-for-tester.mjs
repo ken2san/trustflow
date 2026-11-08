@@ -21,6 +21,7 @@
 // record from real ones.
 
 import { ownerSession, rest, PROJECT_REF } from './lib/tfClient.mjs';
+import { formatMinor } from '../supabase/functions/_shared/money.ts';
 
 const BRIEF = process.argv[2] ?? 'Translate a two-page document into Japanese';
 const AMOUNT = Number(process.argv[3] ?? 20000);
@@ -45,6 +46,8 @@ const created = await rest(token, 'contracts?select=*', {
     project_name: BRIEF,
     dod: ['Deliver the translated document', 'Return it as a stamped PDF'],
     amount_jpy: AMOUNT,
+    amount_minor: AMOUNT,
+    amount_minor: AMOUNT,
     currency: 'JPY',
     deadline: deadlineISO(),
     invited_hirer_email: 'invited@example.invalid',
@@ -67,7 +70,7 @@ Offered on ${PROJECT_REF}
 
   contract   ${contract.id}
   brief      ${contract.project_name}
-  amount     ¥${Number(contract.amount_jpy).toLocaleString()}
+  amount     ${formatMinor(contract.amount_minor ?? contract.amount_jpy, contract.currency)}
   deadline   ${contract.deadline}
   performer  ${contract.performed_by}
 

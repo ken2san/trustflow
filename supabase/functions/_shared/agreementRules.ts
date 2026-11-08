@@ -49,12 +49,14 @@
 // Neither kind says anything about whether the deal is wise, fair, or true.
 // TrustFlow attests that a party said something; it does not vet what they said.
 
+import { minorDigitsOf, AMOUNT_MINOR_MAX } from './money.ts'
+
 /** Every rule violation this module can report. Stable strings: they are an API. */
 export type RuleViolation =
   | 'project_name_required' | 'project_name_too_long'
   | 'dod_not_array' | 'dod_empty' | 'dod_too_many_items'
   | 'dod_item_not_string' | 'dod_item_blank' | 'dod_item_too_long'
-  | 'amount_not_an_integer' | 'amount_not_positive'
+  | 'amount_not_an_integer' | 'amount_not_positive' | 'amount_too_large'
   | 'currency_unsupported'
   | 'deadline_malformed' | 'deadline_in_the_past'
   | 'invited_email_malformed'
@@ -62,13 +64,17 @@ export type RuleViolation =
   | 'performed_by_invalid'
 
 /**
- * The only currency.
+ * The currencies a contract may be denominated in.
  *
- * Not a judgement about the future: the amount column is literally
- * `amount_jpy`, and 1466 of 1466 rows across both projects are JPY. A second
- * currency is a schema change and a product decision, not a validation relaxation.
+ * Defined in _shared/money.ts and re-exported here so that callers which
+ * already import the rules keep working. It used to be `['JPY']` with a
+ * comment saying a second currency would be a schema change and a product
+ * decision rather than a validation relaxation — which is exactly what
+ * happened on 2026-11-08: the amount column became `amount_minor`, the DB
+ * CHECK was widened to the same six codes, and Kenji decided to record the
+ * currency and not the country.
  */
-export const SUPPORTED_CURRENCIES = ['JPY'] as const
+export { SUPPORTED_CURRENCIES } from './money.ts'
 
 /** `performed_by` already has a database CHECK; this mirrors it for the caller. */
 export const PERFORMED_BY_VALUES = ['creator', 'counterparty'] as const
@@ -121,10 +127,14 @@ export const UNRATIFIED_LIMITS = {
  * ceiling would invent one. Both are decisions for the user, taken against the
  * real history of the product.
  *
- * What this module therefore enforces is only the SHAPE: a positive integer.
- * JPY has no minor unit and the column is `integer`. Any ceiling — flat,
- * tiered, or per-account — is business policy, belongs in the creation path
- * against the actor's record, and is UNDECIDED.
+ * What this module therefore enforces is only the SHAPE: a positive integer
+ * in the currency's minor unit, within what the `integer` column can hold.
+ * That last bound is the column's and not a policy, but it became reachable
+ * when 2-decimal currencies arrived — a CAD amount is a hundred times larger
+ * in minor units than the same number of yen, so the ceiling moved from about
+ * ¥2.1 billion to about CA$21 million. Any *business* ceiling — flat, tiered,
+ * or per-account — belongs in the creation path against the actor's record,
+ * and is UNDECIDED.
  */
 export const AMOUNT_CEILING: 'UNDECIDED' = 'UNDECIDED'
 
@@ -174,6 +184,14 @@ export function deadlineFloor(now: Date = new Date(), days = DEADLINE_TIMEZONE_S
 export interface ProposedAgreement {
   project_name?: unknown
   dod?: unknown
+  /** The amount in the currency's minor unit. The field a caller should send. */
+  amount_minor?: unknown
+  /**
+   * The pre-2026-11-08 name for the same number, accepted so that an existing
+   * caller is not broken by the rename. Read only when `amount_minor` is
+   * absent; a proposal carrying both disagreeing values is not reconciled
+   * here, it simply uses `amount_minor`, which is the one the database stores.
+   */
   amount_jpy?: unknown
   currency?: unknown
   deadline?: unknown
@@ -198,9 +216,10 @@ export function violationsOf(
 ): RuleViolation[] {
   const bad: RuleViolation[] = []
   const {
-    project_name, dod, amount_jpy, currency, deadline,
+    project_name, dod, amount_minor, amount_jpy, currency, deadline,
     invited_hirer_email, earner_display_name, performed_by,
   } = proposal
+  const amount = amount_minor !== undefined ? amount_minor : amount_jpy
 
   // ── project name ──────────────────────────────────────────────────────────
   const name = typeof project_name === 'string' ? project_name.trim() : ''
@@ -227,15 +246,23 @@ export function violationsOf(
   }
 
   // ── amount ────────────────────────────────────────────────────────────────
-  if (typeof amount_jpy !== 'number' || !Number.isInteger(amount_jpy)) {
+  // Minor units, so an integer is the whole of the precision rule: "12.50 CAD"
+  // is 1250 and "12.5 JPY" does not exist. Turning what a human typed into
+  // this integer is minorUnitsFrom()'s job, in _shared/money.ts; by the time a
+  // proposal reaches here the question is only whether the number is storable.
+  if (typeof amount !== 'number' || !Number.isInteger(amount)) {
     bad.push('amount_not_an_integer')
-  } else if (amount_jpy <= 0) {
+  } else if (amount <= 0) {
     bad.push('amount_not_positive')
+  } else if (amount > AMOUNT_MINOR_MAX) {
+    bad.push('amount_too_large')
   }
 
   // ── currency ──────────────────────────────────────────────────────────────
-  if (typeof currency !== 'string'
-      || !(SUPPORTED_CURRENCIES as readonly string[]).includes(currency)) {
+  // minorDigitsOf returns null for anything not on the list, so this is the
+  // same check as membership — asked through the function that also answers
+  // how many decimals the currency has, so the two cannot disagree.
+  if (minorDigitsOf(currency) === null) {
     bad.push('currency_unsupported')
   }
 

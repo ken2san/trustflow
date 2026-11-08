@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ShieldCheck, ArrowRight, X, Download, Lock, CheckCircle2, User, AlertTriangle, Clock, Loader2 } from "lucide-react";
+import { formatMinor, DEFAULT_CURRENCY } from "../../supabase/functions/_shared/money.ts";
 
 // Each of these says only what the system does. The three cards here used to
 // promise a Trust Passport that builds over time, records "you own
@@ -154,7 +155,8 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
   // database through the validated invite path, not from the URL.
   const {
     project_name: project,
-    amount_jpy: amount,
+    amount_minor: amountMinor,
+    amount_jpy: amountJpy,
     currency,
     deadline,
     earner_display_name: inviter,
@@ -184,11 +186,11 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
   // when they type a different address — both remain separately recorded.
   const acceptingEmail = (guestEmail || invitedEmail || '').trim();
 
-  const amountLabel = amount > 0
-    ? new Intl.NumberFormat(undefined, {
-        style: 'currency', currency: currency ?? 'JPY', maximumFractionDigits: 0,
-      }).format(amount)
-    : "TBD";
+  // The amount is an integer in the currency's minor unit. `amount_jpy` is the
+  // pre-2026-11-08 name, read only if a server that predates the rename
+  // answered this invitation; it is NULL on any contract that is not in yen.
+  const amount = amountMinor ?? amountJpy;
+  const amountLabel = amount > 0 ? formatMinor(amount, currency ?? DEFAULT_CURRENCY) : "TBD";
   const deadlineLabel = deadline
     ? new Date(`${deadline}T00:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
     : 'Not set';
