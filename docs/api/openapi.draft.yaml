@@ -72,7 +72,10 @@ paths:
       summary: Append one event to an agreement's chain.
       x-trustflow-status: live
       description: |
-        The only writer to `events`. A caller supplies `type`, `contract_id`,
+        The general writer for party-asserted events. (NOT the only writer to
+        `events`: `validate-invite-token` and `reissue-guest-access` each append
+        inside their own RPC. log-event's own header comment still says "the
+        only writer" and is stale — reported, not changed.) A caller supplies `type`, `contract_id`,
         `payload` and optionally `idempotency_key`. Everything that makes the
         row evidence is derived server-side: `actor_id` from the presented
         credential, `created_at` from the server clock, `dod_hash` and
@@ -513,8 +516,14 @@ paths:
       responses:
         '200':
           description: Zero or one row deleted; `count` is the only way to tell a refusal from "already gone".
-        '409':
-          description: TF004 — evidence appeared while this delete was in flight.
+        '400':
+          description: |
+            TF004 — evidence appeared while this delete was in flight, so the
+            DELETE itself is refused (not the append). PostgREST surfaces it as
+            HTTP **400** with its own `{code,message,details,hint}` body, not as
+            the Edge Functions' `{error}` shape — measured in Task 3
+            (.ada/claude-report-3.md:229). `src/lib/contracts.js:342` reads
+            `error.code`.
 
   /rest/v1/events:
     get:

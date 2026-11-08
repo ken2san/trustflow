@@ -49,7 +49,10 @@ test.
 
 ### The write path, as it is
 
-`log-event` is the only writer to `events` (`index.ts:1-30`). A caller supplies
+`log-event` is the general writer for party-asserted events. It is **not** the
+only writer to `events` — `validate-invite-token` and `reissue-guest-access`
+each append inside their own RPC — although `log-event`'s own header comment
+still claims it is (`index.ts:3`), which is stale and is reported below. A caller supplies
 `type`, `contract_id`, `payload`, `idempotency_key` and nothing else that
 matters: `actor_id`, `created_at`, `event_hash`, `prev_event_hash`, `dod_hash`
 and the agreement snapshot are all derived server-side, and a caller offering
@@ -554,3 +557,92 @@ delegations too. It should not be fixed that way in phase 1: a guest has no
 account to issue against, and the per-contract delegation that would replace
 their token is phase 2 work with a counterparty-facing onboarding story
 attached. Record the asymmetry; do not paper over it.
+
+---
+
+## 9. Review verdict: FAIL, and what has to change before implementation
+
+Codex reviewed the five load-bearing claims (2026-11-08, static, no queries).
+**Verdict: FAIL — do not implement from this draft.** I verified each finding in
+the source and agree with all of them. Three are blocking, and two of the three
+are mistakes of exactly the kind this project has paid for before.
+
+**B1. TF006 does not give exact revocation as designed (§1.3).** My claim was
+that the trigger could refuse a revoked delegation "under the same lock the
+other guards take". It cannot: the existing guards lock the **contracts** row,
+while revoke updates the **delegations** row, so there is no common lock. The
+sequence trigger-reads-live-D → revoke-commits → insert-commits survives. The
+fix is for the trigger to lock the delegation row itself (`for update`, or at
+least `for share`; `for key share` does not conflict with an UPDATE of the
+non-key `revoked_at`) and re-test liveness on the locked row. The guarantee must
+then be stated as a serialization point — *no new write is admitted under D
+after a revoke commits* — not as cancelling a write already past the lock. The
+expiry comparison also needs a stated clock: `now()` at statement time can admit
+a delegation that expired while the statement waited.
+
+**B2. The guest/delegation asymmetry is not fundamental (§1.3, §8).** I claimed
+guest tokens cannot be checked in-transaction because the event does not carry
+the token. True as implemented, but the fix does not need the secret: record a
+non-secret credential **generation id** on the guest event and the same
+lock-and-check works. So the asymmetry is an implementation gap, not a property
+of the credential, and §8's advice to "record the asymmetry, do not paper over
+it" rests on a distinction that does not hold.
+
+**B3. Delegated reads do not run as the owner (§1.5, §3.1).** `auth.uid()` is
+null for a request carrying the anon key plus a custom header, so
+`parties_read_own_contracts` returns nothing. `agreement_status`, `list_events`
+and `export_record` therefore **cannot be thin PostgREST wrappers** — each needs
+a server endpoint that verifies the delegation and applies owner/contract/scope
+itself, because service-role access bypasses the RLS that was doing that work.
+This raises phase 1's effort materially and is the single biggest correction.
+
+**B4. Idempotent replay bypasses every delegation check (§4.1).** `log-event`
+returns an existing event before any insert (`index.ts:293-305`), so a
+trigger-based TF006 never runs on a replay; and `idempotencyOutcome` matches on
+type and `actor_id` only (`eventWriteRules.ts:43-50`), so with `actor_id` kept
+as the owner, a **revoked** delegation, or one with narrower scope, replays
+another delegation's event — and the authentication recorded on it still names
+the first delegation. My "the matching rule stays exactly as written" was wrong:
+the rule can stay, but liveness, owner, contract and scope must be checked
+*before* the replay lookup, and whether cross-delegation dedup is wanted is an
+open decision, not a default.
+
+**B5. `issuer_assurance` does not make "P authorised this" provable (§2.1-2.2).**
+It shows that a verified account session requested issuance. It does not show
+the human's intent to delegate, that the secret was not stolen, or anything
+about the individual act — issuance has no act-bound challenge either. The
+honest claim is server-attested: *TrustFlow issued D on the authority of an
+authenticated session belonging to P, and recorded acts by D's bearer.* So §2.1's
+sentence needs its last clause weakened from "P authenticated at T₀" to "an
+authenticated session of P requested D at T₀; the authentication itself was
+earlier, and recoverable only when `amr` was present". Relatedly, §2.3's receipt
+arithmetic is wrong: `issuer_assurance.seconds_since_authentication` is relative
+to **issuance**, so it must be subtracted from `delegation.issued_at`, never
+from the event's `created_at`.
+
+Two narrowings rather than errors: the custom header is the right choice *given
+that verify_jwt stays on*, not the only possible design; and "agent A acted" is
+itself unverified, since the label is owner-chosen text — "the bearer of D,
+under the label A" is what the record supports.
+
+**The OpenAPI draft's `live` half needs these corrections**, all verified:
+`wrong_state_for_event_type` (409, with `detail` and `hint`) and
+`internal_error` (500) are missing from `log-event`; `internal_error` is missing
+from the other three; `ownerJwt` is defined but never referenced by any
+operation while global security names only `anonKey`; `securitySchemes.anonKey`
+should say *legacy anon JWT* rather than "publishable"; `POST /rest/v1/contracts`
+has no `requestBody` and omits `Prefer: return=representation`, without which it
+does not in fact return the row and the invite token; the DELETE needs an
+`id=eq.<uuid>` filter and `Prefer: count=exact` (and `count` is a
+`Content-Range` header, not a body field); `truncated` means "the cap was
+reached", which at exactly 500 events is true with nothing left; the invitation
+digest check binds only when a non-empty digest is supplied; the two response
+schemas in the `oneOf` have no `required` fields, so they are not actually
+exclusive; and `Event.type` must be split into a write-input enum and a
+read-event type, since stored rows include `dod.consent_recorded`,
+`access.reissued` and the retired names.
+
+**One code defect found by the review, reported and not changed:**
+`log-event/index.ts:3` says it is "the only writer to the `events` table". That
+stopped being true when acceptance moved into `validate-invite-token` so that
+the acceptance and its evidence commit together.
