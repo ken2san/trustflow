@@ -13,6 +13,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "capture:guest": "playwright test tests/e2e/guest-path-capture.spec.js",
+    "capture:owner": "playwright test tests/e2e/owner-screens-capture.spec.js",
+    "visual:diff": "node scripts/visual-diff-list.mjs",
     "check:migrations": "node scripts/check-migrations.mjs",
     "test:api": "node scripts/api-e2e.mjs",
     "test:race": "node scripts/race-delete-vs-append.mjs",

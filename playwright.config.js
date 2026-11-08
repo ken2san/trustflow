@@ -53,6 +53,11 @@ export default defineConfig({
         // where a counterparty most likely reads it. It stubs every call
         // including auth, so it cannot write at either width.
         '**/guest-path-capture.spec.js',
+        // Same reason, from the owner's side: the contracts home is a list of
+        // rows whose content can be far wider than a phone, and the overflow
+        // assertion it carries only means something at a width where a layout
+        // can actually run out of room.
+        '**/owner-screens-capture.spec.js',
       ],
       // A denylist, not an allowlist. Codex's first version listed every
       // included test title in one regex, which fails silently in the worst
