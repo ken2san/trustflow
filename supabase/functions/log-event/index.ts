@@ -34,7 +34,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord, roleInAgreement } from '../_shared/eventRecord.ts'
 import {
-  createdAtFollows, guestCredentialStillValid, idempotencyOutcome,
+  createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
 } from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
@@ -427,7 +427,30 @@ serve(async (req: Request) => {
       // "refused identically forever": a later re-assertion after a rejection
       // legitimately changes the state. What is wrong is retrying it here,
       // automatically, inside one request.)
-      if (insertError.code === 'TF001') {
+      const fault = eventWriteFault(insertError.code)
+
+      // The contract was deleted while this request was in flight.
+      //
+      // WHAT THIS ANSWERS
+      // The handler read the contract and authorised the caller near the top;
+      // the owner may legally delete an unaccepted draft that carries no
+      // evidence, and while this insert has not landed it carries none. The
+      // event used to land anyway, against a parent that was gone — text
+      // `contract_id`, no foreign key, and nothing to refuse it. Permanent
+      // evidence for an agreement no party can ever reach again.
+      //
+      // Closed in the database, under a lock on the contract row, because
+      // that is the only place the answer stays true between the check and
+      // the write: enforce_event_parent_contract, 20261108121000. Here there
+      // is only the reply, which is deliberately not `contract_not_found`:
+      // the contract WAS found, this request began against it, and a log that
+      // cannot tell "never existed" from "deleted under you" cannot show a
+      // deletion taking effect. Not retried — nothing brings it back.
+      if (fault === 'contract_gone') {
+        return json({ error: 'contract_deleted', detail: insertError.message }, 409)
+      }
+
+      if (fault === 'wrong_state') {
         // ...unless this IS the operation that moved the state. Two requests
         // carrying the same idempotency key can both miss the lookup above;
         // one inserts and changes the state, the other waits on the lock and
@@ -458,7 +481,7 @@ serve(async (req: Request) => {
 
       // 23505 on the fork index means another event claimed this tip first.
       // Re-read the tip and try again.
-      if (insertError.code === '23505') {
+      if (fault === 'tip_taken') {
         if (insertError.message?.includes('events_idempotency_idx')) {
           // The same disclosure as the lookup above, reached the other way.
           // This branch runs when a row under the key was committed between

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  createdAtFollows, guestCredentialStillValid, idempotencyOutcome,
+  createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
 } from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
@@ -179,5 +179,25 @@ describe('createdAtFollows — the chain and the clock must not disagree', () =>
     expect(createdAtFollows(PREV, 'tomorrow')).toBe(false)
     expect(createdAtFollows('tomorrow', '2026-11-07T04:00:01.000Z')).toBe(false)
     expect(createdAtFollows(PREV, '')).toBe(false)
+  })
+})
+
+describe('eventWriteFault — the database\'s refusal, named once', () => {
+  it('names each guard that refuses an insert', () => {
+    expect(eventWriteFault('TF001')).toBe('wrong_state')
+    expect(eventWriteFault('TF002')).toBe('contract_gone')
+    expect(eventWriteFault('23505')).toBe('tip_taken')
+  })
+
+  it('calls anything else unknown, which is a 500 and not a refusal', () => {
+    // The failure mode this guards against is the opposite one: a code the
+    // handler does not know being answered as a refusal the caller should
+    // act on. 23503 is a foreign-key violation — a real fault, not a race.
+    expect(eventWriteFault('23503')).toBe('unknown')
+    expect(eventWriteFault('TF00')).toBe('unknown')
+    expect(eventWriteFault('tf001')).toBe('unknown')
+    expect(eventWriteFault(null)).toBe('unknown')
+    expect(eventWriteFault(undefined)).toBe('unknown')
+    expect(eventWriteFault('')).toBe('unknown')
   })
 })

@@ -136,3 +136,40 @@ export function createdAtFollows(
   if (Number.isNaN(prev) || Number.isNaN(next)) return false
   return next > prev
 }
+
+/**
+ * What the database said when it refused an insert into `events`.
+ *
+ * The guards on that table raise a SQLSTATE of their own so that the answer to
+ * the caller can be the right one. They were compared as string
+ * literals at each site, which is how 'TF001' came to be handled in one place
+ * and not another; naming them once removes that.
+ *
+ *   'wrong_state'        TF001, enforce_performance_order. The agreement is
+ *                        not in a state this event can follow. Never retried:
+ *                        the loop exists for a contested tip, and retrying a
+ *                        wrong-state refusal does nothing the caller did not
+ *                        already do.
+ *   'contract_gone'      TF002, enforce_event_parent_contract. The agreement
+ *                        was deleted while this write was in flight. Never
+ *                        retried either — nothing brings it back.
+ *   'tip_taken'          23505, events_chain_no_fork_idx or
+ *                        events_idempotency_idx. Which of the two it is has
+ *                        to be read off the message, so that stays at the
+ *                        call site; this only says the insert collided.
+ *   'unknown'            anything else, which is a 500 and not a refusal.
+ */
+export type EventWriteFault =
+  | 'wrong_state'
+  | 'contract_gone'
+  | 'tip_taken'
+  | 'unknown'
+
+export function eventWriteFault(code: string | null | undefined): EventWriteFault {
+  switch (code) {
+    case 'TF001': return 'wrong_state'
+    case 'TF002': return 'contract_gone'
+    case '23505': return 'tip_taken'
+    default:      return 'unknown'
+  }
+}
