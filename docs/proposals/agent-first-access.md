@@ -131,7 +131,7 @@ A new `delegations` table. Phase 1 fields, kept deliberately short:
 | `token_sha256 text not null unique` | **the hash, never the secret** |
 | `scopes text[] not null` | §1.4 |
 | `contract_id uuid null` | null = every agreement of this owner; set = exactly one |
-| `issuer_assurance jsonb not null` | §2.2 — the human authentication fact, captured once |
+| `issuer_assurance jsonb not null` | §2.2 — how the *issuing session* had authenticated, captured once. Not a record of intent |
 | `created_at`, `expires_at not null`, `revoked_at null`, `last_used_at null` | lifecycle |
 
 **Storing a hash is a deliberate divergence from the two existing credentials**,
@@ -159,23 +159,39 @@ moment it is used.
 agent cannot revoke its own delegation, and a delegation with `manage` authority
 over other delegations is not in phase 1.
 
-**Revocation must be immediate, and this is the one place the design is
-deliberately better than what exists.** The guest path cannot do this: a token
-revoked while a request is in flight can still write, because `log-event`
-re-reads the credential just before the insert but the window is not zero, and
-closing it needs the check *inside the insert's transaction* — which the event
-row cannot do because it does not carry the token that was presented
-(`log-event/index.ts:377-399`, and `.ada/claude-report-2.md`). A delegation
-*can* carry it: the delegation id is already inside the event payload as
-evidence, so a BEFORE INSERT trigger can join `delegations` and refuse a revoked
-or expired one under the same lock the other guards take, in the same
-transaction. That is a new custom SQLSTATE in the family TF001–TF005 already
-established — call it **TF006, "the delegation is not live"** — and it makes
-revoke-while-in-flight structurally impossible rather than narrow.
+**Revocation is effective immediately, with one precise meaning.** The event
+carries the delegation id (§4.1 makes it a column), so a BEFORE INSERT trigger
+can join `delegations`, **lock that row**, and re-test liveness on the locked row
+inside the insert's own transaction. The lock has to be `for update` or
+`for share`; **`for key share` is not enough**, because it does not conflict with
+an UPDATE of the non-key `revoked_at` — which is exactly the update revoke
+performs. Refusal is a new custom SQLSTATE in the TF001–TF005 family already
+established: **TF006, "the delegation is not live"**.
 
-This is the strongest argument for doing the delegation work properly rather
-than papering over it with a long-lived JWT: it is the first credential in the
-system whose withdrawal is exact.
+**The guarantee is a serialization point, not a cancellation:** *no write is
+admitted under D once a revoke has committed.* A write whose trigger already
+took the lock and passed the check will commit; TF006 does not reach back past
+the lock. The first draft of this section claimed the trigger could do this
+"under the same lock the other guards take", and that was wrong: the existing
+guards lock the **contracts** row while revoke updates the **delegations** row,
+so there was no common lock, and the sequence read-live-D → revoke-commits →
+insert-commits survived.
+
+Expiry needs its clock named too. The trigger compares against `now()`, which in
+Postgres is transaction-start time, so a delegation that expires while the
+statement waits on the lock is still admitted. That is a deliberate choice — a
+write is judged as of the moment its transaction began — and it has to be
+written down, because the alternative (`clock_timestamp()`) makes the same
+statement accept or refuse depending on lock contention.
+
+**The asymmetry with the guest token is an implementation gap, not a property of
+the credential.** The first draft said a guest token cannot be checked
+in-transaction because the event does not carry the token
+(`log-event/index.ts:377-399`, `.ada/claude-report-2.md`). The first half is
+true as implemented; the conclusion is not, because the check never needed the
+secret: record a non-secret **credential generation id** on the guest event and
+the same lock-and-check works verbatim. Closing that gap is still not phase 1
+work — but it is work, not an impossibility, and §8 is corrected accordingly.
 
 ### 1.4 Scopes — three, not a matrix
 
@@ -204,8 +220,15 @@ phase 2.
   they hold is the one the owner handed them. A counterparty's agent therefore
   gets a **per-contract delegation issued by the owner**, which is the same
   authority shape as the guest token it replaces, and it is phase 2.
-- **No scope on reading other people's agreements.** RLS already answers that
-  and the delegation adds nothing: a delegated read runs as the owner.
+- **No RLS shortcut for delegated reads.** The first draft said "a delegated
+  read runs as the owner". It does not. A request carrying the anon key plus a
+  custom header has `auth.uid() = null`, so `parties_read_own_contracts` admits
+  nothing at all. Delegated reads therefore cannot be thin PostgREST calls: each
+  needs a server endpoint that resolves the delegation and applies owner,
+  contract and scope **itself**, because the service-role access such an
+  endpoint uses bypasses the very RLS that was doing that work. This is the
+  largest correction in the document, and it moves phase 1's read path to **L**
+  (§7).
 
 ---
 
@@ -218,9 +241,12 @@ delegation D at T"*. **That sentence is an overclaim, and `authAssurance.ts`
 already explains why in a comment about a different field.** What the system can
 establish is:
 
-> An agent presenting delegation **D** — issued by **P** at **T₀**, labelled
-> **A**, scoped **S** — asserted **X** at **T**, bound to agreement version
-> `agreement_hash`. **P** authenticated at **T₀**. Nothing shows P saw this act.
+> **The bearer of** delegation **D** — issued by **P** at **T₀**, under the
+> owner-chosen label **A**, scoped **S** — asserted **X** at **T**, bound to
+> agreement version `agreement_hash`. An authenticated session belonging to **P**
+> requested **D** at **T₀**; P's own authentication happened earlier than that,
+> and is recoverable only where `amr` was present. Nothing shows P saw this act,
+> and nothing shows that the software named by **A** is what ran.
 
 The difference is the whole value of the feature. "P said X" through an agent is
 precisely the claim `act_bound_authentication: false` exists to deny
@@ -242,11 +268,16 @@ schema:
 3. A `delegation` block in `assuranceForRecord` (`:359-371`):
    `{ id, label, scopes, contract_scoped, issued_at, expires_at, issuer_assurance }`.
 
-`issuer_assurance` is the move that makes the sentence provable rather than
-asserted: it is the owner's own `assuranceForRecord` output **captured at
+`issuer_assurance` is the owner's own `assuranceForRecord` output **captured at
 issuance**, so every delegated event carries, immutably and hashed, how and when
-the human authenticated. Without it, "P authorised this" is an unsupported
-inference from a secret the server cannot attribute.
+the session that asked for the delegation had authenticated. It does **not** make
+"P authorised this" provable, and the first draft said it did. What it attests is
+narrower, and server-side: *TrustFlow issued D on the authority of an
+authenticated session belonging to P, and recorded acts by D's bearer.* It shows
+nothing about the human's intent to delegate, nothing about whether the secret
+was later copied or stolen, and nothing about the individual act — issuance has
+no act-bound challenge either. It is still worth capturing, because without it
+not even that narrower sentence can be made.
 
 `assuranceMeaning` (`:211-260`) gains the delegated case. It proves: a delegation
 issued by this owner was presented and was live at write time (TF006, §1.3);
@@ -257,9 +288,12 @@ three lines belong in `does_not_prove`, travelling inside the data, for the
 reason the module already gives — a machine reader has no README (`:202-210`).
 
 **`actor_id` stays the owner's user id.** The agent is not a party; it is how a
-party acted. This keeps `ROLE_REQUIRED`, `roleInAgreement`, RLS, the state
-projection and `idempotencyOutcome`'s actor match all working unchanged, and it
-is the single biggest reason this feature needs no change to `events`.
+party acted. That keeps `ROLE_REQUIRED`, `roleInAgreement`, RLS and the state
+projection working unchanged. It does **not** leave `events` untouched, as the
+first draft claimed: precisely because `actor_id` no longer distinguishes one of
+the owner's agents from another, the dedup rule has to, and that needs a
+queryable `delegation_id` column (§4.1). One nullable column, null on every row
+written to date.
 
 ### 2.3 Receipt and verify
 
@@ -272,26 +306,38 @@ of this arrives free. Two concrete changes:
   Once a counterparty can act under a delegation that line is **wrong rather
   than incomplete**, and it must read the recorded assurance instead of assuming
   the credential.
-- The receipt should name the agent beside the act — "Marked delivered · via
-  *Claude Code on Iris* under delegation `D` · the owner authenticated 6 days
-  earlier" — because the elapsed time between `issuer_assurance` and the event
-  is the fact a reader actually wants, and it is already derivable from
-  `seconds_since_authentication` plus `created_at`.
+- The receipt should name the agent beside the act — "Marked delivered · via the
+  bearer of delegation `D`, labelled *Claude Code on Iris* · the issuing session
+  had authenticated 6 days before the delegation was issued, and the delegation
+  was issued 3 days before this act" — because the elapsed time is the fact a
+  reader actually wants. **The arithmetic in the first draft was wrong:**
+  `issuer_assurance.seconds_since_authentication` is measured relative to
+  **issuance**, so it is subtracted from `delegation.issued_at`, never from the
+  event's `created_at`. Issuance-to-act is a second, separate interval. Both
+  belong on the receipt; neither is the other.
 - `verify-receipt.mjs` needs no new cryptography. The delegation block is inside
   `payload`, covered by `payload_hash` and therefore by `event_hash`, so it
   verifies by the existing path. What it must **not** do is treat a delegated
   event as equivalent to a human-session one; the distinction is in the data and
   should be in the output.
 
-A reader who should see less: `guestEventView.ts`'s allowlist never carries
-`_`-prefixed keys (enforced by a test), so `_authentication` and its delegation
-block are not projected to the guest per-event. Note the lesson from Task 4 —
-`guest-contract-events` returns `acceptance_identity` as a separate block
-outside that filter (`index.ts:243-245`), so **the projection has to be checked
-explicitly, not inferred from the allowlist.** Whether a counterparty should see
-which agent acted for the owner is a product question; my view is yes, since it
-is exactly the kind of fact the counterparty is entitled to weigh, and the label
-is owner-chosen free text with no claim attached.
+**What the counterparty sees is now decided** (Kenji, 2026-11-08): the
+counterparty **does** see which of the owner's agents acted — in their view of
+the record, and in receipts and exports. That is a deliberate projection, not a
+side effect, so it has to be built as one. `guestEventView.ts`'s allowlist never
+carries `_`-prefixed keys (enforced by a test), so `_authentication` and its
+delegation block are **not** projected today; and the lesson from Task 4 is that
+this must be checked rather than inferred, because `guest-contract-events`
+already returns `acceptance_identity` as its own block outside that filter
+(`index.ts:243-245`).
+
+So `guest-contract-events` gains a per-event block of exactly three non-secret
+fields — `{ delegation_id, label, acted_for: "owner" }` — beside the shaped
+payload and never inside it, while `token_sha256`, `scopes` and
+`issuer_assurance` stay owner-only. The wording has to stay honest about what a
+label is: **text the owner chose, not a verified identity.** One clause carries
+that — "recorded as acted by *Claude Code on Iris*, a name the owner gave this
+agent" — and it is one line of explanation, no new button, no new field.
 
 ---
 
@@ -311,11 +357,20 @@ bold; everything else defaults.
 | `export_record` | **id** | the same bytes the web UI's export produces |
 | `verify_record` | **id**, or a receipt file | per-event hash and chain result, and what it does not prove |
 
-Mapped onto what exists: `create_agreement` is the PostgREST insert
-`createContract` already does; `record_event` is `log-event`;
-`list_events`/`export_record` are PostgREST plus `src/lib/auditExport.js`;
-`verify_record` is `scripts/verify-chain.mjs` and `verify-receipt.mjs`, which
-already exist as scripts and need no server.
+Mapped onto what exists, **with the read path corrected**: `record_event` is
+`log-event`, and `verify_record` is `scripts/verify-chain.mjs` and
+`verify-receipt.mjs`, which run on bytes the caller already holds and need no
+server. The other four are **not** thin wrappers over PostgREST, for the reason
+in §1.5 — under a delegation `auth.uid()` is null, so RLS admits nothing.
+`create_agreement`, `agreement_status`, `list_events` and `export_record` each
+need a server-side endpoint that verifies the delegation, resolves the owner and
+the contract, applies scope, and only then reads or writes with service-role
+credentials. `createContract` and `src/lib/auditExport.js` supply the shape of
+the query and of the export — not the authorization, which has to be written.
+
+That is one new Edge Function with four operations (or four thin ones over a
+shared resolver), and it is why phase 1's read work is **L** rather than the
+near-free mapping this section first implied.
 
 `agreement_status` is the one that is **not** a thin wrapper, and it is the tool
 Kenji will use most. It needs the derivation that `docs/proposals/web-ux-waiting-and-wrong-email.md`
@@ -356,7 +411,7 @@ not arise. In phase 2 it is the first act that should be `approve`-only.
 
 | option | new buttons | new fields | new lines of explanation |
 | --- | --- | --- | --- |
-| **recommended**: 6 tools, approval by refusal + link | **1** ("Create agent token", on an existing settings surface) | **1** (label, optional, defaults to "My agent") | **~3** (what the token does, that it is shown once, how to revoke) |
+| **recommended**: 6 tools, approval by refusal + link | **1** ("Create agent token", on an existing settings surface) | **1** (label, optional, defaults to "My agent") | **~4** (what the token does, that it is shown once, how to revoke, and one clause on the counterparty's screen saying the agent label is a name the owner chose — §2.3) |
 | 6 tools + an `approve_action` tool | 1 | 1 | ~6 (plus explaining when to call it) |
 | 10 tools (one per endpoint) + per-act scopes | 1 | ~8 (a scope checkbox each) | ~15 |
 
@@ -377,14 +432,37 @@ is uniform across the three functions that currently disagree. Then:
   already write an event inside their RPC, so the natural implementation is to
   pass the key into the event row and let `events_idempotency_idx` do the work —
   no new table, no new index.
-- The matching rule stays `idempotencyOutcome` **exactly as written**
-  (contract + key + type + actor). It was tightened after a measured
-  cross-actor disclosure (§0), and a second copy of that rule is how this
-  project's one production chain bug happened.
-- For a delegated write the actor is still the owner (§2.2), so an owner
-  retrying by hand and their agent retrying the same operation deduplicate
-  against each other — which is the behaviour you want the first time an agent
-  and a human both press the same button.
+- **Every delegation check runs before the replay lookup.** `log-event` returns
+  an existing event and exits *before any insert*
+  (`log-event/index.ts:293-305`), so a trigger-based TF006 never fires on a
+  replay — the first draft missed this entirely. Liveness, owner, contract and
+  scope must therefore be checked in the function, against the delegation
+  presented *on this request*, before `idempotencyOutcome` is consulted at all.
+  Otherwise a revoked delegation, or one with narrower scope, replays a write it
+  could not now perform, and the authentication recorded on the returned event
+  still names the delegation that made it.
+- **Dedup is scoped per delegation** (Kenji, 2026-11-08): the match becomes
+  contract + key + type + actor **+ delegation**. A replay re-checks the
+  presented delegation and **never** returns an event written under a different
+  one. The actor-only match would do exactly that, since `actor_id` stays the
+  owner (§2.2) while `idempotencyOutcome` compares type and `actor_id` only
+  (`_shared/eventWriteRules.ts:43-50`). Two of an owner's delegations colliding
+  on a key now get `idempotency_key_in_use`, not a silent hand-over of another
+  agent's event.
+- That costs the one schema change §2.2 claimed not to need: the recorded
+  delegation id has to be **queryable**, so `events` gains a nullable
+  `delegation_id uuid` — null for every event written to date and for every
+  human-session write — and `events_idempotency_idx` extends to
+  `(contract_id, idempotency_key, delegation_id)`. An expression index over the
+  payload JSON would also work and is worse to read. The §1.3 trigger wants the
+  same column, so it pays for itself twice.
+- **The cost is a real one, and it is the right side of the trade.** An owner
+  retrying *by hand* no longer deduplicates against their agent's retry, because
+  `delegation_id` differs (null versus D) — so a human and an agent pressing the
+  same button can produce two events. The alternative is one agent's record
+  being handed to another, which is the failure mode §0's cross-actor disclosure
+  already taught this project once. Whether cross-delegation dedup is ever
+  wanted is an open decision, not a default.
 
 ### 4.2 One error envelope, no renames
 
@@ -448,11 +526,15 @@ origin naming what TrustFlow is, what it refuses to claim, the MCP endpoint, and
 a link to `docs/api/openapi.draft.yaml`. It is the single highest-leverage item
 in this document relative to its cost: an agent that reads it stops guessing.
 
-**`robots.txt`** — there is none today (no `public/`, no `vercel.json`, both
-verified), so the prototype at `project-trustflow.vercel.app` is crawlable.
-`HANDOFF.md` has a whole section on what being publicly reachable does and does
-not expose; adding a `robots.txt` that disallows crawling while the product is a
-prototype is a two-line file and is independent of everything else here.
+**`robots.txt`** — **shipped in Task 6** (`public/robots.txt`, commits
+`f3c80cc` and `c6aacd3`), so this is done rather than proposed, and the design
+above has to stay consistent with it. It disallows only the two URL shapes that
+carry a credential (`/*?*token=`, `/*?*guest=`), leaves `/` crawlable, and
+explicitly allows `/llms.txt`. That is the right posture for this document:
+`llms.txt`, the OpenAPI file and the MCP endpoint are all meant to be **found**,
+and nothing here asks for the site to be hidden. The file's own header says it
+is not access control, which is the part `HANDOFF.md`'s section on public
+reachability already made clear.
 
 The OpenAPI document itself is the fourth artefact and the draft is
 `docs/api/openapi.draft.yaml`, delivered beside this one.
@@ -489,18 +571,28 @@ code and is the clearest case.
 | item | effort | migration |
 | --- | --- | --- |
 | `delegations` table, RLS (owner reads own), `token_sha256` unique | S | **yes** — new table, additive |
-| TF006 trigger: refuse an event whose delegation is revoked/expired, under the row lock | S | **yes**, with its self-test at apply time, as TF002–TF005 have |
+| `events.delegation_id` nullable, idempotency index extended (§4.1) | S | **yes** — additive |
+| TF006 trigger: lock the delegation row, re-test liveness on it, named clock (§1.3) | M | **yes**, with its self-test at apply time, as TF002–TF005 have |
 | Issue/revoke Edge Function, modelled on `reissue-guest-access` | M | no |
 | `authAssurance.ts`: new credential, new level, `delegation` block, `assuranceMeaning` case | S | no |
-| `log-event`: accept `x-trustflow-delegation`, resolve the actor from it, enforce scopes | M | no |
+| `log-event`: accept `x-trustflow-delegation`, resolve the actor, enforce scopes, and check all of it **before** the replay lookup (§4.1) | M | no |
+| **Delegated read/write endpoints** behind `create_agreement`, `agreement_status`, `list_events`, `export_record` — RLS cannot carry them, so authorization is written by hand (§1.5, §3.1) | **L** | no |
 | MCP server: 6 tools, pasted token | M | no |
 | `agreement_status` derivation shared with the web UI | M | no |
-| `llms.txt`, `robots.txt` | S | no |
+| Guest-facing delegation label block in `guest-contract-events`, receipts and exports (§2.3) | S | no |
+| `llms.txt` (`robots.txt` shipped in Task 6) | S | no |
 | Web UI: one button, one optional field, token shown once, revoke list | S | no |
 
-Two migrations, both additive and reversible, both carrying their own apply-time
-self-test in the pattern the four 2026-11-08 migrations established. Everything
-else is functions and a server.
+Three migrations now, all additive and reversible, each carrying its own
+apply-time self-test in the pattern the four 2026-11-08 migrations established.
+
+**This is a materially larger phase 1 than the first draft claimed, and the
+reason is the read path.** "A delegated read runs as the owner" was false, so
+four of the six tools need their own server endpoint with authorization written
+by hand instead of inherited from RLS: one **L** row, and the critical path.
+TF006 moved S → M once the lock and the clock had to be designed rather than
+assumed. Nothing here is new scope — it is the same feature, measured
+correctly.
 
 ### Phase 2 — other users
 
@@ -532,11 +624,13 @@ and phase 1 has exactly one user.
 
 1. **"A record must state *party P said X via agent A under delegation D at
    T*"** — not quite, and the gap matters more here than anywhere else in the
-   product. The honest sentence is §2.1's, and the thing that makes it
-   defensible is `issuer_assurance`: capture the human's authentication once, at
-   issuance, and carry it into every delegated event. Without that the record
-   implies a human act behind every agent act, which is the exact failure
-   `authAssurance.ts` was written to end.
+   product. The honest sentence is §2.1's: the **bearer** of D acted, under a
+   label the owner chose, and an authenticated session of P had asked for D
+   earlier. `issuer_assurance` is worth capturing because without it not even
+   that can be said — but it does **not** upgrade the sentence to "P authorised
+   this act" (§2.2), and the first draft of this section said it did. Stating it
+   the strong way would imply a human act behind every agent act, which is the
+   exact failure `authAssurance.ts` was written to end.
 
 2. **The agent surface should not be built before `agreement_status` has a
    single implementation.** The one tool Kenji will use hourly is the one that
@@ -550,22 +644,31 @@ and phase 1 has exactly one user.
    server import it. That is a sequencing claim, not a scope claim: it makes the
    agent surface cheaper, not larger.
 
-**And one thing to resist.** TF006 makes delegated credentials exactly
-revocable, while the guest token stays narrowly-but-not-exactly revocable
-(§1.3). That asymmetry will be tempting to fix by routing guests through
-delegations too. It should not be fixed that way in phase 1: a guest has no
-account to issue against, and the per-contract delegation that would replace
-their token is phase 2 work with a counterparty-facing onboarding story
-attached. Record the asymmetry; do not paper over it.
+**And one thing to resist.** TF006 gives a delegated credential an exact
+revocation point, while the guest token keeps a narrow window (§1.3). The first
+draft called that difference a property of the two credentials and advised
+recording it as such; that was wrong. The guest window closes the same way — put
+a non-secret credential **generation id** on the guest event, and lock-and-check
+applies verbatim. So it is a gap in the guest path, not a fact about guest
+tokens. What to resist is unchanged: do not close it by routing guests through
+delegations in phase 1, because a guest has no account to issue against and the
+per-contract delegation that would replace their token is phase 2, with a
+counterparty onboarding story attached. Record it as **unfinished work on the
+guest path**, which is what it is.
 
 ---
 
-## 9. Review verdict: FAIL, and what has to change before implementation
+## 9. Review verdict: FAIL — and the record of applying it
+
+**Status: every finding below is now applied to §§1-8 above (2026-11-08).** This
+section is kept verbatim as the record of what was wrong, because the sections it
+corrects now read as if they had always been right. §9.1 at the end maps each
+finding to where the fix landed.
 
 Codex reviewed the five load-bearing claims (2026-11-08, static, no queries).
-**Verdict: FAIL — do not implement from this draft.** I verified each finding in
-the source and agree with all of them. Three are blocking, and two of the three
-are mistakes of exactly the kind this project has paid for before.
+**Verdict on the first draft: FAIL — do not implement from it.** I verified each
+finding in the source and agree with all of them. Three were blocking, and two of
+the three are mistakes of exactly the kind this project has paid for before.
 
 **B1. TF006 does not give exact revocation as designed (§1.3).** My claim was
 that the trigger could refuse a revoked delegation "under the same lock the
@@ -646,3 +749,32 @@ read-event type, since stored rows include `dod.consent_recorded`,
 `log-event/index.ts:3` says it is "the only writer to the `events` table". That
 stopped being true when acceptance moved into `validate-invite-token` so that
 the acceptance and its evidence commit together.
+
+---
+
+### 9.1 Where each finding landed
+
+| finding | applied in | what changed |
+| --- | --- | --- |
+| **B1** TF006 has no shared lock | §1.3, §7, OpenAPI `revokeDelegation` | the trigger locks the `delegations` row itself (`for update`/`for share`; `for key share` named as insufficient); the promise is restated as a **serialization point**, not a cancellation; the expiry clock is named as `now()` = transaction start, with the consequence stated. Effort S → M. |
+| **B2** the guest asymmetry is not fundamental | §1.3, §8 | a non-secret **credential generation id** on the guest event makes lock-and-check work there too, so it is recorded as unfinished work on the guest path rather than a property of the credential. The advice not to route guests through delegations in phase 1 stands, on its own reasons. |
+| **B3** delegated reads do not run as the owner | §1.5, §3.1, §7 | `auth.uid()` is null under a delegation, so four of the six tools need their own server endpoint with authorization written by hand. One **L** row, and phase 1's critical path. |
+| **B4** replay bypasses every delegation check | §4.1, OpenAPI `idempotency_key` | all delegation checks move **before** the replay lookup; dedup is scoped **per delegation**; `events.delegation_id` added as the queryable column that makes both possible; the cost (a human retry no longer dedups against their agent's) is stated rather than hidden. |
+| **B5** `issuer_assurance` does not prove "P authorised this" | §2.1, §2.2, §2.3, §8, OpenAPI `issueDelegation` + `DelegationRecord` | the sentence is weakened to the server-attested form, "the bearer of D" replaces "an agent presenting D", and the receipt arithmetic is corrected to subtract from `delegation.issued_at`. |
+| OpenAPI `live`-half errors (11 items) | `docs/api/openapi.draft.yaml` | `wrong_state_for_event_type` (409, with `detail` + nullable `hint`) and `internal_error` (500) added; `internal_error` added to the other three; `ownerJwt` now referenced by the six operations that need it, with both schemes documented as values of one header; `anonKey` described as the **legacy anon JWT**, not "publishable"; `POST /rest/v1/contracts` gained a closed nine-column `requestBody` and a required `Prefer: return=representation`; the DELETE gained `id=eq.<uuid>` and `Prefer: count=exact`, with `count` moved to a `Content-Range` header; `truncated` redefined as "the cap was reached"; the digest check documented as binding only on a non-empty value; the `oneOf` made genuinely exclusive with `required` plus a `not`; and `Event.type` split into `PartyAssertableEventType` (write input) and `RecordedEventType` (read, deliberately not an enum). |
+
+**Two decisions from Kenji applied at the same time (2026-11-08):** the
+counterparty **sees** which of the owner's agents acted, as a projected block
+with honest wording about what a label is (§2.3); and idempotency is scoped per
+delegation, re-checking the delegation on replay and never returning another
+delegation's event (§4.1). `robots.txt` shipped in Task 6 and §5 now records it
+as done (§5, and Kenji's fourth point).
+
+**Still open, deliberately:** whether cross-delegation dedup is ever wanted
+(§4.1), and the two narrowings Codex raised that are judgement rather than error
+— the custom header is right *given* `verify_jwt: true`, and nothing here makes
+a label a verified identity.
+
+**And one thing this document still only reports:** `log-event/index.ts:3`'s
+stale "only writer" comment is unchanged. It is a one-line code edit in a
+production Edge Function, and this task is design only.

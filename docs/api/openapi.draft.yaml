@@ -24,6 +24,11 @@
 #   A custom header must also appear in Access-Control-Allow-Headers or browsers
 #   fail the preflight; server-side callers do not preflight, so an API test
 #   cannot see that break (see supabase/functions/log-event/index.ts).
+#
+#   `anonKey` and `ownerJwt` are two VALUES of the same `Authorization: Bearer`
+#   header, never two headers, so they are alternatives and never combined.
+#   Global security names anonKey, which is what the gateway requires; an
+#   operation that needs a real account session overrides it with ownerJwt.
 
 openapi: 3.1.0
 
@@ -124,9 +129,19 @@ paths:
                   nullable: true
                   description: |
                     Scoped to an operation, not to a contract: a hit is a replay
-                    only when contract, key, type AND actor all match. Same key,
-                    different operation answers 409 `idempotency_key_in_use` —
-                    it does not return the other party's event.
+                    only when contract, key, type AND actor all match
+                    (`_shared/eventWriteRules.ts:43-50`). Same key, different
+                    operation answers 409 `idempotency_key_in_use` — it does not
+                    return the other party's event.
+
+                    PROPOSED, and load-bearing: under a delegation the match
+                    gains the DELEGATION, because `actor_id` stays the owner and
+                    would otherwise let one of an owner's agents be handed an
+                    event written by another. The replay lookup also moves to
+                    AFTER the delegation checks — today the function returns an
+                    existing event before any insert (`index.ts:293-305`), so a
+                    trigger-based TF006 would never fire on a replay. See
+                    docs/proposals/agent-first-access.md section 4.1.
                 dod_hash:
                   description: |
                     Refused, not ignored. The terms an assertion refers to are
@@ -185,8 +200,11 @@ paths:
           description: |
             `idempotency_key_in_use` (never retry), `contract_deleted` (TF002 —
             the agreement went away mid-write), `clock_behind_chain` (TF003 —
-            this isolate's clock is not ahead of the chain tip), and
-            `chain_contention` (retry).
+            this isolate's clock is not ahead of the chain tip),
+            `chain_contention` (retry), and `wrong_state_for_event_type`
+            (TF001 — the agreement is not in a state where this type may be
+            appended; carries `detail` and a nullable `hint` straight from the
+            database, `index.ts:489-494`).
           content:
             application/json:
               schema:
@@ -199,10 +217,12 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: |
-            `lookup_failed`, `insert_failed`. TF005 — a write attempted at an
-            unsupported transaction isolation level — surfaces here and is
-            logged server-side as a configuration fault. It must never be
-            retried, and its appearance means a release is not complete.
+            `lookup_failed`, `insert_failed`, and `internal_error` — the
+            catch-all at `index.ts:538`, which carries the thrown value as
+            `detail`. TF005 — a write attempted at an unsupported transaction
+            isolation level — surfaces here and is logged server-side as a
+            configuration fault. It must never be retried, and its appearance
+            means a release is not complete.
           content:
             application/json:
               schema:
@@ -235,6 +255,11 @@ paths:
         screen cannot be recorded as what the counterparty agreed to. It is not
         a credential: the caller computes it, so it protects an honest guest
         from an honest edit and nothing more.
+
+        **The check binds only when a non-empty digest is supplied**
+        (`index.ts:177` requires a string of length > 0). Omit it, or send `""`
+        or `null`, and acceptance proceeds with no comparison at all — so this
+        is a guard an honest client opts into, not one the server imposes.
       requestBody:
         required: true
         content:
@@ -274,6 +299,13 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/InvitePreview'
                   - $ref: '#/components/schemas/AcceptanceResult'
+                description: |
+                  Which one you get follows the request: no `accept` gives the
+                  preview, `accept: true` gives the result. The two are made
+                  genuinely exclusive by their `required` lists —
+                  `guest_access_token` is present on one and forbidden on the
+                  other — because without that a validator would accept either
+                  body as both and `oneOf` would always fail.
         '400':
           description: |
             `missing invite_token`, `valid hirer_email required`. NOTE: these
@@ -309,7 +341,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: '`lookup_failed`, `accept_failed`.'
+          description: '`lookup_failed`, `accept_failed`, `internal_error` (the catch-all at `index.ts:301`).'
           content:
             application/json:
               schema:
@@ -331,9 +363,12 @@ paths:
         establish from it. An event type the projection has not been taught
         about appears with an empty payload rather than passing through.
 
-        Returns at most 500 events, oldest first, with `chain.truncated` set at
-        the cap. There is no cursor today; see the `after`/`next` proposal in
-        docs/proposals/agent-first-access.md section 4.3.
+        Returns at most 500 events, oldest first. `chain.truncated` means **the
+        cap was reached**, not "there is more": an agreement with exactly 500
+        events returns `truncated: true` with nothing left behind it. There is
+        no cursor today, so beyond 500 the rest is unreachable; see the
+        `after`/`next` proposal in docs/proposals/agent-first-access.md
+        section 4.3.
       parameters:
         - $ref: '#/components/parameters/GuestAccessTokenRequired'
       requestBody:
@@ -397,6 +432,8 @@ paths:
 
         Deliberately not an email match on `hirer_email`: that address is typed
         by the counterparty at acceptance and recorded as unverified.
+      security:
+        - ownerJwt: []
       requestBody:
         required: true
         content:
@@ -457,7 +494,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: '`lookup_failed`, `reissue_failed`.'
+          description: '`lookup_failed`, `reissue_failed`, `internal_error` (the catch-all at `index.ts:218`).'
           content:
             application/json:
               schema:
@@ -482,9 +519,70 @@ paths:
         There is no UPDATE grant and no UPDATE policy on this table, for any
         column, so nothing here can be corrected afterwards from a client. See
         docs/proposals/web-ux-waiting-and-wrong-email.md section 2.3.
+      security:
+        - ownerJwt: []
+      parameters:
+        - $ref: '#/components/parameters/PreferRepresentation'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [earner_user_id, project_name, dod, amount_jpy, currency, performed_by]
+              additionalProperties: false
+              description: |
+                Exactly the nine columns the client holds INSERT on. Sending any
+                other column fails the whole insert with 403, which is why this
+                schema is closed rather than open. `dod_hash` in particular is
+                NOT sent: it is derived server-side, and the grant on it was
+                revoked so that a party cannot record a terms-hash that
+                disagrees with its own terms (src/lib/contracts.js:54-74).
+              properties:
+                earner_user_id:
+                  type: string
+                  format: uuid
+                  description: Must be the caller's own `auth.uid()`.
+                earner_display_name:
+                  type: string
+                  nullable: true
+                project_name:
+                  type: string
+                dod:
+                  type: array
+                  items:
+                    type: string
+                amount_jpy:
+                  type: integer
+                currency:
+                  type: string
+                  enum: [JPY]
+                deadline:
+                  type: string
+                  format: date
+                  nullable: true
+                invited_hirer_email:
+                  type: string
+                  nullable: true
+                  description: |
+                    The address the invitation is MEANT for. Not in the hashed
+                    agreement snapshot, and not corrigible afterwards.
+                performed_by:
+                  type: string
+                  enum: [creator, counterparty]
       responses:
         '201':
-          description: The created row, including `invite_token`.
+          description: |
+            Created. **The row comes back only with
+            `Prefer: return=representation`** — PostgREST returns an empty body
+            otherwise, so without that header there is no `invite_token` and no
+            id to show the user. `src/lib/contracts.js` gets it by chaining
+            `.select().single()`, which is what sets the header.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The contract row, including `invite_token` and `invite_token_expires_at`.
         '403':
           description: Anonymous session, or a server-owned column was sent.
     get:
@@ -496,7 +594,12 @@ paths:
         No client-side filter is applied or needed:
         `parties_read_own_contracts` restricts rows to
         `auth.uid() = earner_user_id OR auth.uid() = hirer_user_id`. The policy
-        is the control.
+        is the control — which is also why this endpoint is useless to a
+        delegated agent: with the anon key in `Authorization`, `auth.uid()` is
+        null and the policy admits nothing
+        (docs/proposals/agent-first-access.md section 1.5).
+      security:
+        - ownerJwt: []
       responses:
         '200':
           description: Rows visible to this party.
@@ -513,9 +616,33 @@ paths:
 
         A concurrent append is refused under a row lock with SQLSTATE TF004
         rather than orphaning the evidence.
+      security:
+        - ownerJwt: []
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^eq\.[0-9a-fA-F-]{36}$'
+          description: |
+            PostgREST filter, `id=eq.<uuid>`. **Required in practice:** a DELETE
+            with no filter asks to delete every row the policy admits.
+            `src/lib/contracts.js:367-368` always sends it.
+        - $ref: '#/components/parameters/PreferCountExact'
       responses:
         '200':
-          description: Zero or one row deleted; `count` is the only way to tell a refusal from "already gone".
+          description: |
+            Zero or one row deleted. The count is the only way to tell a refusal
+            from "already gone", and it arrives in the **`Content-Range`
+            response header** (`0-0/1` or `*/0`) — not in the body — and only
+            when `Prefer: count=exact` was sent. The Supabase client's
+            `.delete({ count: 'exact' })` is what sends it.
+          headers:
+            Content-Range:
+              schema:
+                type: string
+              description: '`*/0` when nothing was deleted; `0-0/1` when one row was.'
         '400':
           description: |
             TF004 — evidence appeared while this delete was in flight, so the
@@ -537,6 +664,8 @@ paths:
         are invisible to the owner even if rows remain. UPDATE and DELETE are
         rewritten to do nothing (`no_update_events`, `no_delete_events`): a
         DELETE here succeeds and deletes nothing.
+      security:
+        - ownerJwt: []
       responses:
         '200':
           description: Events, ordered by the caller.
@@ -554,11 +683,17 @@ paths:
         `guest_access_token`, which are stored in plaintext.
 
         No event is written. Issuing a delegation is not a fact about any
-        agreement; it becomes evidence the moment it is used. The owner's own
-        authentication is captured here, as `issuer_assurance`, and carried
-        immutably into every event written under this delegation — which is what
-        makes "the owner authorised this, at this time, having authenticated
-        this way" provable rather than inferred.
+        agreement; it becomes evidence the moment it is used. The authentication
+        of the ISSUING SESSION is captured here, as `issuer_assurance`, and
+        carried immutably into every event written under this delegation.
+
+        What that proves is narrower than it looks, and the honest form matters:
+        *TrustFlow issued this delegation on the authority of an authenticated
+        session belonging to the owner, and recorded acts by its bearer.* It
+        does NOT establish that the owner intended to delegate, that the secret
+        was not later copied, or anything about any individual act — issuance
+        has no act-bound challenge either. Do not read it as "the owner
+        authorised this act".
       requestBody:
         required: true
         content:
@@ -646,12 +781,21 @@ paths:
       summary: Revoke a delegation, exactly.
       x-trustflow-status: proposed
       description: |
-        PROPOSED. Sets `revoked_at`. Unlike every other credential in this
-        system the withdrawal is EXACT, not narrow: because the delegation id
-        travels inside the event being written, a BEFORE INSERT trigger joins
-        `delegations` and refuses a revoked or expired one inside the insert's
-        own transaction, under the same row lock the other guards take. The
-        proposed SQLSTATE is TF006, in the family TF001-TF005.
+        PROPOSED. Sets `revoked_at`. The withdrawal has an exact SERIALIZATION
+        POINT, which is a narrower promise than "exact": no write is admitted
+        under this delegation once the revoke has committed, while a write whose
+        trigger already took the lock and passed will still commit.
+
+        The mechanism: the event carries `delegation_id`, so a BEFORE INSERT
+        trigger joins `delegations`, **locks that row** (`for update` or
+        `for share` — `for key share` does NOT conflict with an UPDATE of the
+        non-key `revoked_at`, which is exactly what revoke does), and re-tests
+        liveness on the locked row inside the insert's own transaction. There is
+        no shared lock with the existing guards, which lock `contracts`. The
+        proposed SQLSTATE is TF006, in the family TF001-TF005. Expiry is judged
+        against `now()`, i.e. transaction start, so a delegation that expires
+        while the statement waits on the lock is still admitted — deliberate,
+        and stated rather than discovered.
 
         A delegation cannot revoke itself.
       parameters:
@@ -675,17 +819,23 @@ components:
     anonKey:
       type: http
       scheme: bearer
+      bearerFormat: JWT
       description: |
-        The project's publishable anon key, satisfying the platform gateway's
-        verify_jwt check. It identifies the project, not a person.
+        The project's LEGACY anon JWT (`VITE_SUPABASE_ANON_KEY`, an `eyJ…`
+        token) — not a `sb_publishable_…` key, which this project does not use.
+        It satisfies the platform gateway's verify_jwt check and identifies the
+        project, not a person. Same header as `ownerJwt`, so the two are
+        alternatives.
     ownerJwt:
       type: http
       scheme: bearer
       bearerFormat: JWT
       description: |
-        A verified (non-anonymous) Supabase session. Obtained through an emailed
-        OTP behind a Cloudflare Turnstile challenge — which is exactly why an
-        agent needs a delegation instead.
+        A verified (non-anonymous) Supabase session, in the same
+        `Authorization: Bearer` header as `anonKey` and therefore instead of it.
+        Obtained through an emailed OTP behind a Cloudflare Turnstile challenge —
+        which is exactly why an agent needs a delegation instead. Every
+        operation below that requires it says so with its own `security`.
 
   parameters:
     GuestAccessToken:
@@ -717,6 +867,28 @@ components:
         PROPOSED. Not in `Authorization`, because the gateway validates that
         header before TrustFlow code runs. Must be added to
         Access-Control-Allow-Headers before any browser use.
+    PreferRepresentation:
+      name: Prefer
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: ['return=representation']
+      description: |
+        PostgREST returns no body without it, so the created row — and with it
+        `invite_token` — would be lost. Marked required here because every
+        caller in this codebase needs the row.
+    PreferCountExact:
+      name: Prefer
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: ['count=exact']
+      description: |
+        Without it there is no count, and a refusal is indistinguishable from
+        "already deleted". The count arrives in `Content-Range`, never in the
+        body.
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -732,7 +904,8 @@ components:
     PartyAssertableEventType:
       type: string
       description: |
-        What a party may record about their own agreement. The names are
+        WRITE INPUT ONLY — what a party may record about their own agreement.
+        Reading an event back uses `RecordedEventType`, which is wider. The names are
         deliberate: a party asserting they performed is not the same fact as the
         work having been delivered, and TrustFlow can only attest the first.
 
@@ -770,7 +943,7 @@ components:
           type: string
           format: uuid
         type:
-          $ref: '#/components/schemas/PartyAssertableEventType'
+          $ref: '#/components/schemas/RecordedEventType'
         contract_id:
           type: string
           description: Text, with no foreign key to `contracts` — recorded debt.
@@ -810,6 +983,38 @@ components:
         idempotency_key:
           type: string
           nullable: true
+        delegation_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            PROPOSED, and the one schema change this feature needs. Null on
+            every row written to date and on every human-session write. It
+            exists because `actor_id` stays the owner, so nothing else
+            distinguishes one of an owner's agents from another: the idempotency
+            index extends to `(contract_id, idempotency_key, delegation_id)` and
+            the TF006 trigger reads the same column.
+
+    RecordedEventType:
+      type: string
+      description: |
+        The type as STORED and read back, which is a wider set than a client may
+        write. Deliberately not an enum: the log is append-only, so names that
+        were accepted once stay readable for ever and a closed list here would
+        make a valid historical row fail validation.
+
+        Beyond `PartyAssertableEventType` it includes the server-recorded types
+        `dod.consent_recorded` and `access.reissued`
+        (`log-event/index.ts:107`), which a client offering them is refused for
+        with `type_is_server_recorded`, and the retired
+        `work.submitted` / `work.approved` / `work.rejected`
+        (`:114`), refused with `type_retired`. Payment names verified by Stripe
+        may also appear on historical rows and were never client-assertable.
+      examples:
+        - performance.asserted
+        - dod.consent_recorded
+        - access.reissued
+        - work.submitted
 
     AuthenticationRecord:
       type: object
@@ -870,12 +1075,22 @@ components:
       type: object
       nullable: true
       description: |
-        PROPOSED. Present only on a delegated write. The honest reading is: an
-        agent presenting delegation `id`, issued by this owner at `issued_at`,
-        labelled `label`, scoped `scopes`, asserted this at the event's
-        `created_at`. It does NOT show that the owner saw or intended the act,
-        that the agent did what the owner asked, or that the label names the
-        software that ran.
+        PROPOSED. Present only on a delegated write. The honest reading is: the
+        BEARER of delegation `id` — issued on the authority of an authenticated
+        session of this owner at `issued_at`, under the owner-chosen label
+        `label`, scoped `scopes` — asserted this at the event's `created_at`. It
+        does NOT show that the owner saw or intended the act, that the agent did
+        what the owner asked, or that the label names the software that ran.
+
+        `issuer_assurance.seconds_since_authentication` is measured from
+        `issued_at`, NOT from the event's `created_at`: the two intervals
+        (session→issuance, issuance→act) are different numbers and a receipt
+        that conflates them overstates how recently a human was present.
+
+        The counterparty sees `id` and `label` (Kenji's decision, 2026-11-08),
+        projected as their own block by `guest-contract-events` rather than
+        through the payload allowlist, with the label described to them as a
+        name the owner chose. `scopes` and `issuer_assurance` stay owner-only.
       properties:
         id:
           type: string
@@ -932,6 +1147,9 @@ components:
     InvitePreview:
       type: object
       description: Everything from the contract row. Consumes nothing.
+      required: [contract_id, project_name]
+      not:
+        required: [guest_access_token]
       properties:
         contract_id:
           type: string
@@ -966,6 +1184,7 @@ components:
 
     AcceptanceResult:
       type: object
+      required: [contract_id, guest_access_token, acceptance_event_id]
       properties:
         contract_id:
           type: string
@@ -1054,7 +1273,11 @@ components:
               description: True only if every row carrying the material to be checked checks out. Rows with nothing to verify do not count as verified.
             truncated:
               type: boolean
-              description: 'The 500 cap was hit. PROPOSED: equivalent to `next !== null`.'
+              description: |
+                The 500 cap was REACHED. True at exactly 500 events even when
+                none were left out, so it is not a reliable "more exists" flag.
+                PROPOSED: `next !== null` answers the question `truncated` only
+                approximates, and `truncated` stays for existing readers.
             payload_covered_by_hash:
               type: boolean
               description: Whether the detail fields are tamper-evident. Events written before the payload-binding canonical are covered for authorship and timing but not for substance.
@@ -1076,6 +1299,13 @@ components:
         detail:
           type: string
           description: Free text. Present on some 409s and 500s.
+        hint:
+          type: string
+          nullable: true
+          description: |
+            Passed through from the database on `wrong_state_for_event_type`
+            (log-event/index.ts:493), where it is explicitly nullable. No other
+            reason sets it.
         retryable:
           type: boolean
           description: |
