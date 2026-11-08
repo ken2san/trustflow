@@ -441,28 +441,40 @@ is uniform across the three functions that currently disagree. Then:
   Otherwise a revoked delegation, or one with narrower scope, replays a write it
   could not now perform, and the authentication recorded on the returned event
   still names the delegation that made it.
-- **Dedup is scoped per delegation** (Kenji, 2026-11-08): the match becomes
+- **Dedup is scoped per delegation** (Kenji, 2026-11-08): the comparison becomes
   contract + key + type + actor **+ delegation**. A replay re-checks the
   presented delegation and **never** returns an event written under a different
   one. The actor-only match would do exactly that, since `actor_id` stays the
   owner (§2.2) while `idempotencyOutcome` compares type and `actor_id` only
-  (`_shared/eventWriteRules.ts:43-50`). Two of an owner's delegations colliding
-  on a key now get `idempotency_key_in_use`, not a silent hand-over of another
-  agent's event.
-- That costs the one schema change §2.2 claimed not to need: the recorded
-  delegation id has to be **queryable**, so `events` gains a nullable
-  `delegation_id uuid` — null for every event written to date and for every
-  human-session write — and `events_idempotency_idx` extends to
-  `(contract_id, idempotency_key, delegation_id)`. An expression index over the
-  payload JSON would also work and is worse to read. The §1.3 trigger wants the
-  same column, so it pays for itself twice.
-- **The cost is a real one, and it is the right side of the trade.** An owner
-  retrying *by hand* no longer deduplicates against their agent's retry, because
-  `delegation_id` differs (null versus D) — so a human and an agent pressing the
-  same button can produce two events. The alternative is one agent's record
-  being handed to another, which is the failure mode §0's cross-actor disclosure
-  already taught this project once. Whether cross-delegation dedup is ever
-  wanted is an open decision, not a default.
+  (`_shared/eventWriteRules.ts:43-50`).
+- **The uniqueness namespace does not change, and this is the part that is easy
+  to get wrong.** `events_idempotency_idx` stays exactly as it is — unique on
+  `(contract_id, idempotency_key) where idempotency_key is not null`
+  (`supabase/migrations/20260924000001_events_server_authoritative.sql:53-55`).
+  Delegation is added to the **comparison**, not to the index. An earlier version
+  of this section proposed extending the index to
+  `(contract_id, idempotency_key, delegation_id)`, and that was wrong twice
+  over: a plain unique index never treats two NULLs as equal, so every
+  human-session write (`delegation_id is null`) would have lost the uniqueness it
+  has today; and `(C,K,D₁)` and `(C,K,D₂)` would have been allowed to coexist,
+  which contradicts the refusal in the next bullet and would leave the existing
+  `contract + key` lookup fetching two rows where it expects at most one
+  (`log-event/index.ts:293-305` reads with `.maybeSingle()`).
+- So one key per contract per operation, whoever presents it: a second
+  delegation — or the owner by hand — reusing a key that is already spent
+  answers **409 `idempotency_key_in_use`**, the refusal that already exists for
+  this case, rather than being handed the first caller's event. Keys are
+  client-chosen and per-operation, so a collision across two of an owner's
+  agents means two callers picked the same key for different work, and refusing
+  is the honest answer. The behaviour an owner actually relies on — a retry of
+  *their own* write replaying — is unchanged in both directions, because the
+  comparison matches null against null.
+- That still costs the one schema change §2.2 claimed not to need: the recorded
+  delegation id has to be **queryable** for the comparison and for the §1.3
+  trigger, so `events` gains a nullable `delegation_id uuid`, null for every
+  event written to date and for every human-session write. An expression index
+  over the payload JSON would also work and is worse to read. No index is
+  rebuilt, which also keeps the migration additive in the strict sense.
 
 ### 4.2 One error envelope, no renames
 
@@ -759,7 +771,7 @@ the acceptance and its evidence commit together.
 | **B1** TF006 has no shared lock | §1.3, §7, OpenAPI `revokeDelegation` | the trigger locks the `delegations` row itself (`for update`/`for share`; `for key share` named as insufficient); the promise is restated as a **serialization point**, not a cancellation; the expiry clock is named as `now()` = transaction start, with the consequence stated. Effort S → M. |
 | **B2** the guest asymmetry is not fundamental | §1.3, §8 | a non-secret **credential generation id** on the guest event makes lock-and-check work there too, so it is recorded as unfinished work on the guest path rather than a property of the credential. The advice not to route guests through delegations in phase 1 stands, on its own reasons. |
 | **B3** delegated reads do not run as the owner | §1.5, §3.1, §7 | `auth.uid()` is null under a delegation, so four of the six tools need their own server endpoint with authorization written by hand. One **L** row, and phase 1's critical path. |
-| **B4** replay bypasses every delegation check | §4.1, OpenAPI `idempotency_key` | all delegation checks move **before** the replay lookup; dedup is scoped **per delegation**; `events.delegation_id` added as the queryable column that makes both possible; the cost (a human retry no longer dedups against their agent's) is stated rather than hidden. |
+| **B4** replay bypasses every delegation check | §4.1, OpenAPI `idempotency_key` | all delegation checks move **before** the replay lookup; dedup is scoped **per delegation** by adding it to the *comparison* while `events_idempotency_idx` stays as it is; `events.delegation_id` added as the queryable column that makes both possible. A reused key answers 409 rather than handing over another caller's event. |
 | **B5** `issuer_assurance` does not prove "P authorised this" | §2.1, §2.2, §2.3, §8, OpenAPI `issueDelegation` + `DelegationRecord` | the sentence is weakened to the server-attested form, "the bearer of D" replaces "an agent presenting D", and the receipt arithmetic is corrected to subtract from `delegation.issued_at`. |
 | OpenAPI `live`-half errors (11 items) | `docs/api/openapi.draft.yaml` | `wrong_state_for_event_type` (409, with `detail` + nullable `hint`) and `internal_error` (500) added; `internal_error` added to the other three; `ownerJwt` now referenced by the six operations that need it, with both schemes documented as values of one header; `anonKey` described as the **legacy anon JWT**, not "publishable"; `POST /rest/v1/contracts` gained a closed nine-column `requestBody` and a required `Prefer: return=representation`; the DELETE gained `id=eq.<uuid>` and `Prefer: count=exact`, with `count` moved to a `Content-Range` header; `truncated` redefined as "the cap was reached"; the digest check documented as binding only on a non-empty value; the `oneOf` made genuinely exclusive with `required` plus a `not`; and `Event.type` split into `PartyAssertableEventType` (write input) and `RecordedEventType` (read, deliberately not an enum). |
 
@@ -770,10 +782,22 @@ delegation, re-checking the delegation on replay and never returning another
 delegation's event (§4.1). `robots.txt` shipped in Task 6 and §5 now records it
 as done (§5, and Kenji's fourth point).
 
-**Still open, deliberately:** whether cross-delegation dedup is ever wanted
-(§4.1), and the two narrowings Codex raised that are judgement rather than error
-— the custom header is right *given* `verify_jwt: true`, and nothing here makes
-a label a verified identity.
+**Still open, deliberately:** the two narrowings Codex raised that are judgement
+rather than error — the custom header is right *given* `verify_jwt: true`, and
+nothing here makes a label a verified identity.
+
+**Corrected once more after the scoped re-review of this very commit (Codex,
+2026-11-08, FAIL):** the first attempt at §4.1 extended the unique index to
+three columns, which would have destroyed uniqueness for human-session writes
+(NULLs are never equal in a plain unique index) and contradicted its own 409.
+The index now stays untouched and only the comparison gains the delegation. The
+OpenAPI `201` on `POST /rest/v1/contracts` also needed
+`Accept: application/vnd.pgrst.object+json`, not just the `Prefer` header,
+because that Accept is what makes PostgREST answer with one object instead of an
+array (`@supabase/postgrest-js` sets it inside `.single()`). One of the four
+findings — a claim that the DELETE filter's regex was broken by YAML
+backslash handling — did not reproduce: the file holds a single backslash and
+the pattern matches `eq.<uuid>`.
 
 **And one thing this document still only reports:** `log-event/index.ts:3`'s
 stale "only writer" comment is unchanged. It is a one-line code edit in a

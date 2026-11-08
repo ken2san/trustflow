@@ -134,13 +134,22 @@ paths:
                     operation answers 409 `idempotency_key_in_use` — it does not
                     return the other party's event.
 
-                    PROPOSED, and load-bearing: under a delegation the match
-                    gains the DELEGATION, because `actor_id` stays the owner and
-                    would otherwise let one of an owner's agents be handed an
-                    event written by another. The replay lookup also moves to
-                    AFTER the delegation checks — today the function returns an
-                    existing event before any insert (`index.ts:293-305`), so a
-                    trigger-based TF006 would never fire on a replay. See
+                    PROPOSED, and load-bearing: under a delegation the
+                    COMPARISON gains the delegation, because `actor_id` stays the
+                    owner and would otherwise let one of an owner's agents be
+                    handed an event written by another. The uniqueness NAMESPACE
+                    does not change: `events_idempotency_idx` stays unique on
+                    `(contract_id, idempotency_key)`, so one key per contract per
+                    operation whoever presents it, and a key already spent under
+                    another delegation answers 409 `idempotency_key_in_use`
+                    instead of replaying. Extending the index itself would have
+                    lost uniqueness for human-session writes, since a plain
+                    unique index never treats two NULLs as equal.
+
+                    The replay lookup also moves to AFTER the delegation checks —
+                    today the function returns an existing event before any
+                    insert (`index.ts:293-305`), so a trigger-based TF006 would
+                    never fire on a replay. See
                     docs/proposals/agent-first-access.md section 4.1.
                 dod_hash:
                   description: |
@@ -523,6 +532,7 @@ paths:
         - ownerJwt: []
       parameters:
         - $ref: '#/components/parameters/PreferRepresentation'
+        - $ref: '#/components/parameters/AcceptSingleObject'
       requestBody:
         required: true
         content:
@@ -573,11 +583,18 @@ paths:
       responses:
         '201':
           description: |
-            Created. **The row comes back only with
-            `Prefer: return=representation`** — PostgREST returns an empty body
-            otherwise, so without that header there is no `invite_token` and no
-            id to show the user. `src/lib/contracts.js` gets it by chaining
-            `.select().single()`, which is what sets the header.
+            Created. **TWO headers are needed, not one.**
+            `Prefer: return=representation` is what makes PostgREST send a body
+            at all — without it the response is empty and there is no
+            `invite_token` and no id to show the user. `Accept:
+            application/vnd.pgrst.object+json` is what makes that body a single
+            object rather than an array of one, which is why the schema below is
+            an object. `src/lib/contracts.js` gets both by chaining
+            `.select().single()`: the client sets the Prefer header for
+            `.select()` and the Accept header inside `.single()`
+            (`@supabase/postgrest-js`, `PostgrestTransformBuilder`). A caller
+            sending only `Prefer` gets a one-element array and cannot read
+            `response.invite_token`.
           content:
             application/json:
               schema:
@@ -878,6 +895,17 @@ components:
         PostgREST returns no body without it, so the created row — and with it
         `invite_token` — would be lost. Marked required here because every
         caller in this codebase needs the row.
+    AcceptSingleObject:
+      name: Accept
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: ['application/vnd.pgrst.object+json']
+      description: |
+        Makes PostgREST answer with ONE object instead of an array of one, and
+        turns "no row" into an error rather than an empty list. Required
+        wherever this document shows a single-object response body.
     PreferCountExact:
       name: Prefer
       in: header
@@ -992,8 +1020,10 @@ components:
             every row written to date and on every human-session write. It
             exists because `actor_id` stays the owner, so nothing else
             distinguishes one of an owner's agents from another: the idempotency
-            index extends to `(contract_id, idempotency_key, delegation_id)` and
-            the TF006 trigger reads the same column.
+            COMPARISON reads it, and so does the TF006 trigger. The unique index
+            is NOT extended to include it — a plain unique index treats two
+            NULLs as distinct, which would silently drop the uniqueness every
+            human-session write has today.
 
     RecordedEventType:
       type: string
