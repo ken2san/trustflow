@@ -40,15 +40,22 @@ function Clocks({ contract, only = 'all' }) {
   const clocks = clocksFor(contract)
     .filter(c => only === 'all' || c.kind === CLOCKS.DEADLINE || c.status !== 'ok');
   if (!clocks.length) return null;
-  return clocks.map(clock => (
-    <React.Fragment key={clock.kind}>
-      <span className="text-slate-700">·</span>
-      <span className={clock.status === 'passed' ? 'text-amber-400/80'
-        : clock.status === 'soon' ? 'text-amber-400/60' : undefined}>
-        {clock.label} {clock.on}{clock.text && <> · {clock.text}</>}
-      </span>
-    </React.Fragment>
-  ));
+  // Each value is one unbreakable span, and the separator between values is
+  // the parent's gap rather than a "·" of its own. Both halves of that are
+  // about wrapping: "123 days late" broke between "123" and "days late" at
+  // phone width, and a free-standing "·" in a flex-wrap row lands at the end
+  // or the start of a line as often as between two things (blind review of
+  // the 2026-11-08 captures).
+  return clocks.map((clock) => {
+    const tone = clock.status === 'passed' ? 'text-amber-400/80'
+      : clock.status === 'soon' ? 'text-amber-400/60' : undefined;
+    return (
+      <React.Fragment key={clock.kind}>
+        <span className={`whitespace-nowrap ${tone ?? ''}`}>{clock.label} {clock.on}</span>
+        {clock.text && <span className={`whitespace-nowrap ${tone ?? ''}`}>{clock.text}</span>}
+      </React.Fragment>
+    );
+  });
 }
 
 function Counterparty({ contract }) {
@@ -83,8 +90,8 @@ function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
           {contract.project_name || 'Untitled agreement'}
         </button>
         <p className="text-sm text-slate-400"><Counterparty contract={contract} /></p>
-        <p className="flex flex-wrap gap-x-2 text-sm text-slate-500">
-          <span>{formatAmount(contract)}</span>
+        <p className="flex flex-wrap gap-x-3 text-sm text-slate-500">
+          <span className="whitespace-nowrap">{formatAmount(contract)}</span>
           <Clocks contract={contract} />
         </p>
       </div>
@@ -95,7 +102,7 @@ function LeadContractCard({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
         {/* When this wait started, from the stamp the chain already holds. A
             missing stamp renders nothing rather than "since now". */}
         {sinceText(action.since) && (
-          <p className="text-xs text-slate-600">{sinceText(action.since)}</p>
+          <p className="text-xs text-slate-500">{sinceText(action.since)}</p>
         )}
       </div>
 
@@ -162,7 +169,7 @@ function ContractRow({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
       <div className="flex items-center gap-3">
         <button onClick={() => onOpen(contract)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
           <StatusDot owner={action.owner} />
-          <span className="font-bold text-white text-sm truncate">
+          <span className="font-bold text-white text-sm line-clamp-2">
             {contract.project_name || 'Untitled agreement'}
           </span>
         </button>
@@ -213,19 +220,22 @@ function ContractRow({ contract, onOpen, onCopyInvite, onDeleteDraft }) {
           </>
         )}
       </div>
-      <button onClick={() => onOpen(contract)} className="pl-5 mt-1 flex flex-wrap gap-x-2 text-xs text-slate-500 text-left w-full">
+      <button onClick={() => onOpen(contract)} className="pl-5 mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500 text-left w-full">
         {/* The state the server holds, then what it means for you. Both come
             from contracts.state; neither is derived from the flow screen's
-            local step counter. */}
-        <span className="text-slate-400">{statusLabel(contract)}</span>
-        <span className="text-slate-700">·</span>
+            local step counter.
+
+            Separated by the row's own gap, not by "·" spans. This line wraps
+            onto three lines at phone width with a long address in it, and a
+            separator that is its own flex item wraps independently of both
+            things it separates — the captures of 2026-11-08 show one ending a
+            line and another starting one. */}
+        <span className="text-slate-400 whitespace-nowrap">{statusLabel(contract)}</span>
         <span><Counterparty contract={contract} /></span>
-        <span className="text-slate-700">·</span>
-        <span>{formatAmount(contract)}</span>
+        <span className="whitespace-nowrap">{formatAmount(contract)}</span>
         <Clocks contract={contract} only="actionable" />
-        <span className="text-slate-700">·</span>
         <span className={action.owner === 'you' ? 'text-amber-400/80' : 'text-slate-500'}>
-          {action.label}{sinceText(action.since) && <span className="text-slate-600"> · {sinceText(action.since).toLowerCase()}</span>}
+          {action.label}{sinceText(action.since) && <span className="text-slate-500 whitespace-nowrap"> · {sinceText(action.since).toLowerCase()}</span>}
         </span>
       </button>
     </div>

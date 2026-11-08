@@ -20,7 +20,7 @@
 //                                                 baseline for the next one
 //
 // Layout: test-results/<set>/ is the run that just happened, and
-// test-results/<set>-prev/ is the baseline. Both are gitignored, so the
+// .visual-baseline/<set>/ is the baseline. Both are gitignored, so the
 // baseline is per-machine and the first run on a machine reports everything as
 // new, which is correct — nothing has been reviewed there yet.
 //
@@ -32,7 +32,11 @@ import { readdirSync, readFileSync, statSync, rmSync, cpSync, existsSync } from 
 import { join } from 'node:path';
 
 const ROOT = 'test-results';
-const PREV_SUFFIX = '-prev';
+// The baseline lives OUTSIDE test-results, because Playwright empties that
+// whole directory at the start of every run — a baseline kept beside the
+// current set as `<set>-prev` was deleted by the very next capture, which is
+// how this was found rather than reasoned about.
+const BASELINE_ROOT = '.visual-baseline';
 
 const args = process.argv.slice(2);
 const promote = args.includes('--promote');
@@ -55,7 +59,6 @@ const pngsIn = (dir) => {
 function captureSets() {
   if (!existsSync(ROOT)) return [];
   return readdirSync(ROOT)
-    .filter(name => !name.endsWith(PREV_SUFFIX))
     .filter(name => statSync(join(ROOT, name)).isDirectory())
     .filter(name => pngsIn(join(ROOT, name)).size > 0)
     .sort();
@@ -73,7 +76,7 @@ let missing = false;
 
 for (const set of sets) {
   const current = join(ROOT, set);
-  const baseline = `${current}${PREV_SUFFIX}`;
+  const baseline = join(BASELINE_ROOT, set);
 
   if (!existsSync(current)) {
     console.error(`✗  ${set}: no such capture set at ${current}`);

@@ -20,6 +20,8 @@ a judgement, which is the point.
 - Text overflowing its box, or running under an adjacent element.
 - A long unbroken token (an email address, a URL, a hash) pushing a row wider than the card.
 - A truncation that hides the part that matters — a project name cut before the word that identifies it.
+- A truncation so early that two different items read identically (one-line clamp on a list of long names).
+- A value broken across a line break mid-phrase: `123` on one line, `days late` on the next.
 - Three-digit numbers where the layout assumed one: `123 days late`, `¥999,999,999`.
 - A date or amount wrapped across two lines mid-value.
 - A label and its value separated far enough to be read as unrelated.
@@ -39,6 +41,8 @@ a judgement, which is the point.
 - An element colliding with the fixed header (but see below — a `-full` capture puts the header mid-page by construction, and that is a stitching artefact, not a defect).
 - Inconsistent padding between cards in the same section.
 - A section heading orphaned at the bottom of the fold with its content below.
+- A `·` separator that is its own flex item: it wraps independently and lands at the end or the start of a line.
+- A fixed bottom bar over the end of the scroll — measure it (`main` padding vs the bar's height) rather than reading it off a `-full` capture, where the bar sits mid-page by construction.
 
 ## States that are easy to never look at
 

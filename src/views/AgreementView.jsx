@@ -217,12 +217,19 @@ export default function AgreementView({
         <h1 className="text-3xl font-black tracking-tighter text-white">
           {contract.project_name || 'Agreement'}
         </h1>
+        {/* Each value is unbreakable and the line wraps only between values:
+            at phone width "123 days late" broke after "123", which reads as a
+            different number for the length of the line it takes to find the
+            rest (blind review of the 2026-11-08 captures). */}
         <p className="text-sm text-slate-400">
           {performs ? 'You are doing the work' : 'The other party is doing the work'}
-          {contract.amount_jpy ? <> · ¥{Number(contract.amount_jpy).toLocaleString()}</> : null}
+          {contract.amount_jpy
+            ? <> · <span className="whitespace-nowrap">¥{Number(contract.amount_jpy).toLocaleString()}</span></>
+            : null}
           {deadlineClock ? (
             <span className={deadlineClock.status === 'passed' ? 'text-amber-400/80' : undefined}>
-              {' · '}due {deadlineClock.on}{deadlineClock.text && <> · {deadlineClock.text}</>}
+              {' · '}<span className="whitespace-nowrap">due {deadlineClock.on}</span>
+              {deadlineClock.text && <> · <span className="whitespace-nowrap">{deadlineClock.text}</span></>}
             </span>
           ) : null}
         </p>
@@ -327,17 +334,18 @@ export default function AgreementView({
             clocks that are nobody's business until they are. Deliberately not
             a second copy of the deadline, which the header already carries. */}
         {(lastRecorded || credentialClocks.length > 0) && (
-          <p className="flex flex-wrap gap-x-2 text-xs text-slate-600">
-            {lastRecorded && <span>{lastRecorded}</span>}
-            {credentialClocks.map(clock => (
-              <React.Fragment key={clock.kind}>
-                {lastRecorded && <span className="text-slate-700">·</span>}
-                <span className={clock.status === 'passed' ? 'text-amber-400/80'
-                  : clock.status === 'soon' ? 'text-amber-400/60' : undefined}>
-                  {clock.label} {clock.on}{clock.text && <> · {clock.text}</>}
-                </span>
-              </React.Fragment>
-            ))}
+          <p className="flex flex-wrap gap-x-3 text-xs text-slate-500">
+            {lastRecorded && <span className="whitespace-nowrap">{lastRecorded}</span>}
+            {credentialClocks.map((clock) => {
+              const tone = clock.status === 'passed' ? 'text-amber-400/80'
+                : clock.status === 'soon' ? 'text-amber-400/60' : undefined;
+              return (
+                <React.Fragment key={clock.kind}>
+                  <span className={`whitespace-nowrap ${tone ?? ''}`}>{clock.label} {clock.on}</span>
+                  {clock.text && <span className={`whitespace-nowrap ${tone ?? ''}`}>{clock.text}</span>}
+                </React.Fragment>
+              );
+            })}
           </p>
         )}
 

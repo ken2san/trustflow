@@ -21,6 +21,9 @@ Thumbs.db
 
 # Playwright
 test-results/
+# Capture baselines for scripts/visual-diff-list.mjs. Per-machine by design:
+# they say what this reviewer has already looked at.
+.visual-baseline/
 playwright-report/
 .playwright/
 
