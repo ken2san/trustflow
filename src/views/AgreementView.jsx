@@ -236,13 +236,26 @@ export default function AgreementView({
                   New access link — send this to them
                 </p>
                 <p className="text-xs text-slate-400 break-all font-mono leading-relaxed">{reissuedUrl}</p>
-                {/* Said plainly because both halves surprise people: their old
-                    link stops working, and this one is the credential itself,
+                {/* Said plainly because all three parts surprise people: their
+                    old link stops working, this one is the credential itself —
                     so anyone who gets hold of it is them as far as the record
-                    is concerned. */}
+                    is concerned — and the cut-off is not instant.
+
+                    The last sentence is not a detail. The old text said the
+                    previous link "no longer works", full stop, and an owner
+                    pressing this because a link leaked would read that as
+                    "whatever they are doing right now has been stopped". It
+                    has not: a request already in flight is authorised against
+                    a credential re-read one round trip before its write, so it
+                    can still land. The window is narrow and it is not zero,
+                    and the product may not claim a protection it does not
+                    have. Codex made saying so the condition for keeping the
+                    narrowing at all (2026-11-07). */}
                 <p className="text-[11px] text-slate-500">
-                  Their previous link no longer works. Anyone holding this one can act as
-                  the counterparty, so send it the way you sent the invitation.
+                  Their previous link stops working from here on. Anyone holding this one can
+                  act as the counterparty, so send it the way you sent the invitation. A
+                  request they had already sent can still finish in the moment after this —
+                  it cuts off what comes next rather than undoing what is in flight.
                 </p>
                 <button
                   onClick={() => { navigator.clipboard.writeText(reissuedUrl); setReissueCopied(true); setTimeout(() => setReissueCopied(false), 2000); }}

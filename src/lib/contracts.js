@@ -227,6 +227,14 @@ export async function fetchGuestEvidence(contractId, tokenOverride = null) {
  * that, and the new token replaces the old one — which also makes this the
  * only way to kill a credential that has leaked.
  *
+ * It is not an instant kill, and nothing here may say that it is. A guest
+ * request already in flight was authorised against a credential re-read one
+ * round trip before its write, so it can still write after this returns. The
+ * window is about a round trip and closing it needs the check inside the
+ * insert's own transaction, which the event row cannot do today because it
+ * does not carry the token that was presented (log-event, and
+ * .ada/claude-report-2.md for where that decision sits).
+ *
  * Deliberately not an email match on `hirer_email`: that address is typed by
  * the guest at acceptance and recorded as unverified, so trusting it would
  * hand write access to a mistyped address or a shared mailbox. See

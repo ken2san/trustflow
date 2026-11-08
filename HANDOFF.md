@@ -323,6 +323,16 @@ What the run did **not** cover is Next Priority #1.
 
 ## Active Constraints
 
+- **Re-issuing guest access is not an instant revocation, and nothing
+  user-facing may imply it is.** Overwriting `guest_access_token` is the only
+  credential withdrawal this system has, and `log-event` re-reads the
+  credential one round trip before the insert (`412fe48`) — so a guest request
+  already in flight when the owner presses "Re-issue counterparty access" can
+  still write. Narrow, not zero. Closing it needs the check inside the
+  insert's own transaction, which the event row cannot do today because it does
+  not carry the token that was presented; that is with Kenji. Keeping the
+  narrowing was conditional on saying so (Codex, 2026-11-07), which the button's
+  own copy and `reissueGuestAccess`'s doc comment now do.
 - **Do not add npm packages** without explicit approval.
 - **Do not deploy migrations or Edge Functions, or touch Stripe production config,
   without explicit instruction.** Each deploy is approved individually — this
