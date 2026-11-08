@@ -40,6 +40,13 @@
 //      needs no concurrency, which is the point — the acceptance writer had no
 //      clock rule at all until 8538c32, and this is the path that proves it
 //      now has one.
+//   d  held clock          : the strict form of the clock rule, which (c) does
+//      NOT cover and which Codex asked for by name. A future-stamped append is
+//      held uncommitted; a second append — stamped now, so EARLIER — blocks on
+//      the row, and after the first commits the monotonicity guard must read
+//      the tip again, under a fresh snapshot, and refuse it with TF003. (c)
+//      proves the acceptance writer obeys the rule; (d) proves the guard sees
+//      a commit that landed while it waited.
 
 import { ownerSession, rest, PROJECT_REF, SUPABASE_URL } from './lib/tfClient.mjs';
 import { SUPABASE_KEY } from '../tests/e2e/liveEnv.js';
@@ -91,6 +98,21 @@ do $$ begin
   values ('contract.initiated', '<contract-id>', 'two-session-gate', now(), 'gate-held');
   perform pg_sleep(10);
 end $$;
+
+-- ── Case d: hold a FUTURE-stamped append, then commit it ─────────────────
+-- The waiter stamps itself now(), which is EARLIER than this, so after this
+-- commits the monotonicity guard has to re-read the tip and refuse it. Run
+-- …  d <contract-id> --at 9000  and this immediately after. The last select
+-- is the evidence that the other session was waiting on a lock rather than
+-- merely being slow — read it, do not assume it.
+begin;
+insert into public.events (type, contract_id, actor_id, created_at, event_hash)
+values ('contract.initiated', '<contract-id>', 'two-session-gate',
+        now() + interval '1 minute', 'gate-held-future');
+select pg_sleep(8);
+select pid, wait_event_type, wait_event, state, left(query, 60) as query
+  from pg_stat_activity where wait_event_type = 'Lock';
+commit;
 
 -- ── Case c: commit an event stamped in the future, no holding needed ─────
 -- Then  … c <invite-token> --at 0 .
@@ -170,8 +192,8 @@ async function main() {
     return;
   }
 
-  if (!['a', 'b', 'c'].includes(kase) || !arg) {
-    console.error('usage: two-session-gate.mjs <a|b|c> <contract-id|invite-token> [--at ms]');
+  if (!['a', 'b', 'c', 'd'].includes(kase) || !arg) {
+    console.error('usage: two-session-gate.mjs <a|b|c|d> <contract-id|invite-token> [--at ms]');
     process.exit(2);
   }
 
@@ -203,6 +225,38 @@ async function main() {
 
   const contractId = arg;
 
+  if (kase === 'd') {
+    const append = await logEvent(ownerToken, {
+      contract_id: contractId, type: 'contract.initiated', payload: { gate: 'd' },
+    });
+    const events = await rest(ownerToken, `events?contract_id=eq.${contractId}&select=id,created_at`);
+    const rows = Array.isArray(events.body) ? events.body : null;
+
+    console.log('');
+    say('append', `HTTP ${append.status} ${append.reason ?? ''} (${append.ms}ms)`);
+    say('detail', append.detail ?? '(none)');
+    say('blocked on the lock', append.ms >= BLOCKED_THRESHOLD_MS ? `yes, ${append.ms}ms` : 'NO');
+    say('events now', rows === null ? 'READBACK FAILED' : rows.length);
+
+    const blocked = append.ms >= BLOCKED_THRESHOLD_MS;
+    const namedTF003 = /TF003|does not follow the chain/.test(`${append.detail ?? ''}`);
+    // Exactly the held one. A second row would mean the waiter was written
+    // behind its own predecessor, which is the defect.
+    const onlyTheHeldOne = rows !== null && rows.length === 1;
+
+    console.log('');
+    if (!blocked) {
+      console.log('NOT RUN — the append did not wait, so the held session was not holding.');
+      process.exit(1);
+    }
+    console.log(namedTF003 && onlyTheHeldOne
+      ? 'PASS — the waiter blocked, the guard re-read the tip after the wait, and refused with TF003.'
+      : onlyTheHeldOne
+        ? 'NOT RUN — nothing was written, but the refusal does not name TF003.'
+        : 'FAIL — an event was written at or before the one it follows.');
+    process.exit(namedTF003 && onlyTheHeldOne ? 0 : 1);
+  }
+
   if (kase === 'a') {
     const append = await logEvent(ownerToken, {
       contract_id: contractId, type: 'contract.initiated', payload: { gate: 'a' },
@@ -216,7 +270,7 @@ async function main() {
     say('append', `HTTP ${append.status} ${append.reason ?? ''} (${append.ms}ms)`);
     say('detail', append.detail ?? '(none)');
     say('blocked on the lock', append.ms >= BLOCKED_THRESHOLD_MS ? `yes, ${append.ms}ms` : 'NO');
-    say('events after', eventCount);
+    say('events visible to owner', eventCount);
     say('contract after', gone ? 'deleted' : 'still there');
 
     const blocked = append.ms >= BLOCKED_THRESHOLD_MS;
@@ -229,10 +283,22 @@ async function main() {
       process.exit(1);
     }
     console.log(invariant && eventCount === 0 && gone && namedTF002
-      ? 'PASS — the append blocked on the held DELETE, was refused with TF002, and wrote nothing.'
+      ? 'PASS — the append blocked on the held DELETE, was refused with TF002.'
       : invariant
         ? 'PASS, partly — the invariant held, but not by the refusal this case is about.'
         : 'FAIL — evidence exists and its agreement does not.');
+    // The owner-visible count above is NECESSARY AND NOT SUFFICIENT, and
+    // saying so is the point: `party_read_contract_events` reads events
+    // through an EXISTS on `contracts`, so once the parent is deleted an
+    // orphan would be invisible to the owner — this readback cannot tell
+    // "nothing was written" from "something was written that I may not see".
+    // Codex caught that, 2026-11-08. What TF002 proves is that the insert was
+    // refused; what proves nothing orphaned survives anywhere is a privileged
+    // count, which this script has no credential for:
+    console.log('');
+    console.log('  Confirm from a privileged session — this script cannot:');
+    console.log('    select count(*) from public.events e where not exists (');
+    console.log('      select 1 from public.contracts c where c.id::text = e.contract_id);');
     process.exit(invariant && eventCount === 0 && gone && namedTF002 ? 0 : 1);
   }
 
@@ -262,12 +328,18 @@ async function main() {
     console.log('NOT RUN — the delete did not wait, so the held session was not holding.');
     process.exit(1);
   }
-  console.log(invariant && eventCount > 0 && !gone && namedTF004
+  const passed = invariant && eventCount > 0 && !gone && namedTF004;
+  console.log(passed
     ? 'PASS — the delete blocked on the held append, then was refused with TF004.'
     : invariant && eventCount > 0 && !gone
-      ? 'PASS, partly — the evidence and its agreement both survived, but the refusal does not name TF004.'
+      // Exit 1, not 0. This case exists to prove the delete-side TRIGGER
+      // refused; a delete that RLS rowed out of scope leaves the same data
+      // behind and is not what is being tested. The first version of this
+      // script exited 0 here, which would have let the one case that reaches
+      // TF004 pass without it. Codex caught that, 2026-11-08.
+      ? 'NOT RUN — both survived, but the refusal does not name TF004, so the trigger was not what refused.'
       : 'FAIL — evidence exists and its agreement does not.');
-  process.exit(invariant && eventCount > 0 && !gone ? 0 : 1);
+  process.exit(passed ? 0 : 1);
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });
