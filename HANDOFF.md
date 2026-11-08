@@ -333,6 +333,16 @@ What the run did **not** cover is Next Priority #1.
   not carry the token that was presented; that is with Kenji. Keeping the
   narrowing was conditional on saying so (Codex, 2026-11-07), which the button's
   own copy and `reissueGuestAccess`'s doc comment now do.
+- **E2E's database is one step ahead of E2E's Edge Functions, deliberately
+  (2026-11-08).** Four migrations are applied there — `20261108121000`,
+  `121500`, `130000`, `134500` — and the functions that answer their new
+  SQLSTATEs (TF002, TF003, TF004) are **not** deployed, because ADA gates every
+  deploy. Until they are, those refusals surface as `500 insert_failed` instead
+  of a 409 that names itself; `npm run test:race` shows exactly that. **Deploy
+  order, when it is approved: functions first, migration second** (and the
+  frontend carrying the TF004 wording before either), because a function that
+  knows an unraised SQLSTATE is harmless while a database raising one at a
+  function that does not know it is a 500. Production has none of the four.
 - **Do not add npm packages** without explicit approval.
 - **Do not deploy migrations or Edge Functions, or touch Stripe production config,
   without explicit instruction.** Each deploy is approved individually — this
