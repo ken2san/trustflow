@@ -144,6 +144,13 @@ serve(async (req: Request) => {
     let clockRefusal: string | null = null
 
     for (let attempt = 0; attempt < MAX_ACCEPT_ATTEMPTS; attempt++) {
+      // Cleared at the top of every attempt, so the answer at the end of the
+      // loop names the LAST reason it failed and not the first. Without this,
+      // one clock refusal followed by four tip collisions reported a clock
+      // refusal — a misdiagnosis of a busy contract as a broken server.
+      // Codex found it, 2026-11-08.
+      clockRefusal = null
+
       // One read: the terms as they stand, the chain tip, and an opaque version
       // of the row. All three are re-checked inside the transaction.
       const { data: context, error: contextError } = await supabase

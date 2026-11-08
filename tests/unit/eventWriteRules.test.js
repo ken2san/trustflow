@@ -195,6 +195,9 @@ describe('eventWriteFault — the database\'s refusal, named once', () => {
     // handler does not know being answered as a refusal the caller should
     // act on. 23503 is a foreign-key violation — a real fault, not a race.
     expect(eventWriteFault('23503')).toBe('unknown')
+    // TF005 is a guard refusing to promise anything at this isolation level.
+    // A server fault, deliberately not a refusal the caller is told to act on.
+    expect(eventWriteFault('TF005')).toBe('unknown')
     expect(eventWriteFault('TF00')).toBe('unknown')
     expect(eventWriteFault('tf001')).toBe('unknown')
     expect(eventWriteFault(null)).toBe('unknown')

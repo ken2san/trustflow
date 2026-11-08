@@ -55,8 +55,21 @@
 -- trip later, a skew does not.
 --
 -- EXISTING ROWS ARE LEFT ALONE. Nothing is re-stamped, re-hashed or deleted.
--- A contract whose stamps already run backwards keeps them; it can still be
--- appended to, since a fresh stamp is later than anything already there.
+-- A contract whose stamps already run backwards keeps them — and this does not
+-- repair it. The first version of this comment said such a contract "can still
+-- be appended to, since a fresh stamp is later than anything already there",
+-- which is too strong (Codex, 2026-11-08): the tip read selects by
+-- (created_at desc, id desc), so on an inverted chain it can keep returning a
+-- row that is not the last link, and `events_chain_no_fork_idx` then refuses
+-- every append built on it. A chain already inverted can stay un-appendable.
+-- What this migration does is stop new ones from being created.
+--
+-- AND THE ISOLATION LEVEL IT DEPENDS ON. The lock serialises writers, but the
+-- `max(created_at)` below is read under the transaction's snapshot, so under
+-- REPEATABLE READ it can be a stale answer that the lock cannot refresh. Every
+-- writer here runs at READ COMMITTED — PostgREST's default, and the RPCs run
+-- inside it — and 20261108134500 makes that a requirement rather than an
+-- assumption.
 
 begin;
 
@@ -107,7 +120,8 @@ create trigger events_require_monotonic_created_at
 -- The acceptance writer's version of this cannot be driven from outside: a
 -- caller cannot make an Edge isolate stamp an event in the past. The rule it
 -- now shares with the other writers can be, and is, here — on every database
--- this is applied to, at apply time. Nothing is committed.
+-- this is applied to, at apply time. Nothing is committed. It does not catch a
+-- later redefinition, for the reason given in 20261108121000.
 do $$
 declare
   v_id uuid;

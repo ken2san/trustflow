@@ -32,8 +32,11 @@
 -- there is none. The lock is the half that matters: all evidence writers and
 -- the DELETE serialise on the same row, so the delete either commits first —
 -- and this insert then finds nothing and is refused — or waits, and finds the
--- evidence that makes it refuse. There is no interleaving left in which both
--- succeed.
+-- evidence that makes it refuse. Under READ COMMITTED — which is what every
+-- writer here runs at, PostgREST and the RPCs alike — no interleaving is left
+-- in which both succeed. The scope of that claim is not decoration: see
+-- 20261108130000, where the same argument is stated in full together with the
+-- isolation level it depends on.
 --
 -- WHY NOT A FOREIGN KEY, which is the obvious answer
 -- `contract_id` is text and holds values that are not uuids at all ('1',
@@ -140,9 +143,14 @@ $$;
 -- The race needs an append held open while a DELETE commits, which no caller
 -- can arrange from outside: `scripts/api-e2e.mjs` has no service role and no
 -- test-only hook, on purpose. What it can test is the write boundary itself,
--- which is where the refusal has to happen — and this runs on every database
--- this migration is ever applied to, so a later redefinition that re-opens the
--- hole fails on apply instead of passing review.
+-- which is where the refusal has to happen, and it runs on every database this
+-- migration is ever applied to.
+--
+-- What it is NOT, said here because the first version of this comment claimed
+-- it (Codex, 2026-11-08): it does not catch a future redefinition. A DO block
+-- runs once, at apply, and a later migration that breaks this function does
+-- not re-run it. Only a rebuild from an empty database would. So this guards
+-- the apply, not the next person's edit.
 --
 -- Nothing is committed. Each case is a sub-block whose own raise discards it,
 -- which is also how the rows below are cleaned up: `events` is append-only

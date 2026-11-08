@@ -164,6 +164,11 @@ export function createdAtFollows(
  *                        to be read off the message, so that stays at the
  *                        call site; this only says the insert collided.
  *   'unknown'            anything else, which is a 500 and not a refusal.
+ *                        TF005 is deliberately here rather than named: it
+ *                        means the write ran at an isolation level the guards
+ *                        cannot make promises at (20261108134500), which is a
+ *                        server misconfiguration and not something the caller
+ *                        did or can retry.
  */
 export type EventWriteFault =
   | 'wrong_state'
