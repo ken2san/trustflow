@@ -257,7 +257,15 @@ describe('constants are what the rules claim', () => {
   // defects: refusing what the database accepts is as wrong as accepting what
   // it refuses, because a caller told "well-formed" then gets a bare
   // check_violation, and a caller told "malformed" never tries.
-  it('accepts and refuses exactly what the database does', () => {
+  // SCOPE, because "exactly" has a limit worth naming: this is about typed
+  // values — an integer, an explicit null, or an absent field. It is NOT a
+  // claim about arbitrary JSON. PostgREST coerces `"100"` to the integer 100
+  // and accepts it; this module calls it amount_not_an_integer. The validator
+  // is the stricter of the two there, which predates the currency work and is
+  // the safe direction for a field that gets hashed into evidence — but it
+  // means a string amount is refused here and would have been stored. Codex
+  // probed both directions, 2026-11-08.
+  it('accepts and refuses exactly what the database does, for typed values', () => {
     const base = { project_name: 'p', dod: ['d'], performed_by: 'creator' }
     const jpy = { ...base, currency: 'JPY' }
     const cad = { ...base, currency: 'CAD' }

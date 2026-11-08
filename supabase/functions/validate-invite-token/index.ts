@@ -183,11 +183,13 @@ serve(async (req: Request) => {
       // a v1 one" — the whole check below sits inside a test for a non-empty
       // digest, so a caller that sends none skips it entirely. For JPY that is
       // the deliberate compatibility period documented above. For any other
-      // currency it is not a compatibility case at all: a contract that is not
-      // in yen can only have been created by a client that also computes v2,
-      // so a non-JPY acceptance arriving with no digest, or with v1, is a stale
-      // bundle — one that cannot even display the price, because its only view
-      // of it is a column that is NULL on such a row.
+      // currency there is nothing to be compatible with: v1 and no-digest both
+      // leave the price of such a contract unchecked, and its price is the
+      // whole reason the guard exists. An acceptance client that wants to
+      // accept a non-JPY agreement has to implement v2 — including a direct
+      // API writer, which can certainly create a CAD contract without ever
+      // computing a digest. The requirement is on the accepting client, not an
+      // inference about who created the row.
       //
       // So it is refused here, before the conditional, as "I cannot check"
       // rather than "they changed": nothing is known to have been edited. The

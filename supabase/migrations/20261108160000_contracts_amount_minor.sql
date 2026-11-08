@@ -458,7 +458,11 @@ begin
     values ('migration self-test legacy writer', '["self-test"]'::jsonb, 45000, 'JPY',
             'AWAITING_ACCEPTANCE')
     returning id into v_one;
-    if (select amount_minor from public.contracts where id = v_one) <> 45000 then
+    -- `is distinct from`, not `<>`: a NULL would make `<> 45000` evaluate to
+    -- NULL, plpgsql would not enter the branch, and the assertion would pass
+    -- silently on exactly the failure it is written to catch. Codex, 2026-11-08.
+    if (select amount_minor from public.contracts where id = v_one)
+       is distinct from 45000 then
       raise exception 'SELF-TEST FAILED: amount_minor was not filled from amount_jpy'
         using errcode = 'TF900';
     end if;
@@ -470,7 +474,8 @@ begin
     values ('migration self-test new writer', '["self-test"]'::jsonb, 45000, 'JPY',
             'AWAITING_ACCEPTANCE')
     returning id into v_two;
-    if (select amount_jpy from public.contracts where id = v_two) <> 45000 then
+    if (select amount_jpy from public.contracts where id = v_two)
+       is distinct from 45000 then
       raise exception 'SELF-TEST FAILED: the JPY mirror was not filled from amount_minor'
         using errcode = 'TF900';
     end if;
