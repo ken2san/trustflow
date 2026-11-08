@@ -778,7 +778,15 @@ const App = () => {
    * this only refreshes the list once it agrees to the delete.
    */
   const handleDeleteDraft = useCallback(async (contract) => {
-    const { deleted, error } = await deleteDraftContract(contract.id);
+    const { deleted, error, reason } = await deleteDraftContract(contract.id);
+    // Evidence landed while the delete was in flight. Not a fault, and not
+    // "try again in a moment" — trying again will rightly fail forever. The
+    // list is refreshed so the draft reappears as the agreement it now is.
+    if (reason === 'has_evidence') {
+      addToast('Kept', 'Something was recorded against this agreement, so it is part of the record now.', 'info');
+      await refreshContracts();
+      return;
+    }
     if (!deleted) {
       addToast('Could not delete', error?.message ?? 'Try again in a moment.', 'error');
       return;

@@ -309,21 +309,37 @@ export async function acceptInvite(inviteToken, hirerEmail, counterpartyName, sh
  *
  * Safe to expose as a plain delete: `owner_delete_unaccepted_draft` is what
  * actually enforces this, restricted to the caller's own contracts still at
- * AWAITING_ACCEPTANCE with an unused invite token. A contract in that state
- * has zero rows in `events` — the acceptance event is the first thing ever
- * written for a contract — so this never touches anything that is evidence of
- * a real transaction. Deleting anything else fails silently (RLS rows out of
- * scope simply do not match; `count` on the response is how a caller tells a
- * refused delete from one that already had nothing to remove).
+ * AWAITING_ACCEPTANCE with an unused invite token AND carrying no events.
+ *
+ * That last clause is the one that matters, and the comment here used to say
+ * the opposite — that a contract in this state has zero rows in `events`,
+ * because the acceptance is the first event ever written. It is not: the owner
+ * can record `contract.initiated` on a draft nobody has accepted, which check
+ * 29 of scripts/api-e2e.mjs does, and 20261104204009 added the not-exists
+ * clause for exactly that. Evidence can exist here, and deleting it would
+ * destroy the only copy.
+ *
+ * Two outcomes, both of which a caller should expect:
+ *   - `deleted: false` with no error. Nothing matched: either it is gone
+ *     already, or RLS rowed it out of scope, which is how an ordinary refusal
+ *     reads. `count` is the only way to tell those apart.
+ *   - `reason: 'has_evidence'`. Evidence was appended while this delete was in
+ *     flight, and the database refused under a lock on the row
+ *     (20261108130000). Rare by construction and not an error to report as a
+ *     fault: the right answer on screen is that the agreement is now part of
+ *     the record.
  */
 export async function deleteDraftContract(contractId) {
-  if (!supabase) return { deleted: false, error: NOT_CONFIGURED }
+  if (!supabase) return { deleted: false, error: NOT_CONFIGURED, reason: null }
 
   const { error, count } = await supabase
     .from('contracts')
     .delete({ count: 'exact' })
     .eq('id', contractId)
 
+  // TF004 is the race's refusal, not a failure of the request. Named so the
+  // caller can say "it has evidence now" rather than "something went wrong".
+  if (error?.code === 'TF004') return { deleted: false, error: null, reason: 'has_evidence' }
   if (error) return { deleted: false, error }
-  return { deleted: (count ?? 0) > 0, error: null }
+  return { deleted: (count ?? 0) > 0, error: null, reason: null }
 }
