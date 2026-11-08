@@ -153,6 +153,12 @@ export function createdAtFollows(
  *   'contract_gone'      TF002, enforce_event_parent_contract. The agreement
  *                        was deleted while this write was in flight. Never
  *                        retried either — nothing brings it back.
+ *   'clock_behind_chain' TF003, enforce_event_created_at_follows. This
+ *                        writer's stamp is at or behind the last event on the
+ *                        contract. Worth one more attempt, unlike the two
+ *                        above: a tie resolves itself a round trip later
+ *                        because the next attempt stamps a new time. A skew
+ *                        does not, and ends as a refusal that names itself.
  *   'tip_taken'          23505, events_chain_no_fork_idx or
  *                        events_idempotency_idx. Which of the two it is has
  *                        to be read off the message, so that stays at the
@@ -162,6 +168,7 @@ export function createdAtFollows(
 export type EventWriteFault =
   | 'wrong_state'
   | 'contract_gone'
+  | 'clock_behind_chain'
   | 'tip_taken'
   | 'unknown'
 
@@ -169,6 +176,7 @@ export function eventWriteFault(code: string | null | undefined): EventWriteFaul
   switch (code) {
     case 'TF001': return 'wrong_state'
     case 'TF002': return 'contract_gone'
+    case 'TF003': return 'clock_behind_chain'
     case '23505': return 'tip_taken'
     default:      return 'unknown'
   }

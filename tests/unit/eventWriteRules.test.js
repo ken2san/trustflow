@@ -186,6 +186,7 @@ describe('eventWriteFault — the database\'s refusal, named once', () => {
   it('names each guard that refuses an insert', () => {
     expect(eventWriteFault('TF001')).toBe('wrong_state')
     expect(eventWriteFault('TF002')).toBe('contract_gone')
+    expect(eventWriteFault('TF003')).toBe('clock_behind_chain')
     expect(eventWriteFault('23505')).toBe('tip_taken')
   })
 

@@ -33,7 +33,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { buildEventRecord } from '../_shared/eventRecord.ts'
 import { assuranceFromClaims, claimsFromVerifiedJwt } from '../_shared/authAssurance.ts'
-import { createdAtFollows } from '../_shared/eventWriteRules.ts'
+import { createdAtFollows, eventWriteFault } from '../_shared/eventWriteRules.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -127,7 +127,7 @@ serve(async (req: Request) => {
     // reissue is an event in the same chain, read back by the same readers,
     // and this function is as likely as any other to run on an isolate whose
     // clock is not ahead of the chain tip.
-    let behindTip: string | null = null
+    let clockRefusal: string | null = null
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
       const { data: tip } = await admin
@@ -160,10 +160,10 @@ serve(async (req: Request) => {
       // predecessor's inverts the order every reader of this chain uses, and
       // it is inside the event hash, so it cannot be corrected later.
       if (!createdAtFollows(tip?.created_at as string | null | undefined, event.created_at)) {
-        behindTip = (tip?.created_at as string | null) ?? null
+        clockRefusal = `chain tip is stamped ${(tip?.created_at as string | null) ?? '(none)'}`
         continue
       }
-      behindTip = null
+      clockRefusal = null
 
       const { data: result, error: rpcError } = await admin.rpc('reissue_guest_access', {
         p_contract_id:         contract_id,
@@ -174,7 +174,17 @@ serve(async (req: Request) => {
         p_event:               event,
       })
 
-      if (rpcError) return json({ error: 'reissue_failed', detail: rpcError.message }, 500)
+      if (rpcError) {
+        // The ordering rule, refused inside the transaction rather than by the
+        // pre-check above (enforce_event_created_at_follows, 20261108121500).
+        // Retried for the same reason log-event retries it: the next attempt
+        // reads the tip again and stamps a new time.
+        if (eventWriteFault(rpcError.code) === 'clock_behind_chain') {
+          clockRefusal = rpcError.message
+          continue
+        }
+        return json({ error: 'reissue_failed', detail: rpcError.message }, 500)
+      }
 
       const mapped = STATUS_RESPONSES[result?.status as string]
       if (mapped) return json({ error: mapped.error }, mapped.status)
@@ -194,8 +204,8 @@ serve(async (req: Request) => {
       }, 200)
     }
 
-    if (behindTip) {
-      return json({ error: 'clock_behind_chain', detail: `chain tip is stamped ${behindTip}` }, 409)
+    if (clockRefusal) {
+      return json({ error: 'clock_behind_chain', detail: clockRefusal }, 409)
     }
     return json({ error: 'chain_contention' }, 409)
 

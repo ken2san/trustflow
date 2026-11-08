@@ -31,6 +31,7 @@ import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { shownTermsDigest } from '../_shared/shownTerms.ts'
+import { eventWriteFault } from '../_shared/eventWriteRules.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -136,6 +137,12 @@ serve(async (req: Request) => {
       Date.now() + GUEST_ACCESS_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString()
 
+    // The acceptance has no pre-flight clock check of its own — the context
+    // RPC returns the tip's hash, not its stamp, and the rule is enforced in
+    // the transaction that writes the event anyway. This holds the refusal so
+    // that exhausting the loop can say which of the two things went wrong.
+    let clockRefusal: string | null = null
+
     for (let attempt = 0; attempt < MAX_ACCEPT_ATTEMPTS; attempt++) {
       // One read: the terms as they stand, the chain tip, and an opaque version
       // of the row. All three are re-checked inside the transaction.
@@ -228,7 +235,28 @@ serve(async (req: Request) => {
       // A raised exception rolls the whole call back, so an error here means
       // neither the acceptance nor the evidence landed. Reporting it as a
       // failure is therefore accurate, not optimistic.
-      if (acceptError) return json({ error: 'accept_failed', detail: acceptError.message }, 500)
+      if (acceptError) {
+        // ...with one exception that is not a failure of this call: the
+        // acceptance event's stamp was not later than the last event on the
+        // contract (enforce_event_created_at_follows, 20261108121500).
+        //
+        // This writer used to be the one with no such check, on the stated
+        // grounds that an acceptance is a chain's first event. It is not:
+        // accept_invitation reads a chain tip precisely because there may be
+        // one, and an owner can write `contract.initiated` on an unaccepted
+        // draft. So an acceptance can be stamped behind its predecessor, and
+        // every reader of this chain orders by that stamp.
+        //
+        // Retried rather than refused, because the next attempt rebuilds the
+        // event with a fresh stamp: a tie between two writers in the same
+        // millisecond resolves itself, and a clock that is really behind
+        // exhausts the loop and is answered below, named.
+        if (eventWriteFault(acceptError.code) === 'clock_behind_chain') {
+          clockRefusal = acceptError.message
+          continue
+        }
+        return json({ error: 'accept_failed', detail: acceptError.message }, 500)
+      }
 
       const refused = STATUS_RESPONSES[result?.status]
       if (refused) return json({ error: refused.error }, refused.status)
@@ -254,6 +282,9 @@ serve(async (req: Request) => {
       }, 200)
     }
 
+    if (clockRefusal) {
+      return json({ error: 'clock_behind_chain', detail: clockRefusal }, 409)
+    }
     return json({ error: 'chain_contention' }, 409)
 
   } catch (err) {

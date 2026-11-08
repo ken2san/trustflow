@@ -304,11 +304,14 @@ serve(async (req: Request) => {
       if (outcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)
     }
 
-    // Set when an attempt was abandoned because this isolate's clock was not
-    // ahead of the chain tip, so the refusal at the end of the loop can say
-    // which of the two things went wrong. Cleared whenever an attempt gets
-    // past that check, since a later contention failure is a different fault.
-    let behindTip: string | null = null
+    // Set when an attempt was abandoned, or refused by the database, because
+    // this isolate's clock was not ahead of the chain — so the refusal at the
+    // end of the loop can say which of the two things went wrong. Holds the
+    // sentence to report, since the two sources word it differently: the
+    // pre-check knows the tip it read, and the trigger knows both stamps.
+    // Cleared whenever an attempt gets past the pre-check, since a later
+    // contention failure is a different fault.
+    let clockRefusal: string | null = null
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
       const { data: tip } = await admin
@@ -362,10 +365,10 @@ serve(async (req: Request) => {
       // alternatives — clamping the stamp, or ordering every reader by the
       // chain — and why neither was taken without the owner.
       if (!createdAtFollows(tip?.created_at as string | null | undefined, event.created_at)) {
-        behindTip = (tip?.created_at as string | null) ?? null
+        clockRefusal = `chain tip is stamped ${(tip?.created_at as string | null) ?? '(none)'}`
         continue
       }
-      behindTip = null
+      clockRefusal = null
 
       // The credential is re-read here, immediately before the write.
       //
@@ -450,6 +453,17 @@ serve(async (req: Request) => {
         return json({ error: 'contract_deleted', detail: insertError.message }, 409)
       }
 
+      // The same rule as the pre-check above, enforced where it holds: inside
+      // the insert's own transaction, under the lock on the contract row
+      // (enforce_event_created_at_follows, 20261108121500). Reaching it means
+      // an event landed between the pre-check and this insert, so a retry is
+      // right — it re-reads the tip and stamps a new time. A clock that is
+      // genuinely behind exhausts the loop and is answered below.
+      if (fault === 'clock_behind_chain') {
+        clockRefusal = insertError.message
+        continue
+      }
+
       if (fault === 'wrong_state') {
         // ...unless this IS the operation that moved the state. Two requests
         // carrying the same idempotency key can both miss the lookup above;
@@ -505,11 +519,11 @@ serve(async (req: Request) => {
       return json({ error: 'insert_failed', detail: insertError.message }, 500)
     }
 
-    if (behindTip) {
+    if (clockRefusal) {
       // Not contention. This isolate's clock is not ahead of the chain, and
       // no number of retries fixes that. Said plainly so it is diagnosed as
       // the infrastructure fault it is rather than as a busy contract.
-      return json({ error: 'clock_behind_chain', detail: `chain tip is stamped ${behindTip}` }, 409)
+      return json({ error: 'clock_behind_chain', detail: clockRefusal }, 409)
     }
     return json({ error: 'chain_contention' }, 409)
 
