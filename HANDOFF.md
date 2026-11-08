@@ -10,17 +10,14 @@ view. Migration ledgers level at 37. Two defects were shipped and fixed the
 same day — see "The CAPTCHA outage" and "A defect shipped to production" — and
 both were green in the test suite the whole time._
 
-**Do this first in the next session:** the two probes that proved the order
-hole and the idempotency disclosure, and then verified both fixes, lived only
-in a session scratchpad and are gone. Their cases belong in
-`scripts/api-e2e.mjs`, which already has the helpers: (1) `performance.accepted`
-from `TERMS_ACCEPTED` must answer 409 `wrong_state_for_event_type` and leave
-the state alone, while the legitimate cycle still runs and a payment after the
-terminal state still records; (2) a guest reusing an idempotency key an owner
-used must get 409 `idempotency_key_in_use` and no payload. Both are described
-with their exact before/after below, so they can be rebuilt — but this file
-spent today cataloguing defects that survived because they were recorded where
-nobody looks, and a defect guarded only by prose is one of them.
+**Both of today's worst findings are now guarded by `npm run test:api`**,
+which went from 22 checks to 26. The probes that found them lived in a session
+scratchpad and would have gone with it; a defect guarded only by prose is the
+thing this file spent the day cataloguing. The four cases, all against the
+real system: a receiver cannot accept a performance nobody claimed; a terminal
+agreement cannot be reopened; a payment can still be reported after the
+terminal state (the guard must not go further than it should); and one party's
+idempotency key does not hand over the other's event.
 
 **Open, in priority order:** (1) enable Vercel Web Analytics — one toggle, and
 until it is on, nothing records whether anyone visits, because the anonymous

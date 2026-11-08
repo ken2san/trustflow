@@ -199,6 +199,25 @@ async function main() {
     guestAsserts.status === 403 && guestAsserts.reason === 'wrong_party_for_event_type',
     `HTTP ${guestAsserts.status} ${guestAsserts.reason}`);
 
+  // The right party, the right role, and the wrong moment.
+  //
+  // Until 2026-11-06 this was accepted. log-event checked who the caller was
+  // and what their role could write, and never what state the contract was
+  // in: a receiver could record accepting a performance nobody had claimed,
+  // reaching the terminal state with no assertion anywhere in the record.
+  // Measured HTTP 201 against this very project. Append-only, so such a
+  // history could not be taken back.
+  //
+  // The refusal now comes from inside the insert's own transaction, under a
+  // lock on the contract row — see 20261106210207_enforce_performance_order.
+  const tooEarly = await invoke('log-event', {
+    guestToken,
+    body: { type: 'performance.accepted', contract_id: contractId, payload: {} },
+  });
+  ok('a receiver cannot accept a performance nobody has claimed',
+    tooEarly.status === 409 && tooEarly.reason === 'wrong_state_for_event_type',
+    `HTTP ${tooEarly.status} ${tooEarly.reason}`);
+
   // ── 6. Delivery, asserted by the owner under their JWT ────────────────────
   const idemKey = `${RUN}:asserted`;
   const asserted = await invoke('log-event', {
@@ -241,6 +260,48 @@ async function main() {
   ok('the guest accepts the delivery under the bearer capability',
     deliveryAccepted.status < 300 && Boolean(deliveryAccepted.data?.event),
     `HTTP ${deliveryAccepted.status} ${deliveryAccepted.reason ?? ''}`);
+
+  // The agreement is terminal now. Two things follow, and they pull opposite
+  // ways — which is why the rule covers three event types and not "terminal
+  // means nothing further".
+  const reAssert = await invoke('log-event', {
+    ownerToken,
+    body: { type: 'performance.asserted', contract_id: contractId, payload: {} },
+  });
+  ok('a terminal agreement cannot be reopened by asserting again',
+    reAssert.status === 409 && reAssert.reason === 'wrong_state_for_event_type',
+    `HTTP ${reAssert.status} ${reAssert.reason}`);
+
+  // Money moves outside TrustFlow, so reporting a payment once the work has
+  // been accepted is the ordinary case. A rule that refused everything after
+  // the terminal state would have broken the one thing the product still has
+  // to record at that point.
+  const paidAfter = await invoke('log-event', {
+    guestToken,
+    body: {
+      type: 'payment.reported', contract_id: contractId,
+      payload: { note: 'Harness payment statement — a claim, not a verified fact' },
+    },
+  });
+  ok('a payment can still be reported after the terminal state',
+    paidAfter.status < 300 && Boolean(paidAfter.data?.event),
+    `HTTP ${paidAfter.status} ${paidAfter.reason ?? ''}`);
+
+  // An idempotency key is scoped to an operation, not to a contract.
+  //
+  // It used to be matched on contract and key alone, and the row returned
+  // raw — so a guest supplying a key the owner had used received the owner's
+  // event in full, payload and internal fields included, bypassing the
+  // allowlist projection guest-contract-events exists to apply. Measured
+  // here: HTTP 200, deduplicated true, and the owner's note in the response.
+  const borrowedKey = await invoke('log-event', {
+    guestToken,
+    body: { type: 'payment.reported', contract_id: contractId, idempotency_key: idemKey },
+  });
+  const leaked = JSON.stringify(borrowedKey.data ?? {}).includes('not a human statement');
+  ok("one party's idempotency key does not hand over the other's event",
+    borrowedKey.status === 409 && borrowedKey.reason === 'idempotency_key_in_use' && !leaked,
+    leaked ? 'THE OWNER EVENT WAS RETURNED' : `HTTP ${borrowedKey.status} ${borrowedKey.reason}`);
 
   // ── 8. A revoked capability stops working ─────────────────────────────────
   // Re-issue rotates the token. The old one must die, because this is the only
