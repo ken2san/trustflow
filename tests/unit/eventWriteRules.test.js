@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
+  isolationFaultLine,
 } from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
@@ -203,5 +204,36 @@ describe('eventWriteFault — the database\'s refusal, named once', () => {
     expect(eventWriteFault(null)).toBe('unknown')
     expect(eventWriteFault(undefined)).toBe('unknown')
     expect(eventWriteFault('')).toBe('unknown')
+  })
+})
+
+describe('isolationFaultLine — the refusal an operator has to see', () => {
+  it('names the SQLSTATE, the place, and that it must not be retried', () => {
+    const line = isolationFaultLine('log-event', {
+      code: 'TF005',
+      message: 'appending evidence is only guaranteed under READ COMMITTED; '
+        + 'this transaction is repeatable read',
+    })
+    expect(line).toContain('[log-event]')
+    expect(line).toContain('TF005')
+    expect(line).toContain('must not be retried')
+    // The level comes from the database's own message rather than being
+    // re-derived here, so it has to survive into the line.
+    expect(line).toContain('repeatable read')
+  })
+
+  it('is silent for every other error, including a missing one', () => {
+    // The point of returning null rather than a line is that a caller can log
+    // unconditionally without inventing an isolation fault out of a 23505.
+    expect(isolationFaultLine('log-event', { code: 'TF002', message: 'gone' })).toBeNull()
+    expect(isolationFaultLine('log-event', { code: '23505', message: 'dup' })).toBeNull()
+    expect(isolationFaultLine('log-event', { message: 'no code' })).toBeNull()
+    expect(isolationFaultLine('log-event', null)).toBeNull()
+    expect(isolationFaultLine('log-event', undefined)).toBeNull()
+  })
+
+  it('still produces a line when the database sent no message', () => {
+    expect(isolationFaultLine('reissue-guest-access', { code: 'TF005' }))
+      .toContain('(no message)')
   })
 })

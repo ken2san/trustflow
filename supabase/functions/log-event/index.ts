@@ -35,6 +35,7 @@ import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord, roleInAgreement } from '../_shared/eventRecord.ts'
 import {
   createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
+  isolationFaultLine,
 } from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
@@ -515,6 +516,12 @@ serve(async (req: Request) => {
         }
         continue
       }
+
+      // Said out loud before the 500, because a 500 says nothing about which
+      // of a dozen things went wrong and this one is a misconfigured server
+      // rather than a bad request. See isolationFaultLine.
+      const isolationFault = isolationFaultLine('log-event', insertError)
+      if (isolationFault) console.error(isolationFault)
 
       return json({ error: 'insert_failed', detail: insertError.message }, 500)
     }

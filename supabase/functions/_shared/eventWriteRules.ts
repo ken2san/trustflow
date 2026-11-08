@@ -186,3 +186,28 @@ export function eventWriteFault(code: string | null | undefined): EventWriteFaul
     default:      return 'unknown'
   }
 }
+
+/**
+ * The one refusal that has to reach an operator rather than a caller.
+ *
+ * TF005 means a write ran at an isolation level the guards cannot promise
+ * anything at, so they refused it (20261108134500). `eventWriteFault` calls
+ * that 'unknown' on purpose — it is a 500, not something the caller did — and
+ * a 500 alone tells whoever reads the logs nothing about which of a dozen
+ * things went wrong. Codex's condition for passing the TF005 design was that
+ * the SQLSTATE and the level reach the operational log, and that nothing
+ * retries it as if it were tip contention.
+ *
+ * Returns the line to log, or null when this error is not that. The level is
+ * carried in the database's own message, which is why it is included verbatim
+ * rather than re-derived here: this function reads no settings.
+ */
+export function isolationFaultLine(
+  where: string,
+  error: { code?: string | null, message?: string | null } | null | undefined,
+): string | null {
+  if (error?.code !== 'TF005') return null
+  return `[${where}] TF005 refused the write: the transaction was not READ COMMITTED. `
+    + `This is a server configuration fault, not a caller error, and it must not be retried. `
+    + `${error.message ?? '(no message)'}`
+}

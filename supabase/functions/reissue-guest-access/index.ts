@@ -33,7 +33,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { buildEventRecord } from '../_shared/eventRecord.ts'
 import { assuranceFromClaims, claimsFromVerifiedJwt } from '../_shared/authAssurance.ts'
-import { createdAtFollows, eventWriteFault } from '../_shared/eventWriteRules.ts'
+import {
+  createdAtFollows, eventWriteFault, isolationFaultLine,
+} from '../_shared/eventWriteRules.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -183,6 +185,9 @@ serve(async (req: Request) => {
           clockRefusal = rpcError.message
           continue
         }
+        const isolationFault = isolationFaultLine('reissue-guest-access', rpcError)
+        if (isolationFault) console.error(isolationFault)
+
         return json({ error: 'reissue_failed', detail: rpcError.message }, 500)
       }
 

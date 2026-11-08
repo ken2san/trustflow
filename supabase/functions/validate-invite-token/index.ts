@@ -31,7 +31,7 @@ import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { shownTermsDigest } from '../_shared/shownTerms.ts'
-import { eventWriteFault } from '../_shared/eventWriteRules.ts'
+import { eventWriteFault, isolationFaultLine } from '../_shared/eventWriteRules.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -262,6 +262,9 @@ serve(async (req: Request) => {
           clockRefusal = acceptError.message
           continue
         }
+        const isolationFault = isolationFaultLine('validate-invite-token', acceptError)
+        if (isolationFault) console.error(isolationFault)
+
         return json({ error: 'accept_failed', detail: acceptError.message }, 500)
       }
 
