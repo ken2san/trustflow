@@ -2211,6 +2211,13 @@ assertions described the old lie and were updated to the new truth.
   decide whether code compares case-insensitively while the RLS policy does
   not.
 
+- **`log-event/index.ts:3` says the function is the "only writer to the
+  `events` table", which stopped being true.** Reported in three consecutive
+  deliverables and deliberately left alone: it is a one-line comment edit
+  inside a deployed Edge Function, and a docs-only task is not the place to
+  redeploy one. **Kenji's call, 2026-11-08: fix it the next time that function
+  is changed for another reason**, not as its own deploy.
+
 - **What to do with production's test data.** Unchanged: 1272 contracts / 2310
   events belong to the QA Earner, boundary against new writes holds, deletion
   still undecided. See `Decisions.md`.
