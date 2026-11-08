@@ -33,6 +33,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord, roleInAgreement } from '../_shared/eventRecord.ts'
+import { idempotencyOutcome } from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
 } from '../_shared/authAssurance.ts'
@@ -282,6 +283,13 @@ serve(async (req: Request) => {
     // A key is scoped to an operation, not to a contract. Matching the type
     // and the actor as well makes a retry a retry, and makes a collision a
     // collision — answered as one, rather than handed someone else's record.
+    //
+    // That rule is `idempotencyOutcome` in _shared/eventWriteRules.ts, and it
+    // is the same call at all three places this function answers a key hit.
+    // It was fixed here on 2026-11-06 and left unfixed in the unique-violation
+    // branch below, where the row was still returned without asking whose it
+    // was — one rule, three copies, and the drift went the only direction
+    // drift ever goes.
     if (idempotency_key) {
       const { data: existing } = await admin
         .from('events')
@@ -289,15 +297,12 @@ serve(async (req: Request) => {
         .eq('contract_id', contract_id)
         .eq('idempotency_key', idempotency_key)
         .maybeSingle()
-      if (existing) {
-        if (existing.type === type && existing.actor_id === actor.actorId) {
-          return json({ event: existing, deduplicated: true }, 200)
-        }
-        // Same key, different operation. Refusing names the real problem;
-        // returning the other event would disclose it, and writing a second
-        // row under one key would make "idempotent" meaningless.
-        return json({ error: 'idempotency_key_in_use' }, 409)
-      }
+      const outcome = idempotencyOutcome(existing, { type, actorId: actor.actorId })
+      if (outcome === 'replay') return json({ event: existing, deduplicated: true }, 200)
+      // Same key, different operation. Refusing names the real problem;
+      // returning the other event would disclose it, and writing a second
+      // row under one key would make "idempotent" meaningless.
+      if (outcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)
     }
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
@@ -376,7 +381,7 @@ serve(async (req: Request) => {
             .eq('contract_id', contract_id)
             .eq('idempotency_key', idempotency_key as string)
             .maybeSingle()
-          if (twin && twin.type === type && twin.actor_id === actor.actorId) {
+          if (idempotencyOutcome(twin, { type, actorId: actor.actorId }) === 'replay') {
             return json({ event: twin, deduplicated: true }, 200)
           }
         }
@@ -391,13 +396,21 @@ serve(async (req: Request) => {
       // Re-read the tip and try again.
       if (insertError.code === '23505') {
         if (insertError.message?.includes('events_idempotency_idx')) {
-          const { data: existing } = await admin
+          // The same disclosure as the lookup above, reached the other way.
+          // This branch runs when a row under the key was committed between
+          // that lookup and this insert, so the row it finds is exactly as
+          // likely to be the other party's — and until now it was returned
+          // raw, without asking whose it was. Narrower than the lookup path,
+          // and the same leak.
+          const { data: raced } = await admin
             .from('events')
             .select('*')
             .eq('contract_id', contract_id)
             .eq('idempotency_key', idempotency_key as string)
             .maybeSingle()
-          if (existing) return json({ event: existing, deduplicated: true }, 200)
+          const racedOutcome = idempotencyOutcome(raced, { type, actorId: actor.actorId })
+          if (racedOutcome === 'replay') return json({ event: raced, deduplicated: true }, 200)
+          if (racedOutcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)
         }
         continue
       }
