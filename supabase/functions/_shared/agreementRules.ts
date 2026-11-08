@@ -57,6 +57,7 @@ export type RuleViolation =
   | 'dod_not_array' | 'dod_empty' | 'dod_too_many_items'
   | 'dod_item_not_string' | 'dod_item_blank' | 'dod_item_too_long'
   | 'amount_not_an_integer' | 'amount_not_positive' | 'amount_too_large'
+  | 'amount_jpy_mirror_invalid'
   | 'currency_unsupported'
   | 'deadline_malformed' | 'deadline_in_the_past'
   | 'invited_email_malformed'
@@ -264,6 +265,36 @@ export function violationsOf(
   // how many decimals the currency has, so the two cannot disagree.
   if (minorDigitsOf(currency) === null) {
     bad.push('currency_unsupported')
+  }
+
+  // ── the transitional amount_jpy mirror ────────────────────────────────────
+  // A proposal may omit amount_jpy entirely; the creation path fills it for a
+  // JPY contract and the database fills amount_minor from it for a caller that
+  // only knows the old name. What a proposal may NOT do is state the two in a
+  // way the database will refuse, because this module is the machine-readable
+  // pre-check for that database — an agent told "no violations" and then
+  // handed a bare check_violation has been told something false.
+  //
+  // Codex found this gap, 2026-11-08: all three of
+  //   JPY with amount_minor 100 and amount_jpy 200,
+  //   CAD with both set to 1250,
+  //   CAD with amount_jpy alone
+  // passed, and all three fail contracts_amount_jpy_mirror_check.
+  if (amount_jpy !== undefined && amount_jpy !== null) {
+    if (currency === 'JPY') {
+      // The column that is still read must not disagree with the one that is
+      // stored: the same agreement would be two different deals depending on
+      // which reader looked.
+      if (amount_minor !== undefined && amount_jpy !== amount_minor) {
+        bad.push('amount_jpy_mirror_invalid')
+      }
+    } else if (minorDigitsOf(currency) !== null) {
+      // A cent amount in a column named after yen is wrong by a factor of 100
+      // to anything that trusts the name, so it has to be absent. Only said
+      // for a currency we actually support — otherwise the caller already has
+      // currency_unsupported and this would just be noise.
+      bad.push('amount_jpy_mirror_invalid')
+    }
   }
 
   // ── deadline ──────────────────────────────────────────────────────────────

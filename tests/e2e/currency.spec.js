@@ -27,6 +27,7 @@
 import { test, expect } from '@playwright/test';
 import { getEarnerSession } from './earnerSession.js';
 import { SUPABASE_URL, SUPABASE_KEY, LIVE_SKIPPED } from './liveEnv.js';
+import { shownTermsDigest } from '../../supabase/functions/_shared/shownTerms.ts';
 
 test.skip(LIVE_SKIPPED,
   'TF_LIVE_E2E=skip — the live-API suites were deliberately disabled.');
@@ -191,4 +192,111 @@ test('the agreed amount cannot be changed after acceptance', async ({ request })
     method: 'GET', token,
   });
   expect(after.body[0].amount_minor).toBe(CAD_MINOR);
+});
+
+// ── The two failures Codex's review of this change found ────────────────────
+
+test('a writer that only knows amount_jpy still creates a JPY contract', async ({ request }) => {
+  // The break this guards: `amount_minor` is NOT NULL with no default, so
+  // every browser on a bundle from before 2026-11-08 — which sends amount_jpy
+  // alone — would have failed with 23502 the moment the first migration
+  // committed, and gone on failing until the person reloaded. The server fills
+  // the new column from the old one instead (20261108160000's
+  // contracts_fill_amount_minor).
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    prefer: 'return=representation',
+    body: {
+      project_name: 'Legacy writer probe',
+      dod: ['deliverable'],
+      amount_jpy: 45000,
+      currency: 'JPY',
+      earner_user_id: userId,
+      earner_display_name: 'Acme Translations',
+    },
+  });
+  expect(created.status, `legacy insert failed: ${JSON.stringify(created.body)}`).toBe(201);
+  expect(created.body[0].amount_minor).toBe(45000);
+  expect(created.body[0].amount_jpy).toBe(45000);
+});
+
+test('a contract with no amount at all is still refused, not defaulted to zero', async ({ request }) => {
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    body: {
+      project_name: 'No amount probe',
+      dod: ['deliverable'],
+      currency: 'JPY',
+      earner_user_id: userId,
+      earner_display_name: 'Acme Translations',
+    },
+  });
+  expect(created.status).toBe(400);
+  expect(JSON.stringify(created.body)).toContain('amount_minor');
+});
+
+test('accepting a CAD agreement against the v1 terms digest is refused', async ({ request }) => {
+  // v1 of the shown-terms digest covers `amount_jpy`, which is NULL on every
+  // non-JPY row — before and after an owner changes the price. So a guest on
+  // an older bundle would have their acceptance checked against a digest that
+  // is blind to the amount: the exact failure the mechanism exists to prevent,
+  // on exactly the contracts this work is for.
+  const { contract } = await createCadContract(request);
+
+  const refused = await api(request, '/functions/v1/validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token, accept: true,
+      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
+      // Any digest at all: it is refused on the version, before comparison.
+      shown_terms_digest: 'f'.repeat(64),
+      shown_terms_version: 1,
+    },
+  });
+  expect(refused.status).toBe(409);
+  // "I cannot check this", not "they changed" — nothing is known to have been
+  // edited, and saying so would be a claim about the agreement.
+  expect(refused.body.error).toBe('terms_check_unsupported');
+
+  // The invitation is still usable, so the refusal costs a reload and nothing
+  // more.
+  const accepted = await api(request, '/functions/v1/validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token, accept: true,
+      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
+    },
+  });
+  expect(accepted.status).toBe(200);
+});
+
+test('a JPY agreement still accepts the v1 terms digest', async ({ request }) => {
+  // The compatibility half: v1 does cover the amount of a yen contract, so a
+  // guest on an older bundle is not refused for being one deploy behind.
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    prefer: 'return=representation',
+    body: {
+      project_name: 'Yen v1 digest probe',
+      dod: ['deliverable'],
+      amount_jpy: 20000, amount_minor: 20000, currency: 'JPY',
+      deadline: '2026-12-31',
+      earner_user_id: userId,
+      earner_display_name: 'Acme Translations',
+      invited_hirer_email: 'invited@example.test',
+    },
+  });
+  expect(created.status).toBe(201);
+  const contract = created.body[0];
+
+  const digest = await shownTermsDigest(contract, 1);
+  const accepted = await api(request, '/functions/v1/validate-invite-token', {
+    body: {
+      invite_token: contract.invite_token, accept: true,
+      hirer_email: 'invited@example.test', counterparty_name: 'Guest',
+      shown_terms_digest: digest, shown_terms_version: 1,
+    },
+  });
+  expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
 });

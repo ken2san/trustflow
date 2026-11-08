@@ -136,7 +136,7 @@ describe('existing data stays valid', () => {
   })
 
   it('accepts the smallest amount in either project', () => {
-    expect(violationsOf({ ...WELL_FORMED, amount_minor: 1 }, AT)).toEqual([])
+    expect(violationsOf({ ...WELL_FORMED, amount_minor: 1, amount_jpy: 1 }, AT)).toEqual([])
   })
 
   it('accepts both performed_by values, and nothing else', () => {
@@ -234,16 +234,38 @@ describe('constants are what the rules claim', () => {
   })
 
   it('accepts an amount in minor units under either field name', () => {
-    const base = {
+    const cad = {
       project_name: 'p', dod: ['d'], currency: 'CAD', performed_by: 'creator',
     }
-    expect(violationsOf({ ...base, amount_minor: 1250 }, AT)).toEqual([])
-    // The pre-rename name, still read so a caller that has not been updated
-    // is not broken by the rename alone.
-    expect(violationsOf({ ...base, amount_jpy: 1250 }, AT)).toEqual([])
-    // amount_minor wins when both are present: it is the column the database
-    // stores, so reconciling a disagreement here would hide it.
-    expect(violationsOf({ ...base, amount_minor: 1250, amount_jpy: -5 }, AT)).toEqual([])
+    const jpy = { ...cad, currency: 'JPY' }
+    expect(violationsOf({ ...cad, amount_minor: 1250 }, AT)).toEqual([])
+    // The pre-rename name, still read so a JPY caller that has not been
+    // updated is not broken by the rename alone. Only JPY: amount_jpy on any
+    // other currency is refused below.
+    expect(violationsOf({ ...jpy, amount_jpy: 1250 }, AT)).toEqual([])
+    // Both, agreeing, which is what the creation path sends for JPY.
+    expect(violationsOf({ ...jpy, amount_minor: 1250, amount_jpy: 1250 }, AT)).toEqual([])
+  })
+
+  // The gap Codex found on 2026-11-08: these all passed while all three fail
+  // contracts_amount_jpy_mirror_check, so a caller was told "well-formed" and
+  // then handed a bare check_violation.
+  it('refuses a proposal the database will refuse for its amount_jpy mirror', () => {
+    const base = { project_name: 'p', dod: ['d'], performed_by: 'creator' }
+    expect(violationsOf({ ...base, currency: 'JPY', amount_minor: 100, amount_jpy: 200 }, AT))
+      .toEqual(['amount_jpy_mirror_invalid'])
+    expect(violationsOf({ ...base, currency: 'CAD', amount_minor: 1250, amount_jpy: 1250 }, AT))
+      .toEqual(['amount_jpy_mirror_invalid'])
+    expect(violationsOf({ ...base, currency: 'CAD', amount_jpy: 1250 }, AT))
+      .toEqual(['amount_jpy_mirror_invalid'])
+    // Omitting it is fine: the creation path fills it for JPY, and the
+    // database fills amount_minor from it for a caller that only knows the
+    // old name.
+    expect(violationsOf({ ...base, currency: 'CAD', amount_minor: 1250 }, AT)).toEqual([])
+    expect(violationsOf({ ...base, currency: 'JPY', amount_minor: 1250 }, AT)).toEqual([])
+    // An unsupported currency says so once; the mirror is not piled on top.
+    expect(violationsOf({ ...base, currency: 'CHF', amount_jpy: 1250 }, AT))
+      .toEqual(['currency_unsupported'])
   })
 
   it('refuses an amount past what the integer column can hold', () => {

@@ -84,13 +84,54 @@ alter table contracts
   add constraint contracts_amount_jpy_mirror_check
   check (amount_jpy = amount_minor);
 
--- ── 2. The client may supply it ─────────────────────────────────────────────
+-- ── 2. A writer that has never heard of it still works ─────────────────────
+--
+-- WITHOUT THIS, THE MIGRATION BREAKS CONTRACT CREATION THE MOMENT IT COMMITS.
+-- `amount_minor` is NOT NULL with no default, and every browser running a
+-- bundle from before today sends `amount_jpy` alone (src/lib/contracts.js
+-- before 5156225). Those inserts would fail with 23502 until the person
+-- reloaded — between this migration and the frontend deploy for certain, and
+-- afterwards for anyone on a cached bundle. Codex found this, 2026-11-08; the
+-- three-step order in the header did not save it, because the break starts at
+-- step 1.
+--
+-- So the server fills the new column from the old one when a caller omits it.
+-- This is correct and not a guess: it only ever fires for a row whose currency
+-- is JPY, where the two columns are the same integer by CHECK, and the
+-- 20261108161000 mirror makes any other currency with an amount_jpy
+-- unrepresentable anyway. A row supplying neither still fails NOT NULL, which
+-- is the right answer rather than a zero.
+--
+-- It is transitional and dies with the column: drop this trigger in the same
+-- migration that drops amount_jpy.
+create or replace function public.fill_amount_minor_from_legacy()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.amount_minor is null then
+    new.amount_minor := new.amount_jpy;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists contracts_fill_amount_minor on contracts;
+create trigger contracts_fill_amount_minor
+  before insert on contracts
+  for each row
+  execute function public.fill_amount_minor_from_legacy();
+
+revoke execute on function public.fill_amount_minor_from_legacy() from public, anon, authenticated;
+
+-- ── 3. The client may supply it ─────────────────────────────────────────────
 -- Table-level INSERT was revoked in 20260923000000 and re-granted per column,
 -- and a column added later is not covered by that grant. Without this line the
 -- browser's insert fails with 403 on the one field this whole change is about.
 grant insert (amount_minor) on contracts to authenticated;
 
--- ── 3. The freeze trigger learns the new column ─────────────────────────────
+-- ── 4. The freeze trigger learns the new column ─────────────────────────────
 -- Body otherwise unchanged from 20260927000000, where its reasoning lives.
 create or replace function public.freeze_accepted_terms()
 returns trigger
@@ -124,7 +165,7 @@ $$;
 
 revoke execute on function public.freeze_accepted_terms() from public, anon, authenticated;
 
--- ── 4. Both acceptance functions expose it ──────────────────────────────────
+-- ── 5. Both acceptance functions expose it ──────────────────────────────────
 -- `create or replace function` has no other form, so the bodies are restated
 -- verbatim from 20260929000000 (invite_acceptance_context) and 20260929000100
 -- (accept_invitation) with one key added to each returned `contract` object.
@@ -347,7 +388,7 @@ $$;
 -- grants made when each function was introduced still stand and are not
 -- restated here.
 
--- ── 5. Self-test ────────────────────────────────────────────────────────────
+-- ── 6. Self-test ────────────────────────────────────────────────────────────
 -- Every claim above, asked of the database rather than asserted in a comment.
 do $$
 declare
@@ -355,7 +396,17 @@ declare
   v_ctx jsonb;
 begin
   -- The backfill left nothing behind.
-  if exists (select 1 from public.contracts where amount_minor is distinct from amount_jpy) then
+  --
+  -- Scoped to JPY rather than asked of every row, and the scope is the point:
+  -- when this migration runs for the first time JPY is the only currency, so
+  -- the two are the same question. After 20261108161000 they are not — a CAD
+  -- row has amount_jpy NULL on purpose — and an unscoped assertion would fail
+  -- on a legitimate database the moment this file was replayed. Found by
+  -- replaying it on E2E after a CAD contract existed.
+  if exists (
+    select 1 from public.contracts
+     where currency = 'JPY' and amount_minor is distinct from amount_jpy
+  ) then
     raise exception 'SELF-TEST FAILED: a row where amount_minor and amount_jpy disagree'
       using errcode = 'TF900';
   end if;
@@ -363,6 +414,31 @@ begin
   insert into public.contracts (project_name, dod, amount_jpy, amount_minor, currency, state)
   values ('migration self-test', '["self-test"]'::jsonb, 300000, 300000, 'JPY', 'AWAITING_ACCEPTANCE')
   returning id into v_id;
+
+  -- A writer that knows only the old column still lands, with amount_minor
+  -- filled from it. This is the case Codex found missing.
+  declare v_legacy uuid;
+  begin
+    insert into public.contracts (project_name, dod, amount_jpy, currency, state)
+    values ('migration self-test legacy writer', '["self-test"]'::jsonb, 45000, 'JPY',
+            'AWAITING_ACCEPTANCE')
+    returning id into v_legacy;
+    if (select amount_minor from public.contracts where id = v_legacy) <> 45000 then
+      raise exception 'SELF-TEST FAILED: amount_minor was not filled from amount_jpy'
+        using errcode = 'TF900';
+    end if;
+  end;
+
+  -- And a writer that supplies neither still fails, rather than recording a
+  -- zero-amount agreement.
+  begin
+    insert into public.contracts (project_name, dod, currency, state)
+    values ('migration self-test', '["self-test"]'::jsonb, 'JPY', 'AWAITING_ACCEPTANCE');
+    raise exception 'SELF-TEST FAILED: a contract with no amount at all was accepted'
+      using errcode = 'TF900';
+  exception
+    when not_null_violation then null;
+  end;
 
   -- A row whose two amounts disagree cannot exist.
   begin
@@ -413,6 +489,8 @@ commit;
 -- ROLLBACK
 --   (restore the two functions from 20260929000000 / 20260929000100 and
 --    freeze_accepted_terms from 20260927000000, then)
+--   drop trigger contracts_fill_amount_minor on contracts;
+--   drop function public.fill_amount_minor_from_legacy();
 --   alter table contracts drop constraint contracts_amount_jpy_mirror_check;
 --   alter table contracts drop constraint contracts_amount_minor_positive_check;
 --   alter table contracts drop column amount_minor;

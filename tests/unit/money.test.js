@@ -168,3 +168,42 @@ describe('an amount on screen', () => {
     expect(formatMinor(undefined, 'JPY')).toBe('—')
   })
 })
+
+// ── The database's copy of the list ─────────────────────────────────────────
+//
+// Codex's review of 2026-11-08 made a fair objection to the phrase "one source
+// of truth": the six codes are hand-copied into 20261108161000's
+// `contracts_currency_check`, and nothing made the copy agree with this module.
+// It does now. This is a cheap mechanical check, not a claim that the live
+// database matches the file — only that the migration in the tree does.
+describe('the migration agrees with this module', () => {
+  it('constrains the same six codes that money.ts lists', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const sql = await readFile(
+      new URL('../../supabase/migrations/20261108161000_contracts_currency_list.sql',
+              import.meta.url),
+      'utf8',
+    )
+    // The CHECK, not the prose: `currency in ('JPY', 'CAD', …)`.
+    const match = /add constraint contracts_currency_check\s*\n\s*check \(currency in \(([^)]*)\)\)/
+      .exec(sql)
+    expect(match, 'contracts_currency_check was not found in the migration').toBeTruthy()
+    const inSql = match[1].split(',').map(part => part.trim().replace(/^'|'$/g, ''))
+    expect(inSql).toEqual([...SUPPORTED_CURRENCIES])
+  })
+
+  it('fills amount_minor from amount_jpy for a writer that predates the rename', async () => {
+    // Not a behaviour test — the migration's own self-test covers that against
+    // a real database. This asserts the trigger is still in the file at all,
+    // because without it the first migration breaks every cached browser's
+    // contract creation the moment it commits (Codex, 2026-11-08).
+    const { readFile } = await import('node:fs/promises')
+    const sql = await readFile(
+      new URL('../../supabase/migrations/20261108160000_contracts_amount_minor.sql',
+              import.meta.url),
+      'utf8',
+    )
+    expect(sql).toContain('new.amount_minor := new.amount_jpy')
+    expect(sql).toContain('create trigger contracts_fill_amount_minor')
+  })
+})
