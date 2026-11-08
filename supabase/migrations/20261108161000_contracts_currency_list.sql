@@ -103,11 +103,36 @@ begin
     when check_violation then null;
   end;
 
-  -- A JPY row must still carry the mirror, and must still agree with it.
+  -- A JPY row ends up carrying the mirror, filled by the server rather than
+  -- demanded of the writer.
+  --
+  -- THIS ASSERTION USED TO BE THE OPPOSITE, and it was right at the time: when
+  -- this file was written the mirror was the writer's job, so a JPY row
+  -- supplying no amount_jpy had to be refused. 20261108160000 then took
+  -- ownership of the mirror in both directions, which made that refusal wrong
+  -- — and this is where that showed up: replaying both files on E2E failed
+  -- here, loudly, instead of leaving two files quietly disagreeing about whose
+  -- job the mirror is. The CHECK below still requires a non-null equal mirror;
+  -- what changed is who satisfies it.
+  declare v_jpy uuid;
   begin
     insert into public.contracts (project_name, dod, amount_minor, currency, state)
-    values ('migration self-test', '["self-test"]'::jsonb, 300000, 'JPY', 'AWAITING_ACCEPTANCE');
-    raise exception 'SELF-TEST FAILED: a JPY row with no amount_jpy was accepted'
+    values ('migration self-test', '["self-test"]'::jsonb, 300000, 'JPY', 'AWAITING_ACCEPTANCE')
+    returning id into v_jpy;
+    if (select amount_jpy from public.contracts where id = v_jpy)
+       is distinct from 300000 then
+      raise exception 'SELF-TEST FAILED: the JPY mirror was not filled from amount_minor'
+        using errcode = 'TF900';
+    end if;
+  end;
+
+  -- A JPY row whose two amounts are STATED and disagree is still refused: the
+  -- server fills a missing mirror, it does not reconcile a contradiction.
+  begin
+    insert into public.contracts (project_name, dod, amount_minor, amount_jpy, currency, state)
+    values ('migration self-test', '["self-test"]'::jsonb, 300000, 1, 'JPY',
+            'AWAITING_ACCEPTANCE');
+    raise exception 'SELF-TEST FAILED: two disagreeing amounts were accepted'
       using errcode = 'TF900';
   exception
     when check_violation then null;
