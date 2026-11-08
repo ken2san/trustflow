@@ -5,6 +5,10 @@ file and line, and where a claim is about the live database it was checked with 
 read-only query against production `fqgpzhwvvfsxswlnbbgg` or E2E
 `yqjtawffpesplqyurlpj`.
 
+Reviewed by Codex after the first draft; §6 lists what the review changed and
+what it still withholds. Four claims in that draft were wrong and are corrected
+in place rather than quietly dropped.
+
 Two questions, one document, because they turn out to share a root: the product
 keeps an excellent record of what *happened* and almost no record of what is
 *happening*, and the one place that gap bites hardest is an invitation sent to
@@ -73,9 +77,15 @@ say so are already in the browser:
 - **`last_performance_at`** is computed for every contract in the list by
   `withLatestPerformance` (`src/lib/contracts.js:144`) and **is never read by
   anything** — `grep` finds it in `contracts.js` and in one e2e fixture, nowhere
-  in `src/views` or `src/lib/contractStatus.js`. It is "asserted since" for
-  `AWAITING_CONFIRMATION` and "correction requested since" after a rejection.
-  This one needs no new query at all.
+  in `src/views` or `src/lib/contractStatus.js`. (`last_performance_type`, its
+  sibling, *is* read — `contractStatus.js:74,167`; only the timestamp is dead.)
+  It is "asserted since" for `AWAITING_CONFIRMATION` and "correction requested
+  since" after a rejection, and needs no new query at all.
+
+  It can also be **null**, and A1 must not read null as a time: there may be no
+  such event yet, and `withLatestPerformance` does not check its query for an
+  error (`contracts.js:128`), so a failed read is null too. Null means "start
+  time unknown", never "waiting since now".
 - **`invite_token_expires_at`** is selected (`contracts.js:105`) and read only to
   compute the 24-hour warning (`contractStatus.js:133-150`).
 - **The acceptance time** — "accepted since", for `TERMS_ACCEPTED` — is the one
@@ -137,10 +147,12 @@ one is shown for its last 24 hours, and one is not shown at all.
 
 ## 2. The wrong email
 
-### 2.1 First, the thing that removes most of the drama: no email is ever sent
+### 2.1 First, the thing that removes most of the drama: no invitation is ever emailed
 
-TrustFlow sends nothing. `send-acceptance-email` is the only mailer in the tree
-and it is **not deployed** — `npm run smoke:prod` asserts it stays 404, and the
+**TrustFlow never emails an invitation.** (It does send mail: `signInWithOtp`
+puts the owner's sign-in code in their mailbox, `src/lib/earnerAuth.js:146`.
+Nothing about an agreement is emailed to anyone.) `send-acceptance-email` is the
+only agreement-related mailer in the tree and it is **not deployed** — `npm run smoke:prod` asserts it stays 404, and the
 source survives only as a file (`supabase/functions/send-acceptance-email/`,
 unreferenced). `HANDOFF.md` §Next Priority #1 states it directly: "**Send Invite
 produces a shareable URL and sends no email.** Delivery is manual, through
@@ -207,8 +219,8 @@ A second constraint, less obvious and more interesting:
 
 | Fact | Where it lives | Mutable? | In a hash? |
 | --- | --- | --- | --- |
-| the address the owner typed | `contracts.invited_hirer_email` | only by a service-role writer | **no** |
-| the address the guest typed at acceptance | `contracts.hirer_email` | only by a service-role writer | **no** (see below) |
+| the address the owner typed | `contracts.invited_hirer_email` | only by a service-role writer | **the column is not** — but its value at acceptance is, as the next two rows |
+| the address the guest typed at acceptance | `contracts.hirer_email` | only by a service-role writer | same |
 | who was invited, as evidence | `_invited_recipient` in the acceptance event's payload (`_shared/eventRecord.ts:74-81`) | never — `events` is append-only | yes, via `payload_hash` → `event_hash` |
 | who claimed to accept, as evidence | `_claimed_identity`, same payload, with `_claimed_identity_verified: false` | never | yes, same path |
 | the agreed terms | `agreement_hash` on **every** event (`eventRecord.ts:146-150`) | n/a | yes |
@@ -228,17 +240,29 @@ disagreement* between the screen and the evidence.
 `HANDOFF.md` §Open Decisions states that "`hirer_email` is inside the hashed
 agreement snapshot and the log is append-only". The second half is right and the
 first half is not — `hirer_email` is hashed inside the **acceptance event's
-payload** (`_claimed_identity`), not in the agreement snapshot. The conclusion
-that decision draws (it cannot be repaired by normalising the stored value) still
-holds for the same reason. Reported here, not changed, per the Scope Policy.
+payload** (`_claimed_identity`), not in the agreement snapshot. What that decision concludes needs the same narrowing: what cannot be
+repaired is the **input already hashed into an existing acceptance event** —
+normalising today's row would break no hash, and comparing case-insensitively
+in code while the RLS policy uses `=` remains a live design choice, not
+something append-only forbids. Reported here, not changed, per the Scope Policy,
+and not mixed into B2.
 
-**Third, and the one that reshapes Kenji's preferred option:** before acceptance
-there is *no record of the invitation at all*. `createContract` writes no event
-(`src/lib/contracts.js:36-78`), nothing in `src/` ever logs
+**Third, and the one that reshapes Kenji's preferred option:** in practice there
+is *no record of the invitation* before acceptance. `createContract` writes no
+event (`src/lib/contracts.js:36-78`), nothing in `src/` ever logs
 `contract.initiated` (`grep` finds the constant in `eventLog.js:30` and the
 labels in two views — no call site), and `HANDOFF.md` §Open Decisions still lists
 "**Whether creation should be an event.** Unchanged — `createContract` still logs
 nothing; acceptance is still the chain's first event."
+
+To be exact, because the difference matters below: what is missing is a *caller*,
+not a *destination*. `contract.initiated` is in `log-event`'s allowlist
+(`log-event/index.ts:66-68`) and an unaccepted contract can already carry it —
+`validate-invite-token/index.ts:250-254` says so, and `scripts/api-e2e.mjs`
+check 29 does it. So an event *can* be appended to an unaccepted agreement
+today. What cannot be done today is appending one and still being able to
+withdraw the offer: the moment an event exists, `owner_delete_unaccepted_draft`
+stops matching, because its predicate requires no events.
 
 ### 2.5 So what is the flow today — correct, revoke, re-invite?
 
@@ -273,13 +297,24 @@ abandoned — which is also a §1 problem.
 
 ### 2.6 The tension that has to be named
 
-> **Today, keeping the mistake and closing the wrong link are mutually
-> exclusive.**
+> **Today there is no product path that keeps the agreement and its record and
+> also stops the wrong link now.**
 
 Delete the draft and the wrong link dies — and so does every trace that an offer
 was ever made to the wrong person. Keep the contract and the mistake is
 preserved in a mutable column that no event references, while the wrong link
-stays usable for up to 72 hours.
+stays usable until it is used or the 72 hours run out.
+
+Stated that precisely on Codex's correction, because the absolute version is
+false in two ways. Waiting is a real third path: the expiry is enforced inside
+the acceptance RPC (`20260929000100_guest_token_uuid.sql:71-72`), so the link
+*does* die by itself, with the record intact — it just does not die now, and
+nothing stops the wrong person accepting in the meantime. And the blocker is
+not that there is nowhere to write (§2.4): it is that the two things wanted here
+— appending evidence to this agreement, and invalidating the credential already
+handed out — have no single writer, and doing them in either order through
+existing paths fails. Append first and the contract becomes undeletable; delete
+first and there is nothing left to append to.
 
 `Decisions.md:193-200` already accepts the first horn explicitly ("a
 counterparty who was sent a link, opened it, and had not yet accepted gets a 404
@@ -379,13 +414,22 @@ line for line on `reissue-guest-access`:
 
 The address goes in an **underscore-prefixed, server-derived payload field**
 (`_invited_recipient`, the name `acceptanceFacts` already uses,
-`eventRecord.ts:77`). That is not cosmetic. `partyAssertedOnly`
-(`eventRecord.ts:56-60`) strips `_` keys from caller input so the field can only
-be server-written, and `filterPayload`'s allowlist never carries `_` keys
-(`guestEventView.ts:60-103`, enforced by a test) — so **the wrong address stays
-out of the guest's view and out of the guest's export**. A mistyped address is
-usually a real third party's address, and the new, correct counterparty should
-not receive it in their copy of the record.
+`eventRecord.ts:77`). That is not cosmetic: `partyAssertedOnly`
+(`eventRecord.ts:56-60`) strips `_` keys from caller input, so the field can
+only ever be server-written, and `filterPayload`'s allowlist never carries `_`
+keys (`guestEventView.ts:60-103`, enforced by a test), so the new event's own
+payload is not projected to the guest.
+
+**That is not the same as the wrong address staying private, and an earlier
+draft of this document claimed it was.** `guest-contract-events` returns
+`acceptance_identity.invited_recipient` as a block of its own, lifted straight
+out of the acceptance payload and deliberately outside the per-event filter
+(`guest-contract-events/index.ts:227,243-245`). B1 leaves the stale row, so the
+acceptance snapshots the wrong address (`eventRecord.ts:77`) and the guest reads
+it there and carries it in their export. A mistyped address is usually a real
+third party's, and the new counterparty should not receive it — so this is an
+argument for B2 over B1, not a property of B1. Whatever is built, the
+projection and the export have to be checked, not just the payload allowlist.
 
 What it needs beyond the function: an entry in `PAYLOAD_ALLOWLIST`
 (`guestEventView.ts:60`) so the type renders rather than being filtered to an
@@ -409,13 +453,20 @@ it is written by `validate-invite-token` from the row.
 
 It also does not close the wrong link. Nothing here touches `invite_token`.
 
-**It forces an open decision.** `invite.issued` is "creation is an event" by
-another name (`HANDOFF.md` Open Decisions), and `Decisions.md:201-207` gives the
-real obstacle: *whether the link was ever sent is not knowable server-side*,
-because the token exists from row creation and copying is client-side. So
-`invite.issued` must be written when the owner **asks for the link** (the
-`onCopyInvite` path, `App.jsx` → `copyInviteLink`), not at creation — which
-records an intent to send rather than a send, and should be worded as such.
+**One decision it touches, and need not settle.** An `invite.issued` on every
+agreement *is* "creation is an event" by another name (`HANDOFF.md` Open
+Decisions), and `Decisions.md:201-207` gives the obstacle: *whether the link was
+ever sent is not knowable server-side*, because the token exists from row
+creation and copying is client-side. So if it is written at all it belongs on
+the `onCopyInvite` path (`App.jsx:761` → `copyInviteLink`), recording an intent
+to send rather than a send, and worded as such.
+
+But it is **not** a prerequisite, and an earlier draft of this document said it
+was. A correction can carry its own history: one `invite.resent` holding the old
+address, the new one and the fact of the correction is a complete record of the
+mistake, whether or not anything was recorded when the agreement was created.
+That keeps the permanent-event-type decision out of a UX fix — which is where it
+belongs.
 
 **B2 — B1, plus the row and the token, in one transaction. Effort M–L. Needs a
 migration. Honest, and the only option that also closes the wrong link.**
@@ -430,15 +481,32 @@ exactly as `reissue_guest_access` does:
 - the `invite.resent` event, carrying both the previous and the new address as
   server-derived fields.
 
-The migration is the RPC; the ledger entry is additive and reversible. Two
-things to get right, both of which the existing guards do *not* do for you:
+The migration is the RPC, and it is additive and droppable. The *event* is not
+reversible and nothing here should suggest it is: `no_update_events` and
+`no_delete_events` discard both (`20260313000000_events_table.sql:129-133`), so
+a wrong correction can only be answered by appending another one.
 
+Four things to get right, none of which the existing guards do for you:
+
+- **The predicate must be checked under a row lock, not before it.** This is the
+  lesson Task 2 and Task 3 already paid for: `select … for update` the contract
+  row first, then test owner, `state = 'AWAITING_ACCEPTANCE'` and
+  `invite_token_used_at is null`, then write. A pre-check in the Edge Function
+  races the acceptance RPC, which takes the same lock
+  (`20260929000100_guest_token_uuid.sql:59-62`). Under the lock the two orders
+  are both safe: acceptance first makes the correction refuse as already
+  accepted, correction first leaves the old token unable to resolve a contract,
+  and an acceptance built against the pre-correction row fails the existing
+  `row_version`/`xmin` check (`:75-86`).
+- **It is not the DELETE predicate.** `owner_delete_unaccepted_draft` also
+  requires *no events*, and B2 must not copy that clause: an unaccepted
+  agreement that already carries evidence is exactly the case B2 has to serve.
 - `freeze_accepted_terms` will not stop this function from rewriting
   `invited_hirer_email` on an **accepted** agreement (§2.3), which would
-  contradict a hashed `_invited_recipient`. The RPC must refuse unless
-  `state = 'AWAITING_ACCEPTANCE' and invite_token_used_at is null` — the same
-  predicate `owner_delete_unaccepted_draft` already uses. Post-acceptance, the
-  answer stays `reissue-guest-access` plus the existing mismatch banner.
+  contradict a hashed `_invited_recipient`. The state test above is what
+  prevents that — and it is a property of *this writer*, not a database
+  guarantee about identity columns in general. Post-acceptance, the answer stays
+  `reissue-guest-access` plus the existing mismatch banner.
 - Rotating `invite_token` invalidates every copy of the old link, including one
   already sent to the right person. The UI must say that, in the register
   `AgreementView.jsx:254-259` already uses for reissue.
@@ -503,12 +571,12 @@ for.** Three reasons:
    else (`scripts/api-e2e.mjs:84`). So `AgreementView`'s mismatch banner would
    show on 84% of accepted agreements in the database, and the real-world rate
    is simply unknown. Worth knowing before building a flow around it.
-3. **B2 settles "should creation be an event" as a side effect**, and settles it
-   in the form `Decisions.md:201-207` identified as the hard part: the server
-   cannot know whether a link was sent, so the event has to be written when the
-   owner asks for the link and worded as an intent to send. That is a protocol
-   decision with a permanent event type attached, and it deserves its own
-   decision rather than arriving inside a UX fix.
+3. **It adds a permanent event type.** `events` cannot be updated or deleted
+   (`20260313000000_events_table.sql:129-133`), so `invite.resent` is a
+   vocabulary commitment for the life of the product, read by the guest
+   projection and both exports. That deserves its own decision rather than
+   arriving inside a UX fix. It does *not* require settling "should creation be
+   an event" — see B1 — but it is the same class of choice.
 
 So: **ship A1; adopt the keep-the-mistake stance now in the documents** — stop
 recording "delete the draft is the whole answer" as the intended path, since the
@@ -516,3 +584,40 @@ owner has said records matter more — and hold B2 as the specified, costed shap
 to build the first time a real invitation goes to the wrong person. If Kenji
 would rather have it before that happens, B2 is the one to build, and B1 should
 not be built as a stepping stone to it.
+
+---
+
+## 6. What the review changed
+
+Codex reviewed the first draft (2026-11-08, static review of the working tree;
+it ran no queries and did not re-verify the live catalogue readings, so those
+remain this document's own measurements). It confirmed the three load-bearing
+findings — no client `UPDATE` path on `contracts`, neither email column inside
+the agreement snapshot, `last_performance_at` fetched and unread — and the
+`HANDOFF.md` error in §2.4. It found four things wrong:
+
+1. **The B1 privacy claim was false**, and it was the claim most likely to be
+   acted on. `guest-contract-events` returns `acceptance_identity.invited_recipient`
+   as its own block, outside the per-event payload filter the argument rested on
+   (`index.ts:227,243-245`). Verified and rewritten in B1; it now argues *for*
+   B2 instead of being a feature of B1.
+2. **§2.6 was overstated.** Natural expiry is a real keep-the-record path, and
+   the obstacle is not that there is nowhere to append — `contract.initiated` is
+   already allowed on an unaccepted agreement. Both narrowed.
+3. **"Additive and reversible" was wrong about the event**, which no rule can
+   reverse, as opposed to the RPC, which can be dropped. Split.
+4. **B2's predicate is not the DELETE predicate** (that one also requires no
+   events, which B2 must not copy), and the state test has to happen *under the
+   row lock*, not as an Edge-side pre-check — the same lesson as Task 2/3, since
+   the acceptance RPC takes the same lock. B2 now specifies both, plus the two
+   orders it makes safe.
+
+Two smaller corrections: §2.1's "sends nothing" now excludes sign-in mail
+(`earnerAuth.js:146`), and A1 now says what a null `last_performance_at` means.
+
+**What the review deliberately does not grant:** it is a verdict on a proposal,
+not approval of an unimplemented RPC. Its named conditions for a later
+implementation review are both orders of correction-vs-acceptance, rejection of
+the old token, rollback when the event write fails, refusal after acceptance,
+repeated corrections, and non-disclosure of the wrong address to the guest
+through every projection — including the export.
