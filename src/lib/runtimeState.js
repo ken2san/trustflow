@@ -242,8 +242,11 @@ export async function saveRuntimeSnapshot(snapshot, actorId) {
   // unbounded growth with no reader. Deleted 2026-11-06.
   //
   // `onConflict` needs the unique index from
-  // docs/proposals/20261106000000_runtime_snapshot_bounds.sql.draft, so that
-  // migration ships FIRST. Before it exists this call fails with 42P10, and
+  // supabase/migrations/20261106160059_runtime_snapshot_bounds.sql, which is
+  // applied on both projects. This comment used to cite the proposal draft the
+  // migration was promoted from — a path in docs/proposals/ that no longer
+  // exists — and told the reader "that migration ships FIRST", which was a
+  // deploy instruction for a deploy that already happened. Before it exists this call fails with 42P10, and
   // after it exists a plain insert would fail on the second save — either
   // order leaves a window, and both windows degrade the same way: the local
   // cache above has already been written, and the warning below is the only

@@ -85,7 +85,8 @@ why this can be done with plain constraints rather than a migration dance.
 ### The two numbers we must not invent
 
 **The amount ceiling is UNDECIDED, and an earlier draft of this document got
-this wrong.** It cited `TRUST_LADDER` (`src/lib/constants.js:75-78`) — ¥100k /
+this wrong.** It cited `TRUST_LADDER` (then in `src/lib/constants.js`, a file
+since deleted) — ¥100k /
 ¥500k / ¥2M then `contractLimit: null` at level 10 — as if that were ratified
 policy, and proposed a permanent test fixing "no ceiling". It is not ratified:
 `Roadmap.md:103` records "no trust ladder enforcement on the DB-backed flow"

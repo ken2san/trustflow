@@ -10,12 +10,21 @@ const slides = [
   {
     icon: FileText,
     headline: "Every agreement, enforceable.",
-    body: "We convert your project description into a clear Definition of Done before any money moves. Both sides agree to the same truth — in writing, on the record.",
+    body: "Your project description becomes a clear Definition of Done, and both sides accept that same text before any work starts. What was agreed is hashed into the record at the moment of acceptance, so neither side can revise it later.",
   },
   {
     icon: ShieldCheck,
-    headline: "Protection is the default.",
-    body: "Funds are held in escrow. Every message is evidence. Disputes are resolved with data, not drama. TrustFlow makes fairness automatic.",
+    headline: "The record is the protection.",
+    // THIS SLIDE USED TO SAY "Funds are held in escrow." It is the first screen
+    // a new visitor sees, and it was describing a product that does not exist:
+    // TrustFlow has never held, moved, captured or refunded money, and
+    // Decisions.md (2026-11-06) records that as the owner's decision rather
+    // than a gap. It also promised that "every message is evidence" — there is
+    // no messaging — and that "disputes are resolved with data", when nothing
+    // resolves a dispute. Three false claims about money and recourse, on the
+    // one screen nobody can skip. Replaced with what the service does do, in
+    // the same shape and roughly the same length.
+    body: "Money moves between you two, however you arrange it — TrustFlow never holds it. What it keeps is the record: who agreed to what, who said they delivered, who said they paid, each with the server's own timestamp and in an order nobody can edit afterwards.",
   },
 ];
 

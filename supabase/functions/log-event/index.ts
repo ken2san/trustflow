@@ -1,6 +1,14 @@
 // supabase/functions/log-event/index.ts
 //
-// The only writer to the `events` table.
+// The general writer for party-asserted events — NOT the only writer to the
+// `events` table. `validate-invite-token` appends the acceptance inside the
+// transaction that consumes the invitation, and `reissue-guest-access` appends
+// `access.reissued` inside the transaction that replaces the credential; both
+// go through their own RPCs. This line claimed sole authorship, was reported in
+// three consecutive deliverables, and was deliberately left because a one-line
+// comment edit was not worth redeploying a function for (Kenji, 2026-11-08:
+// fix it the next time this function changes for another reason). It changed in
+// Tasks 17 and 20, so the condition is met and this is that fix.
 //
 // WHAT THE CLIENT MAY SAY, AND WHAT IT MAY NOT
 // A caller supplies only: type, contract_id, payload, dod_hash, idempotency_key.

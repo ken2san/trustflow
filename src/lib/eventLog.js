@@ -52,19 +52,30 @@ export const EVENT_TYPES = {
   CONTRACT_COMPLETED:   'contract.completed',    // step 5 reached
   RATING_SUBMITTED:     'rating.submitted',      // blind rating submitted
   // Bad-actor events — permanently attached to an actor's reputation record
-  DISPUTE_LOST:          'dispute.lost',           // arbiter / resolution ruled against this actor
-  DISPUTE_WON:           'dispute.won',            // arbiter / resolution ruled in this actor's favor
-  FORCED_CANCELLATION:   'contract.forced_cancellation', // contract cancelled by the other party's action
-  GHOSTING_FLAG:         'actor.ghosting_flag',    // unresponsive; auto-release timer triggered
+  // Also never written, and there is no arbiter, no forced cancellation and no
+  // auto-release timer to write them. The old comments described each as though
+  // the mechanism existed.
+  DISPUTE_LOST:          'dispute.lost',                 // never written
+  DISPUTE_WON:           'dispute.won',                  // never written
+  FORCED_CANCELLATION:   'contract.forced_cancellation', // never written
+  GHOSTING_FLAG:         'actor.ghosting_flag',          // never written
 
-  // Stripe payment events — tied to contract state transitions
-  PAYMENT_INTENT_CREATED: 'payment.intent_created',  // Stripe PaymentIntent created (funds authorized)
-  PAYMENT_CAPTURED:       'payment.captured',         // funds released to Earner via Stripe Transfer
-  PAYMENT_REFUNDED:       'payment.refunded',         // funds returned to Hirer (cancellation/dispute)
+  // NAMES WITH NO WRITER AND NO HISTORY. Every constant from here to the end
+  // of this block describes a mechanism that was never built. The comments
+  // used to read like documentation of behaviour — "funds released to Earner
+  // via Stripe Transfer", "points awarded for good behavior" — and Decisions.md
+  // (2026-11-06) records the measurement: not one of these events has ever been
+  // written, by anything. The three payment.* names here are refused by
+  // log-event's allowlist on purpose, the functions that were supposed to write
+  // them wrote nothing and were deleted in Task 20, and no code awards a
+  // TrustPoint. They are kept as a vocabulary a reader may meet in old notes,
+  // not as a description of anything this system does.
+  PAYMENT_INTENT_CREATED: 'payment.intent_created',  // never written
+  PAYMENT_CAPTURED:       'payment.captured',        // never written
+  PAYMENT_REFUNDED:       'payment.refunded',        // never written
 
-  // TrustPoints events
-  TRUSTPOINTS_EARNED:     'trustpoints.earned',       // points awarded for good behavior
-  TRUSTPOINTS_SPENT:      'trustpoints.spent',        // points spent on platform benefit
+  TRUSTPOINTS_EARNED:     'trustpoints.earned',      // never written
+  TRUSTPOINTS_SPENT:      'trustpoints.spent',       // never written
 
   // Legal consent events
   DOD_CONSENT_RECORDED:   'dod.consent_recorded',     // counterparty explicitly accepted DoD terms via invite link

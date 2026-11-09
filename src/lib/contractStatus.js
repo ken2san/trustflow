@@ -15,19 +15,32 @@
 
 import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts'
 
-/** States the system actually writes. */
+/**
+ * Every state name this codebase knows. NOT every one it writes — the header
+ * used to say "states the system actually writes", and four of these have no
+ * writer: `IN_PROGRESS` described a Stripe authorisation that was never built,
+ * `DELIVERED` has never been written by anything, `SETTLED` is unreachable
+ * because `derive_contract_state()` returns early for it and the projection
+ * only advances on the three `performance.*` types, and `CANCELLED` is written
+ * by no path either (a `contract.cancelled` event leaves the projection
+ * untouched — see `.ada/codex-task12-mode3-review.md`).
+ *
+ * They stay because rows and exports from earlier builds can carry them and a
+ * reader needs a label, and because `SETTLED` being unreachable is asserted by
+ * a test. Nothing here is a roadmap.
+ */
 export const CONTRACT_STATES = {
   DRAFTING:            'DRAFTING',            // created before invites existed
   AWAITING_ACCEPTANCE: 'AWAITING_ACCEPTANCE', // invite issued, not yet accepted
   TERMS_ACCEPTED:      'TERMS_ACCEPTED',      // the Hirer agreed
-  IN_PROGRESS:         'IN_PROGRESS',         // payment authorised (Stripe; not in use yet)
+  IN_PROGRESS:         'IN_PROGRESS',         // no writer; a Stripe step never built
   // Projected from the attested event log. AWAITING_CONFIRMATION says the
   // performer has ASSERTED performance and the protocol waits on the receiver.
   // It does not say the work was delivered — TrustFlow cannot observe that.
   AWAITING_CONFIRMATION: 'AWAITING_CONFIRMATION',
   PERFORMANCE_ACCEPTED:  'PERFORMANCE_ACCEPTED',
   DELIVERED:           'DELIVERED',           // legacy; never written
-  SETTLED:             'SETTLED',             // funds released
+  SETTLED:             'SETTLED',             // unreachable; nothing releases funds
   CANCELLED:           'CANCELLED',
 }
 

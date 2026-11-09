@@ -115,9 +115,10 @@ export const UNRATIFIED_LIMITS = {
  * THE AMOUNT CEILING IS UNDECIDED, and this module must not settle it.
  *
  * An earlier draft of this file asserted that there must be no ceiling, citing
- * TRUST_LADDER in src/lib/constants.js — ¥100k / ¥500k / ¥2M and then
- * `contractLimit: null` at level 10 — as if that were ratified policy. It is
- * not. Roadmap.md records "no trust ladder enforcement on the DB-backed flow"
+ * a TRUST_LADDER — ¥100k / ¥500k / ¥2M and then `contractLimit: null` at
+ * level 10 — as if that were ratified policy. It is not. (That constant lived
+ * in `src/lib/constants.js`, which no longer exists; the citation is kept
+ * without the path so nobody goes looking for it.) Roadmap.md records "no trust ladder enforcement on the DB-backed flow"
  * (line 103) and "no trust ladder on the real flow" (line 224), and its only
  * consumers are ProfileModal, which displays it, and ContractStep1, which is
  * part of the legacy mock surface reachable only through command-palette

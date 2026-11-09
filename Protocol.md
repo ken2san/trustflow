@@ -181,11 +181,17 @@ Present in the repository, not in the live flow:
   `tsa_token_present` field in the exports remain, always null — they say a
   token was never obtained, which is a fact worth keeping.
 - **AI scoping.** No Gemini integration exists anywhere in the code.
-- **Trust Score / TrustPoints / Trust Passport.** `src/lib/trustpoints.js`,
-  `WalletView` and `ProfileModal` operate on local mock profile state. The
-  `trustpoints_ledger` table exists but nothing in `src/` writes to it. These
-  are not part of the evidence protocol.
-- **Client-side HMAC invites.** `src/lib/invite.js` is dead.
+- **Trust Score / TrustPoints / Trust Passport.** `src/lib/trustpoints.js` is
+  a rules module — numeric constants and labels — and nothing calls it except
+  its unit test. `WalletView` and `ProfileModal` do **not** exist: this bullet
+  used to say they "operate on local mock profile state", and they were only
+  ever names in comments in `src/App.jsx`, now removed. The
+  `trustpoints_ledger` table exists and has **no writer at all** since Task 20
+  deleted the two functions that inserted into it; it has never held a row.
+  None of this is part of the evidence protocol.
+- **Client-side HMAC invites.** Gone. `src/lib/invite.js` was the legacy
+  implementation and this bullet described it as "dead"; the file itself no
+  longer exists.
 
 ## 9. Open protocol questions
 

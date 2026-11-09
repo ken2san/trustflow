@@ -37,8 +37,10 @@ const FULL_STATE = {
   mode: 'earner',
   view: 'home',
   step: 2,
-  // The real declared shapes, from src/lib/profileTypes.js. The first version
-  // of the allowlist admitted both of these objects whole.
+  // The shapes the removed profile surface declared. `src/lib/profileTypes.js`
+  // is gone with it, so these are now a fixture rather than a copy of
+  // something — kept because the first version of the allowlist admitted both
+  // of these objects whole, and that is what this asserts against.
   uiProfile: {
     level: 3, points: 120, trustScore: 90, exp: 500, completedContracts: 2,
     avgRating: 4.5, totalEarned: 100000, totalSpent: 0,

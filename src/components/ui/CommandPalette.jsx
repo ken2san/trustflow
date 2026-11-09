@@ -1,4 +1,7 @@
-// filepath: src/components/modals/CommandPalette.jsx
+// src/components/ui/CommandPalette.jsx
+//
+// The header said `components/modals/` until Task 21. That directory was empty
+// and is now gone; this file has always lived in `ui/`.
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { Search, ArrowRight } from "lucide-react";
 

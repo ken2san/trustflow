@@ -91,7 +91,6 @@ import {
    3. UI COMPONENTS (ATOMS & MOLECULES)
    ======================================================================== */
 
-// NeuralBackground moved to components/ui/NeuralBackground.jsx
 import NeuralBackground from './components/ui/NeuralBackground';
 
 
@@ -99,7 +98,6 @@ import NeuralBackground from './components/ui/NeuralBackground';
 
 
 
-// ToastContainer moved to components/ui/ToastContainer.jsx
 import ToastContainer from './components/ui/ToastContainer';
 
 
@@ -108,44 +106,37 @@ import ToastContainer from './components/ui/ToastContainer';
    ======================================================================== */
 
 
-// ProfileModal moved to components/modals/ProfileModal.jsx
+// NINE COMMENTS USED TO STAND IN THIS REGION, EACH SAYING A COMPONENT HAD
+// "moved to" A FILE. Seven of those files have never existed: ProfileModal,
+// DisputeModal, PaymentModal, MarketplaceView, ScopingView, ContractView,
+// WalletView, CommandCenterView and ProjectDetailView are not in this tree and
+// are not referenced anywhere outside the comments that described them. Two of
+// them had `src/components/modals/` as their target, which was an empty
+// directory, removed in Task 20.
+//
+// They are gone rather than corrected because there is nothing to correct to.
+// This project removed that scope — marketplace, wallet, the five-step scoping
+// flow, the command centre — and left the comments behind, so the file read as
+// an index of components a reader could go and find. `Protocol.md` then cited
+// two of them as live code operating on mock state. A pointer to a file that
+// does not exist costs the next reader a search and teaches them to distrust
+// the pointers that are good.
+//
+// The imports below are the whole component inventory. If something is not
+// imported here, it does not exist.
 
-// CommandPalette component for command modal
 import CommandPalette from './components/ui/CommandPalette.jsx';
 import CaptchaChallenge from './components/ui/CaptchaChallenge.jsx';
 import { captchaConfigured } from './lib/captcha.js';
 
-
-
-
-// Two comments stood here saying DisputeModal and PaymentModal had "moved to
-// components/modals/". Neither file was ever there: the directory existed and
-// was empty, and it is gone with them (Task 20). A pointer to a file that does
-// not exist costs the next reader a search and teaches them to distrust the
-// comments that are true.
-
-
 // --- Page Views ---
 
-// OnboardingView moved to views/OnboardingView.jsx
 import OnboardingView from './views/OnboardingView';
-
-// MarketplaceView moved to views/MarketplaceView.jsx
-
-// ScopingView moved to views/ScopingView.jsx
-
-// ContractView moved to views/ContractView.jsx
-
-// WalletView moved to views/WalletView.jsx
 import GuestEvidenceView from './views/GuestEvidenceView';
 import ContractsHomeView from './views/ContractsHomeView';
 import SignInView from './views/SignInView';
 import AgreementView from './views/AgreementView';
 import { performsHere } from './lib/contractStatus.js';
-
-// CommandCenterView moved to views/CommandCenterView.jsx
-
-// ProjectDetailView moved to views/ProjectDetailView.jsx
 
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
@@ -1211,9 +1202,10 @@ const App = () => {
                 {otpStage === 'busy' ? 'Working…' : inviteLink ? 'Create another' : 'Send Invite'}
               </button>
               {/* "Start Myself →" stood here and ran handleBYOCSubmit, which
-                  routes to the legacy scoping/ContractView flow — a door into
-                  the removed surface inside a modal the evidence path needs.
-                  Send Invite above is the one that creates a real contract. */}
+                  routed into the five-step scoping flow — a door into a
+                  surface that has since been removed entirely, inside a modal
+                  the evidence path needs. Send Invite above is the one that
+                  creates a real contract. */}
             </div>
           </div>
         </div>
@@ -1567,12 +1559,12 @@ const App = () => {
             onBack={() => setView('invite-accepted')}
           />
         )}
-        {/* scoping and the five-step ContractView rendered here. */}
-        {/* The LEVEL UP / +1 PARAMETER overlays rendered here. They read
-            state that nothing set any more: the only triggers were in the
-            removed five-step flow, so a name-occurrence scan called them
-            used and they could never appear. */}
-        {/* wallet and command-center rendered here. */}
+        {/* Three surfaces used to render here and no longer exist anywhere in
+            the tree: the five-step scoping flow, the LEVEL UP / +1 PARAMETER
+            overlays, and the wallet and command centre. The overlays are worth
+            one line of history — they read state that nothing set any more,
+            so a name-occurrence scan called them used while they could never
+            appear. Nothing here is waiting to be re-enabled. */}
 
       </main>
 

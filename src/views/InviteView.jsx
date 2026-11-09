@@ -372,11 +372,17 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           <div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Contract Value</p>
             <p className="text-3xl font-black italic text-white">{amountLabel}</p>
-            {/* Scoped to this agreement on purpose. "TrustFlow never holds
-                money" would be a product claim the screen cannot make: the
-                Stripe functions exist in the repository and their deployment
-                is not knowable from here (Codex design review, 2026-11-05).
-                What is true and checkable is what happens to THIS one. */}
+            {/* Scoped to this agreement on purpose, and still scoped on
+                purpose even though the original reason has expired. That
+                reason was that "TrustFlow never holds money" could not be
+                claimed here because the Stripe functions existed in the
+                repository and their deployment was not knowable from this
+                screen (Codex design review, 2026-11-05). Both halves are now
+                settled: the functions were un-deployed on 2026-11-06, smoke
+                asserts they stay 404 on every release, and their source was
+                deleted in Task 20. The sentence below stays scoped anyway —
+                what this screen can show a counterparty is what happens to
+                THIS agreement, not a claim about the whole product. */}
             <p className="text-xs text-slate-400 mt-2 leading-relaxed">
               Not paid through TrustFlow. {guestPerforms ? <>{inviter} pays you</> : <>You pay {inviter}</>} directly,
               by whatever means you two arrange.
