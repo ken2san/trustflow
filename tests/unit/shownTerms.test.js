@@ -168,3 +168,88 @@ async function sha256OfADifferentVersion(source) {
     await import('../../supabase/functions/_shared/eventCanonical.ts')
   return sha256Hex(stableStringify({ ...shownTerms(source), v: SHOWN_TERMS_VERSION + 1 }))
 }
+
+// ── The published specification ─────────────────────────────────────────────
+//
+// docs/api/agent-protocol.md states the v2 algorithm, its exact preimage and
+// its digest, so a client can be written without this repository. A
+// specification nothing checks is a specification that drifts: the first
+// change to BUILDERS would leave the document confidently wrong, and the
+// clients it was written for would be the ones to find out, as a blanket
+// `terms_changed` on every acceptance.
+//
+// So the vector is asserted in both directions — the implementation must
+// reproduce the published strings, and the document must still contain them.
+// Reading the file is the point. Pinning the constants here and trusting the
+// prose to follow is exactly the drift being prevented.
+
+describe('the digest specification published for outside clients', () => {
+  const SPEC_PATH = 'docs/api/agent-protocol.md'
+
+  /** The invitation read as the specification's reference vector gives it. */
+  const VECTOR = {
+    project_name: 'Translate a birth certificate',
+    dod: ['Translate the document', 'Return a stamped PDF'],
+    amount_minor: 125050,
+    currency: 'CAD',
+    deadline: '2026-12-01',
+    performed_by: 'creator',
+    earner_display_name: 'Acme Translations',
+  }
+
+  const PUBLISHED_PREIMAGE = '{"amount_minor":125050,"currency":"CAD",'
+    + '"deadline":"2026-12-01","dod":["Translate the document","Return a stamped PDF"],'
+    + '"earner_display_name":"Acme Translations","performed_by":"creator",'
+    + '"project_name":"Translate a birth certificate","v":2}'
+
+  const PUBLISHED_DIGEST =
+    '438a61235d399d7dbf60fcc98882eb89065dbc55ad53d5e7b39aef96ab1f9aeb'
+
+  async function spec() {
+    const { readFile } = await import('node:fs/promises')
+    return readFile(new URL(`../../${SPEC_PATH}`, import.meta.url), 'utf8')
+  }
+
+  it('serializes the reference vector to the preimage it publishes', async () => {
+    const { stableStringify } =
+      await import('../../supabase/functions/_shared/eventCanonical.ts')
+    expect(stableStringify(shownTerms(VECTOR, 2))).toBe(PUBLISHED_PREIMAGE)
+  })
+
+  it('hashes the reference vector to the digest it publishes', async () => {
+    expect(await shownTermsDigest(VECTOR, 2)).toBe(PUBLISHED_DIGEST)
+  })
+
+  it('still states that preimage and that digest', async () => {
+    const text = await spec()
+    expect(text).toContain(PUBLISHED_PREIMAGE)
+    expect(text).toContain(PUBLISHED_DIGEST)
+  })
+
+  it('names every field the digest covers, and no field it does not', async () => {
+    const text = await spec()
+    // The table of sources in §1. A key the implementation covers but the
+    // document omits is an outside client that cannot reproduce the digest.
+    for (const key of Object.keys(shownTerms(VECTOR, 2))) {
+      if (key === 'v') continue
+      expect(text, `${SPEC_PATH} does not mention ${key}`).toContain(key)
+    }
+    // And the converse, for the two the guard deliberately excludes: they may
+    // appear as exclusions, but must not be part of the hashed object.
+    expect(Object.keys(shownTerms({
+      ...VECTOR,
+      invited_hirer_email: 'invited@example.test',
+      guest_access_token: 'issued-at-acceptance',
+    }, 2))).not.toContain('invited_hirer_email')
+  })
+
+  it('publishes the version floor the server actually enforces', async () => {
+    const text = await spec()
+    // validate-invite-token refuses a non-JPY acceptance below v2 with
+    // terms_check_unsupported. A document that named a lower floor would send
+    // clients into a 409 they cannot diagnose.
+    expect(text).toContain('terms_check_unsupported')
+    expect(text).toContain('shown_terms_version')
+    expect(SUPPORTED_SHOWN_TERMS_VERSIONS).toContain(2)
+  })
+})

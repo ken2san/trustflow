@@ -265,10 +265,20 @@ paths:
         a credential: the caller computes it, so it protects an honest guest
         from an honest edit and nothing more.
 
-        **The check binds only when a non-empty digest is supplied**
-        (`index.ts:177` requires a string of length > 0). Omit it, or send `""`
-        or `null`, and acceptance proceeds with no comparison at all — so this
-        is a guard an honest client opts into, not one the server imposes.
+        **Whether it is optional depends on the currency, and an earlier
+        version of this description was wrong about it.** On a `JPY` contract
+        the check binds only when a non-empty digest is supplied — omit it, or
+        send `""` or `null`, and acceptance proceeds with no comparison. On any
+        other currency a digest at `shown_terms_version` 2 or above is
+        **required**, and its absence is `409 terms_check_unsupported`: under
+        version 1 the amount of a non-JPY agreement is not covered at all, so
+        its price could change without the digest moving.
+
+        **The algorithm, its exact preimage and a reference digest are
+        specified in `docs/api/agent-protocol.md`**, which also states how an
+        invitation is expected to reach the accepting party — TrustFlow does
+        not deliver one. A client cannot accept a non-JPY agreement without
+        implementing that digest.
       requestBody:
         required: true
         content:
@@ -297,8 +307,17 @@ paths:
                 shown_terms_digest:
                   type: string
                   nullable: true
+                  description: |
+                    Lowercase hex SHA-256 of the terms this client was shown.
+                    Computed by the caller — see docs/api/agent-protocol.md for
+                    the exact field set and serialization. Required for every
+                    currency except JPY.
                 shown_terms_version:
                   type: integer
+                  description: |
+                    The format the caller computed, as the caller names it. A
+                    current server verifies 1 and 2; send 2. Below 2 on a
+                    non-JPY contract is refused with terms_check_unsupported.
       responses:
         '200':
           description: The invitation, or the completed acceptance.
