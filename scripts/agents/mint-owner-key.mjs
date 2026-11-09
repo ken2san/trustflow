@@ -22,21 +22,34 @@ import { DEFAULT_KEY_FILE } from '../lib/ownerKey.mjs';
 const ref = assertE2EProject(SUPABASE_URL);
 const SOURCE = process.env.TF_TEST_EARNER_SESSION ?? 'tests/e2e/.earner-session.json';
 
-const session = JSON.parse(await readFile(SOURCE, 'utf8'));
+// Parsed inside a try, because a JSON parse error can quote its input and the
+// input here may be a credential — Codex's finding 4: point TF_TEST_EARNER_SESSION
+// at a file holding a bare token and the unhandled exception prints part of it.
+let session;
+try {
+  session = JSON.parse(await readFile(SOURCE, 'utf8'));
+} catch (err) {
+  console.error(`cannot read ${SOURCE} as JSON (${err.code ?? err.name ?? 'parse error'}).`);
+  console.error('Not printing it: that file holds a session.');
+  process.exit(1);
+}
 if (!session?.refresh_token) {
   console.error(`${SOURCE} carries no refresh_token — run npm run test:api once to populate it.`);
   process.exit(1);
 }
 
+// 0600 at creation, not afterwards. Under the usual umask 022 a plain write
+// lands as 0644, which is the account's whole authority readable by group and
+// other; a chmod after the fact leaves a window. Codex's P1.
 await writeFile(DEFAULT_KEY_FILE, JSON.stringify({
   refresh_token: session.refresh_token,
   minted_at: new Date().toISOString(),
   note: 'One opaque credential for an agent. A new one is returned on every '
     + 'exchange and scripts/lib/ownerKey.mjs persists it; the previous string '
     + 'is not promptly revoked, so treat every copy as live.',
-}, null, 2));
+}, null, 2), { mode: 0o600 });
 
-console.log(`minted ${DEFAULT_KEY_FILE} for project ${ref}`);
+console.log(`minted ${DEFAULT_KEY_FILE} for project ${ref}, mode 600`);
 // Not even a redacted prefix. `redact()` keeps the first six characters, which
 // is fine for a 36-character token and half the secret for a Supabase refresh
 // token, which is short — the first run of this script printed six of twelve

@@ -84,7 +84,11 @@ export async function ownerSession() {
     const session = await r.json();
     // Deliberately not echoing the body: a failed grant can carry the address.
     if (r.status !== 200) throw new Error(`owner sign-in failed (${r.status})`);
-    await writeFile(SESSION_CACHE, JSON.stringify(session, null, 2));
+    // 0600: this cache holds a refresh token, which is the account. A plain
+    // write lands as 0644 under the usual umask — the same P1 Codex found in
+    // scripts/lib/ownerKey.mjs, and this file predates it. Same defect, same
+    // credential class, one argument.
+    await writeFile(SESSION_CACHE, JSON.stringify(session, null, 2), { mode: 0o600 });
     return session;
   })();
 

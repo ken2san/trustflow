@@ -110,3 +110,4 @@ tests/e2e/.earner-session.json.lock
 
 # An agent-held owner credential. A refresh token is the whole account.
 tests/e2e/.owner-api-key.json
+tests/e2e/.owner-api-key.json.next

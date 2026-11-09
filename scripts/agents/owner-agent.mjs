@@ -41,6 +41,18 @@ if (!URL_ || !KEY || !KEY_FILE || !DIR) {
 }
 const PROJECT_REF = assertE2EProject(URL_);
 
+// A PRECONDITION, not a reported check. The first version asserted this inside
+// main() AFTER the key exchange, through the reporter — so a directly launched
+// child with the earner's password in its environment would authenticate, write
+// events, and merely log a failed line. Codex's judgment 3. The claim this file
+// makes is that it holds only a key; refusing to start is what makes that true
+// of the process rather than of the intention.
+if (process.env.TF_TEST_EARNER_EMAIL || process.env.TF_TEST_EARNER_PASSWORD) {
+  console.error('owner: refusing to run — TF_TEST_EARNER_EMAIL / _PASSWORD are set.');
+  console.error('This process is meant to hold one handed-over key and nothing else.');
+  process.exit(2);
+}
+
 const r = reporter('owner');
 const RUN = randomUUID().slice(0, 8);
 
@@ -58,9 +70,13 @@ async function main() {
   const { token, userId, rotated } = await ownerSessionFromKey(URL_, KEY, KEY_FILE);
   r.ok('exchanged a handed-over key for a session', Boolean(token && userId),
     `project ${PROJECT_REF}`);
-  r.ok('holds no address or password of its own',
-    !process.env.TF_TEST_EARNER_EMAIL && !process.env.TF_TEST_EARNER_PASSWORD,
-    'neither is in this process\'s environment');
+  // Already enforced at module load, above; restated here so the run's own
+  // output says what the credential was. It is a statement about sign-in INPUT:
+  // the session response and the JWT may well carry the account's address, so
+  // the supportable claim is that none was supplied, not that none exists in
+  // this process's memory.
+  r.ok('was supplied no address or password, only a key', true,
+    'refused to start otherwise');
   // The part a deployment gets wrong: a new refresh token comes back from every
   // exchange, and an agent that does not persist it is relying on a reuse
   // window it does not control. This says the replacement was written — NOT
