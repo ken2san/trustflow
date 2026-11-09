@@ -171,22 +171,29 @@ async function sha256OfADifferentVersion(source) {
 
 // ── The published specification ─────────────────────────────────────────────
 //
-// docs/api/agent-protocol.md states the v2 algorithm, its exact preimage and
-// its digest, so a client can be written without this repository. A
+// docs/api/agent-protocol.md states the v2 algorithm, its exact preimages and
+// its digests, so a client can be written without this repository. A
 // specification nothing checks is a specification that drifts: the first
 // change to BUILDERS would leave the document confidently wrong, and the
 // clients it was written for would be the ones to find out, as a blanket
 // `terms_changed` on every acceptance.
 //
-// So the vector is asserted in both directions — the implementation must
-// reproduce the published strings, and the document must still contain them.
-// Reading the file is the point. Pinning the constants here and trusting the
-// prose to follow is exactly the drift being prevented.
+// WHAT THE FIRST VERSION OF THIS BLOCK GOT WRONG
+// It asserted each field name with `toContain(key)` over the whole file, which
+// Codex showed was theatre: deleting every row of the normative table left all
+// seven assertions passing, because the reference vector names the same fields
+// a few lines below. It also claimed to pin the version floor while asserting
+// nothing that a floor of 1 would have broken. Both are fixed below by parsing
+// the document instead of searching it.
+//
+// What these tests still cannot do: prove that a client written from the prose
+// gets the same bytes. Only an independent implementation can, and there is
+// one — scripts/agents/counterparty-agent.mjs, run against E2E.
 
 describe('the digest specification published for outside clients', () => {
   const SPEC_PATH = 'docs/api/agent-protocol.md'
 
-  /** The invitation read as the specification's reference vector gives it. */
+  /** The ASCII reference vector, as §1 gives it. */
   const VECTOR = {
     project_name: 'Translate a birth certificate',
     dod: ['Translate the document', 'Return a stamped PDF'],
@@ -205,9 +212,49 @@ describe('the digest specification published for outside clients', () => {
   const PUBLISHED_DIGEST =
     '438a61235d399d7dbf60fcc98882eb89065dbc55ad53d5e7b39aef96ab1f9aeb'
 
+  // The second vector exists because the first is pure ASCII and therefore
+  // blind to the one difference that actually breaks outside clients: a
+  // serializer that escapes non-ASCII (Python's default) produces different
+  // bytes for the same agreement. It also carries two nulls, an absent
+  // performed_by and an escaped quote.
+  const VECTOR_WIDE = {
+    project_name: '出生証明書の翻訳',
+    dod: ['原本を翻訳する', 'Return a stamped PDF — "certified"'],
+    amount_minor: 30000,
+    currency: 'JPY',
+    deadline: null,
+    earner_display_name: null,
+  }
+
+  const PUBLISHED_PREIMAGE_WIDE = '{"amount_minor":30000,"currency":"JPY","deadline":null,'
+    + '"dod":["原本を翻訳する","Return a stamped PDF — \\"certified\\""],'
+    + '"earner_display_name":null,"performed_by":"creator",'
+    + '"project_name":"出生証明書の翻訳","v":2}'
+
+  const PUBLISHED_DIGEST_WIDE =
+    'da90b2c392a530fd5a81ae5f5e3cbe84c71b8f60e4bfb06378f717208831ace9'
+
   async function spec() {
     const { readFile } = await import('node:fs/promises')
     return readFile(new URL(`../../${SPEC_PATH}`, import.meta.url), 'utf8')
+  }
+
+  /**
+   * The keys the NORMATIVE TABLE names, parsed from it — not searched for
+   * anywhere in the file. The table is the three-column one under §1 whose
+   * first cell is a backticked key.
+   */
+  async function documentedKeys(text) {
+    const rows = text.split('\n')
+    const start = rows.findIndex(l => l.startsWith('| Key | Source field |'))
+    expect(start, `${SPEC_PATH}: the normative field table is gone`).toBeGreaterThan(-1)
+    const keys = []
+    for (const line of rows.slice(start + 2)) {
+      if (!line.startsWith('|')) break
+      const cell = /^\|\s*`([^`]+)`/.exec(line)
+      if (cell) keys.push(cell[1])
+    }
+    return keys
   }
 
   it('serializes the reference vector to the preimage it publishes', async () => {
@@ -220,36 +267,89 @@ describe('the digest specification published for outside clients', () => {
     expect(await shownTermsDigest(VECTOR, 2)).toBe(PUBLISHED_DIGEST)
   })
 
-  it('still states that preimage and that digest', async () => {
+  it('serializes non-ASCII terms literally, as the specification requires', async () => {
+    const { stableStringify } =
+      await import('../../supabase/functions/_shared/eventCanonical.ts')
+    const preimage = stableStringify(shownTerms(VECTOR_WIDE, 2))
+    expect(preimage).toBe(PUBLISHED_PREIMAGE_WIDE)
+    // The failure this guards: an escaping serializer emits 出… here, which
+    // parses to the same JSON value and hashes to something else entirely.
+    expect(preimage).toContain('出生証明書の翻訳')
+    expect(preimage).not.toContain('\\u')
+  })
+
+  it('hashes the non-ASCII vector to the digest it publishes', async () => {
+    expect(await shownTermsDigest(VECTOR_WIDE, 2)).toBe(PUBLISHED_DIGEST_WIDE)
+  })
+
+  it('still states both preimages and both digests', async () => {
     const text = await spec()
     expect(text).toContain(PUBLISHED_PREIMAGE)
     expect(text).toContain(PUBLISHED_DIGEST)
+    expect(text).toContain(PUBLISHED_PREIMAGE_WIDE)
+    expect(text).toContain(PUBLISHED_DIGEST_WIDE)
   })
 
-  it('names every field the digest covers, and no field it does not', async () => {
-    const text = await spec()
-    // The table of sources in §1. A key the implementation covers but the
-    // document omits is an outside client that cannot reproduce the digest.
-    for (const key of Object.keys(shownTerms(VECTOR, 2))) {
-      if (key === 'v') continue
-      expect(text, `${SPEC_PATH} does not mention ${key}`).toContain(key)
-    }
-    // And the converse, for the two the guard deliberately excludes: they may
-    // appear as exclusions, but must not be part of the hashed object.
-    expect(Object.keys(shownTerms({
+  it('documents exactly the fields the digest covers — no more, no fewer', async () => {
+    const documented = (await documentedKeys(await spec())).slice().sort()
+    const covered = Object.keys(shownTerms(VECTOR, 2)).slice().sort()
+    // Set equality, from the table itself. A field added to BUILDERS[2] and
+    // not to the table fails here even if its name appears elsewhere in the
+    // prose, which is how the previous version of this test was defeated.
+    expect(documented).toEqual(covered)
+  })
+
+  it('keeps the excluded fields out of the hash whatever the row carries', async () => {
+    const keys = Object.keys(shownTerms({
       ...VECTOR,
       invited_hirer_email: 'invited@example.test',
       guest_access_token: 'issued-at-acceptance',
-    }, 2))).not.toContain('invited_hirer_email')
+      row_version: 7,
+    }, 2))
+    for (const excluded of ['invited_hirer_email', 'guest_access_token', 'row_version']) {
+      expect(keys).not.toContain(excluded)
+    }
   })
 
   it('publishes the version floor the server actually enforces', async () => {
     const text = await spec()
-    // validate-invite-token refuses a non-JPY acceptance below v2 with
-    // terms_check_unsupported. A document that named a lower floor would send
-    // clients into a 409 they cannot diagnose.
+    // Parsed out of the sentence that states it, so changing the prose floor
+    // to 1 fails here. validate-invite-token refuses a non-JPY acceptance
+    // below 2 with terms_check_unsupported.
+    const stated = /`shown_terms_version`\s+(\d+)\s+or above/.exec(text)
+    expect(stated, `${SPEC_PATH}: the version floor sentence is gone`).not.toBeNull()
+    expect(Number(stated[1])).toBe(2)
+    expect(SUPPORTED_SHOWN_TERMS_VERSIONS).toContain(Number(stated[1]))
     expect(text).toContain('terms_check_unsupported')
-    expect(text).toContain('shown_terms_version')
-    expect(SUPPORTED_SHOWN_TERMS_VERSIONS).toContain(2)
+  })
+
+  // The only check here that is not circular: a SECOND implementation, written
+  // from the document and importing none of this project's crypto, against both
+  // published vectors. The live run in scripts/agents/ proves the same thing
+  // against the real server, but only for the ASCII vector — non-ASCII is the
+  // case that breaks outside clients and it is proved here.
+  it('is reproduced by an implementation that reads only the document', async () => {
+    const { digestV2, preimageV2 } = await import('../../scripts/agents/published-digest.mjs')
+    expect(preimageV2(VECTOR)).toBe(PUBLISHED_PREIMAGE)
+    expect(digestV2(VECTOR)).toBe(PUBLISHED_DIGEST)
+    expect(preimageV2(VECTOR_WIDE)).toBe(PUBLISHED_PREIMAGE_WIDE)
+    expect(digestV2(VECTOR_WIDE)).toBe(PUBLISHED_DIGEST_WIDE)
+    // And against the implementation the server actually runs, for a row that
+    // is neither vector.
+    const odd = {
+      project_name: 'Tab\tand "quote"', dod: [], amount_minor: 0,
+      currency: 'EUR', deadline: null, earner_display_name: '—',
+    }
+    expect(digestV2(odd)).toBe(await shownTermsDigest(odd, 2))
+  })
+
+  it('tells a client to apply defaults on null, not on anything falsy', async () => {
+    // `??`, not `||`. An implementer using `||` sends a digest the server
+    // never computes, for a 0 amount or an empty string.
+    expect(shownTerms({ ...VECTOR, amount_minor: 0, amount_jpy: 999 }, 2).amount_minor).toBe(0)
+    expect(shownTerms({ ...VECTOR, project_name: '' }, 2).project_name).toBe('')
+    expect(shownTerms({ ...VECTOR, performed_by: null }, 2).performed_by).toBe('creator')
+    const text = await spec()
+    expect(text).toContain('absent or `null`')
   })
 })

@@ -10,7 +10,8 @@
 // two sides are two OS processes:
 //
 //   - no shared memory, no shared module scope, no shared client object;
-//   - two different credentials, neither reachable from the other process;
+//   - each side selects and sends its own credential, and the counterparty
+//     process is handed none of the owner's;
 //   - the counterparty gets no contract id — only an invite token, handed over
 //     on a channel TrustFlow is not part of;
 //   - the counterparty computes the mandatory non-JPY shown-terms digest from
@@ -18,6 +19,21 @@
 //
 // After the handover the two coordinate ONLY through the evidence record: each
 // side polls what it is allowed to read and acts when its turn arrives.
+//
+// WHAT THIS IS NOT: AN AUTHORITY BOUNDARY
+// An earlier version of this comment said neither credential is reachable from
+// the other process. That is false and Codex's review blocked it. Both children
+// run as the same OS user, in the same working directory, with the same
+// filesystem rights: the counterparty process could simply read `.env.e2e`, or
+// the owner's cached session at `tests/e2e/.earner-session.json`, and act as the
+// owner without importing anything. Nothing here prevents that, and blanking
+// another environment variable would not either.
+//
+// So what the split buys is real but narrow: separate process memory, and two
+// deliberately separate request credentials, so a step cannot be driven by the
+// wrong authority BY ACCIDENT. Real isolation would need a sandbox — separate
+// users, containers, or machines — and its own review. Do not cite this harness
+// as evidence that a counterparty cannot overreach.
 //
 // E2E ONLY. Both children import scripts/lib/e2eGuard.mjs, which refuses any
 // other project before the first request. The events this writes are
@@ -71,8 +87,9 @@ const [ownerCode, guestCode] = await Promise.all([
     TF_SUPABASE_ANON_KEY: SUPABASE_KEY,
     // Deliberately absent: TF_TEST_EARNER_EMAIL / _PASSWORD. The child
     // inherits this process's environment, so they are cleared rather than
-    // merely not mentioned — otherwise "it holds no account credential" would
-    // be a claim about the code and not about the process.
+    // merely not mentioned. This stops the owner's credential being handed
+    // over; it does not stop a child that wants it from reading .env.e2e off
+    // disk. See "WHAT THIS IS NOT" above.
     TF_TEST_EARNER_EMAIL: '',
     TF_TEST_EARNER_PASSWORD: '',
   }),

@@ -10,23 +10,27 @@
 //     invitations and this process has no way to look one up, which is the
 //     operational rule in docs/api/agent-protocol.md §2 made executable.
 //
-// WHAT IT IS NOT GIVEN, AND THIS IS THE POINT
+// WHAT IT IS NOT GIVEN
 // The owner's email, the owner's password, the owner's JWT, any module that
-// holds them, and any contract id. Its only authority is the invite token it
-// was handed, and then the guest capability acceptance issues to it. There is
-// no flag to switch to the other side: it has nothing to switch to.
+// holds them, and any contract id. The authority it ACTS UNDER is the invite
+// token it was handed, and then the guest capability acceptance issues to it.
 //
-// THE DIGEST IS REIMPLEMENTED HERE ON PURPOSE
+// That is a statement about what this process is given, not a boundary. It runs
+// as the same OS user as the owner's process and could read `.env.e2e` or the
+// owner's cached session straight off disk; see the header of
+// ../two-agent-transaction.mjs. It does not, and that is a property of this
+// file rather than of the arrangement.
+//
+// THE DIGEST IS REIMPLEMENTED, ON PURPOSE
 // It does NOT import _shared/shownTerms.ts. The whole question Task 14 asks is
 // whether an outside client can compute the v2 shown-terms digest from the
 // published specification alone, and a client that imports this repository's
-// implementation answers a different, easier question. Everything below under
-// "the published algorithm" was written from docs/api/agent-protocol.md §1 and
-// nothing else. If it disagrees with the server, the specification is wrong —
-// which is exactly the failure worth finding.
+// implementation answers a different, easier question. See
+// ./published-digest.mjs. If it disagrees with the server, the specification is
+// wrong — which is exactly the failure worth finding.
 
-import { createHash } from 'node:crypto';
 import { assertE2EProject, redact } from '../lib/e2eGuard.mjs';
+import { digestV2 } from './published-digest.mjs';
 import { channel, fn, reporter, until } from './lib.mjs';
 
 const URL_ = process.env.TF_SUPABASE_URL;
@@ -38,36 +42,10 @@ if (!URL_ || !KEY || !DIR) {
 }
 assertE2EProject(URL_);
 
-// ── The published algorithm (docs/api/agent-protocol.md §1) ─────────────────
-
-/** Rules 1–5: sorted keys, no whitespace, undefined dropped, order kept. */
-function canonical(value) {
-  if (value === null || value === undefined) return 'null';
-  if (typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) {
-    return `[${value.map(v => canonical(v === undefined ? null : v)).join(',')}]`;
-  }
-  const keys = Object.keys(value).filter(k => value[k] !== undefined).sort();
-  return `{${keys.map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
-}
-
-/** The eight keys the specification names, and no others. */
-function shownTermsV2(invitation) {
-  return {
-    v: 2,
-    project_name: invitation.project_name ?? null,
-    dod: invitation.dod ?? [],
-    amount_minor: invitation.amount_minor ?? invitation.amount_jpy ?? null,
-    currency: invitation.currency ?? null,
-    deadline: invitation.deadline ?? null,
-    performed_by: invitation.performed_by ?? 'creator',
-    earner_display_name: invitation.earner_display_name ?? null,
-  };
-}
-
-function digestV2(invitation) {
-  return createHash('sha256').update(canonical(shownTermsV2(invitation)), 'utf8').digest('hex');
-}
+// The digest lives in ./published-digest.mjs — written from
+// docs/api/agent-protocol.md §1 and importing none of this repo's crypto, so
+// that tests/unit/shownTerms.test.js can hold it against both published
+// vectors without a live run.
 
 // ── The transaction, from this side ─────────────────────────────────────────
 
