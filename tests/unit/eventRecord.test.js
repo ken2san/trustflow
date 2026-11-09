@@ -207,10 +207,15 @@ describe('the authentication an event records', () => {
   const accountClaims = { aal: 'aal1', amr: [{ method: 'otp', timestamp: 1791731476 }] }
 
   it('follows the credential, not the role', async () => {
-    // The case the old ternary got wrong, and which log-event's own actor
-    // resolution supports: a counterparty who holds a real account and acts
-    // with a JWT.
-    // The ternary would have called that an invitation capability.
+    // A SYNTHETIC combination, and deliberately so: this calls the record
+    // builder directly with `party: 'guest_hirer'` and account assurance,
+    // which no endpoint produces. `log-event`'s JWT path authorizes only the
+    // owner — `data.user.id === contract.earner_user_id`, party `earner` — so
+    // a counterparty presenting their own account JWT is refused with
+    // `not_a_party`. Do not read this test as coverage of a live credential
+    // path; it covers the MAPPING, which the old ternary got wrong by calling
+    // an account session an invitation capability whenever the party was the
+    // counterparty.
     const record = await buildEventRecord({
       type: 'performance.accepted', contract: CONTRACT,
       actorId: 'hirer-uuid', party: 'guest_hirer',

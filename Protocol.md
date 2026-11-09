@@ -177,18 +177,34 @@ Present in the repository, not in the live flow:
   2026-09-26, the client that called it (`src/lib/tsa.js`) was removed in
   Task 17 once nothing imported it, and the function's source went in Task 20.
   There is no external notarisation today; the chain and the server's
-  attestation are the whole guarantee. `tsa_token` columns and the
-  `tsa_token_present` field in the exports remain, always null — they say a
-  token was never obtained, which is a fact worth keeping.
+  attestation are the whole guarantee.
+
+  Two different things survive, and the distinction matters to anyone reading
+  an export. **`events.tsa_token` is a nullable `text` column** and still
+  exists; any historical value in it is preserved untouched. **The exported
+  `tsa_token_present` is a boolean**, computed as `Boolean(ev.tsa_token)`
+  (`src/lib/auditExport.js:95`, and `:135` for the acceptance event) — so a row
+  with no token exports `false`, never `null`. A consumer that expects a
+  nullable field there will be wrong.
+
+  What `false` means is **"no token is recorded on this event"**, and nothing
+  more. It is not evidence that a token was never obtained: one could have been
+  fetched and lost before the write, or obtained outside this system entirely,
+  and deleting the endpoint that used to request them cannot establish anything
+  about values written before it went. What is established is narrower and
+  still worth stating: **no current writer obtains or stores a TSA token**, so
+  no new event will carry one.
 - **AI scoping.** No Gemini integration exists anywhere in the code.
 - **Trust Score / TrustPoints / Trust Passport.** `src/lib/trustpoints.js` is
   a rules module — numeric constants and labels — and nothing calls it except
   its unit test. `WalletView` and `ProfileModal` do **not** exist: this bullet
   used to say they "operate on local mock profile state", and they were only
   ever names in comments in `src/App.jsx`, now removed. The
-  `trustpoints_ledger` table exists and has **no writer at all** since Task 20
-  deleted the two functions that inserted into it; it has never held a row.
-  None of this is part of the evidence protocol.
+  `trustpoints_ledger` table exists and **no writer remains in this
+  repository** since Task 20 deleted the two functions that inserted into it.
+  It was empty on E2E when last measured (2026-11-09); production was not
+  queried and the history of either project is not established by reading
+  source. None of this is part of the evidence protocol.
 - **Client-side HMAC invites.** Gone. `src/lib/invite.js` was the legacy
   implementation and this bullet described it as "dead"; the file itself no
   longer exists.

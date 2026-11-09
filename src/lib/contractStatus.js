@@ -18,12 +18,18 @@ import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/
 /**
  * Every state name this codebase knows. NOT every one it writes — the header
  * used to say "states the system actually writes", and four of these have no
- * writer: `IN_PROGRESS` described a Stripe authorisation that was never built,
- * `DELIVERED` has never been written by anything, `SETTLED` is unreachable
- * because `derive_contract_state()` returns early for it and the projection
- * only advances on the three `performance.*` types, and `CANCELLED` is written
- * by no path either (a `contract.cancelled` event leaves the projection
- * untouched — see `.ada/codex-task12-mode3-review.md`).
+ * writer:
+ *
+ *   IN_PROGRESS   described a Stripe authorisation that was never built.
+ *   DELIVERED     no writer in this tree. `20260925000000_evidence_core.sql`
+ *                 also measured it as never written when it was authored —
+ *                 a dated measurement, not something source can establish.
+ *   SETTLED       unreachable: `derive_contract_state()` returns early for it
+ *                 and the projection only advances on the three
+ *                 `performance.*` types.
+ *   CANCELLED     no path writes it either; a `contract.cancelled` event
+ *                 leaves the projection untouched. See
+ *                 `.ada/codex-task12-mode3-review.md`.
  *
  * They stay because rows and exports from earlier builds can carry them and a
  * reader needs a label, and because `SETTLED` being unreachable is asserted by

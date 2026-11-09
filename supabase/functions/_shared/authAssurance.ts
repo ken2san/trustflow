@@ -381,12 +381,28 @@ export function assuranceForRecord(a: AuthAssurance): Record<string, unknown> {
  * is affected.
  *
  * What changes is where the value comes from. It now follows the credential
- * that was actually presented, so the one case the ternary would have got wrong
- * — a counterparty who holds a real account and acts with a JWT, which
- * `log-event`'s own actor resolution supports — is recorded as the account
- * session it is rather than as an invitation it never used. (This used to cite
- * `_shared/partyAuth.ts`, deleted in Task 20 with the only three functions
- * that imported it.)
+ * that was actually presented, rather than being inferred from the party's
+ * role: a caller presenting an account JWT is recorded as the account session
+ * it is, and a caller presenting a bearer capability as that.
+ *
+ * NO ENDPOINT TODAY SENDS A COUNTERPARTY WITH AN ACCOUNT JWT, and two earlier
+ * versions of this comment implied one does. The first cited
+ * `_shared/partyAuth.ts`, which did authorize a registered hirer by
+ * `hirer_user_id` — but its only importers were the three payment functions,
+ * all deleted in Task 20 with the helper. The second, written in that task,
+ * said `log-event`'s own actor resolution supports the case; it does not.
+ * `log-event`'s `resolveActor` accepts a JWT only when the verified
+ * `data.user.id` equals `contract.earner_user_id`, and returns party `earner`;
+ * a counterparty's own JWT gets `not_a_party`, whatever account it belongs to.
+ * Cited by condition rather than by line, because the first draft of this
+ * correction cited a line number that was already off by one. Codex found the
+ * underlying claim in its Task 20 review.
+ *
+ * So the role/credential split this function implements is correct and worth
+ * keeping — it is how a credential stops being guessed from a role — but the
+ * combination it guards against is **not reachable through any current
+ * endpoint**. It is guarded because the mapping should not have to be revisited
+ * if one ever is, not because one exists.
  */
 export function legacyAuthMethod(a: AuthAssurance): string {
   if (a.assurance === 'anonymous') return 'anonymous'

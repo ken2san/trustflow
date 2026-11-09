@@ -1,16 +1,25 @@
 // src/lib/trustpoints.js
-// TrustPoints — non-redeemable reputation reward token.
+// TrustPoints — a reputation reward token that is not awarded.
 //
-// TrustPoints are earned through good behavior on TrustFlow and spent on
-// platform benefits (fee discounts, priority arbitration, badge unlocks).
-// They cannot be converted to cash. Think: airline miles, not money.
+// NOTHING AWARDS OR SPENDS THESE. This header used to say "server-side awards
+// happen in Supabase Edge Functions, which import the same TP_* constants" —
+// those were `capture-payment` and `cancel-payment`, un-deployed on 2026-11-06
+// and deleted in Task 20, so there is no server-side award path and this module
+// has no caller but its own unit test. Codex's Task 20 review flagged that the
+// header still described them.
 //
-// Server-side awards happen in Supabase Edge Functions, which import the
-// same TP_* constants below from supabase/functions/_shared/trustpointsRules.ts
-// — that file is the single source of truth for the contract-completion and
-// cancellation deltas; this module re-exports them as part of the fuller
-// TRUSTPOINTS_RULES config so a value can't drift between what the server
-// actually awards and what the UI displays as the rule.
+// What the design WAS, since the constants only make sense with it: points
+// earned through good behaviour and spent on platform benefits (fee discounts,
+// priority arbitration, badge unlocks), never convertible to cash — airline
+// miles, not money. None of it is built, and `trustpoints_ledger` has no
+// writer (see HANDOFF.md for what that does and does not establish).
+//
+// The constants still come from supabase/functions/_shared/trustpointsRules.ts
+// rather than being redeclared here. That file was the single source of truth
+// so a value could not drift between what a server awarded and what the UI
+// displayed as the rule; with no server side left, the reason to keep the
+// import is narrower — one place to change if this is ever built, and the unit
+// tests cover the pair.
 // This file provides:
 //   - TRUSTPOINTS_RULES: earn/spend configuration
 //   - BADGES: badge definitions and unlock thresholds

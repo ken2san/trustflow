@@ -234,25 +234,44 @@ heading keeps its old wording even though the file around it changed.
   **0644**. One line to fix, via `writeCredentialFile` from
   `scripts/lib/credentialFile.mjs`.
 
-### `trustpoints_ledger` has no writer, and that is the finished state
+### `trustpoints_ledger` — three separate statements, kept separate
 
-Its only inserts lived in `capture-payment` (two) and `cancel-payment` (one),
-both deleted in Task 20. Client writes were already revoked
-(`20260924000003_small_security_fixes.sql`), so inserts were only ever
-service-role. Nothing reads it either — no client code touches the table or the
-`trustpoints_balance` view, and `src/lib/trustpoints.js` is a pure rules module
-whose `TRUSTPOINTS_RULES` export is unused.
+An earlier version of this note ran them together and ended with "no points are
+awarded anywhere and none ever have been", which source inspection cannot
+support. Codex's Task 20 review caught it. The three are:
 
-The table and view are **retained deliberately** and are empty: measured on E2E
-2026-11-09 along with `earner_payout_profiles`, contracts carrying any
+**1. What is established by reading this repository.** No writer remains. The
+only inserts lived in `capture-payment` (two) and `cancel-payment` (one), both
+deleted in Task 20, and no other insert exists anywhere in the tree. Nothing
+reads the table either — no client code touches it or the `trustpoints_balance`
+view, and `src/lib/trustpoints.js` is a rules module whose `TRUSTPOINTS_RULES`
+export is unused. So **no application path can award a point today.**
+
+**2. What was observed, and when.** On **2026-11-09** the table was empty on
+**E2E**, measured together with `earner_payout_profiles`, contracts carrying any
 `stripe_*` id, events of type `payment.intent_created`/`captured`/`refunded`,
-events of type `trustpoints.*`, and contracts in `SETTLED` — all zero.
-Production was not queried; confirming it there is a precondition of any drop.
+events of type `trustpoints.*`, and contracts in `SETTLED` — all zero. That is a
+dated observation of one project, not a property of the system.
+
+**3. What is NOT established.** Production was never queried, so its row count
+is unknown. Neither project's history is knowable from source: the deleted
+functions did contain working insert paths, so rows may have existed at some
+point. Deleting a writer says nothing about what it wrote before.
+
+Also kept straight: client writes are revoked
+(`20260924000003_small_security_fixes.sql`), which makes inserts
+**service-role-only** — and that is *not* the same as Edge-function-only. A
+service-role credential can be used from the dashboard, the CLI, a script or an
+MCP connector. "Only Edge Functions could insert" was never the guarantee; "only
+something holding the service role could" is.
+
+The table and view are **retained deliberately**, and confirming production's
+count is a precondition of any drop.
 
 **Do not read `20260527000001_trustpoints_ledger.sql`'s "Inserts via Edge
-Functions only" as evidence of a live writer.** It is true as a privilege
-statement and misleading as a description. A migration is immutable, so this
-note is the correction. No points are awarded anywhere and none ever have been.
+Functions only" as evidence of a live writer.** It is approximately true as a
+privilege statement and misleading as a description. A migration is immutable,
+so this note is the correction.
 
 ---
 
