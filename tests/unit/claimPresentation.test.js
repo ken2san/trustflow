@@ -44,6 +44,17 @@ const SOURCES = {
 const RENDERED = Object.fromEntries(
   Object.entries(SOURCES).map(([file, source]) => [file, withoutComments(source)]))
 
+/**
+ * The rendered text with runs of whitespace collapsed.
+ *
+ * Prose in JSX is wrapped to the column limit, so a sentence a reader sees as
+ * one line is several in the source and a plain substring match on it silently
+ * fails. Two assertions in the first version of this file passed for that
+ * reason rather than because the copy was right. Match prose against this.
+ */
+const PROSE = Object.fromEntries(
+  Object.entries(RENDERED).map(([file, text]) => [file, text.replace(/\s+/g, ' ')]))
+
 describe('a screen never states that money arrived', () => {
   // Exactly the strings that shipped, plus the near misses. Each asserts the
   // platform's own voice: no actor, and an arrival in the indicative.
@@ -72,12 +83,22 @@ describe('a screen never states that money arrived', () => {
     expect(source).toMatch(/'They reported receiving payment'/)
   })
 
-  it('still says that a mutual statement is stronger, without calling it proof', () => {
-    // The fix must not overcorrect into implying the acknowledgement is worth
-    // nothing. Both sides stating it IS the best record available here.
-    const source = SOURCES['src/views/AgreementView.jsx']
-    expect(source).toMatch(/Both sides have now stated it/)
-    expect(source).toMatch(/cannot see the rail/)
+  it('describes only the claim in hand, and invents no statement from the payer', () => {
+    // MY SECOND ATTEMPT WAS WORSE THAN THE FIRST, which is why this test is
+    // here. Having fixed the unattributed headline, I added "Both sides have
+    // now stated it: one that it was sent, one that it arrived" — which is not
+    // established. `paymentConfirmed` only means the LATEST payment event is
+    // payment.acknowledged, and log-event imposes no ordering among the payment
+    // types: a performer may append an acknowledgement with no payer report
+    // anywhere in the record, which an API writer certainly can. So the fix for
+    // one piece of false evidence presentation introduced another. Codex caught
+    // it before it shipped.
+    const prose = PROSE['src/views/AgreementView.jsx']
+    expect(prose).not.toMatch(/Both sides have now stated/)
+    expect(prose).not.toMatch(/one that it was sent/)
+    // What it may say: whose statement this is, and what TrustFlow cannot see.
+    expect(prose).toMatch(/the payee's statement that it arrived/)
+    expect(prose).toMatch(/cannot see the rail/)
   })
 })
 
@@ -90,20 +111,46 @@ describe('accepting a delivery says what it closes, and may say what it covers',
     // it does and does not establish. The single irreversible one carried none:
     // PERFORMANCE_ACCEPTED is terminal for performance — enforce_performance_order
     // refuses every later performance event — and the log is append-only.
-    expect(source).toMatch(/Accepting closes the delivery step/)
-    expect(source).toMatch(/cannot be taken back/)
+    const prose = PROSE['src/views/AgreementView.jsx']
+    expect(prose).toMatch(/Accepting closes the delivery step for this agreement completely/)
+    expect(prose).toMatch(/cannot be taken back/)
   })
 
-  it('offers the receiver a note, so a narrow acceptance can say it is narrow', () => {
-    // The gap this closes: a receiver accepting two of five delivered pages had
-    // no way to record that, and afterwards cannot — the remaining three can
-    // never be asserted again. This adds no partial-acceptance state; it adds
-    // the receiver's own words to the record that already exists.
+  it('offers the receiver an optional note on the acceptance', () => {
+    // `note` was already allowlisted for this type and already rendered; only
+    // the input was missing. It is a remark on the acceptance — see the test
+    // below for what it must NOT be offered as.
     expect(source).toMatch(/id="accept-note"/)
-    expect(source).toMatch(/Anything to note about what you are accepting/)
+    expect(source).toMatch(/Add a note to this acceptance/)
     // Optional, not required: a receiver with nothing to add must not be forced
     // to write something, and must not be blocked from accepting.
     expect(source).toMatch(/\(optional\)/)
+  })
+
+  it('never offers the note as a way to accept only part of the work', () => {
+    // THE DEFECT THIS EXISTS FOR, caught by Codex in review and not by the
+    // first version of this file, which asserted the note's presence and
+    // called that a fix.
+    //
+    // My first copy's placeholder read "accepting the two pages delivered; the
+    // remaining three are still outstanding", and the paragraph below it
+    // offered the note and a correction request as ALTERNATIVES. Only a
+    // correction request keeps the performance flow open —
+    // enforce_performance_order refuses every performance event once the state
+    // is PERFORMANCE_ACCEPTED. So a receiver following the example exactly
+    // would forfeit the remaining three pages while believing the note had
+    // reserved them: worse than the bare Accept button it replaced, because it
+    // invited the mistake.
+    const prose = PROSE['src/views/AgreementView.jsx']
+    for (const phrase of ['still outstanding, say so', 'remaining three', 'accepting the two pages']) {
+      expect(prose, phrase).not.toContain(phrase)
+    }
+    // No alternative framing against requesting a correction.
+    expect(prose).not.toMatch(/note above,? or request a correction/)
+    // And it must say outright that the note does not narrow the acceptance.
+    expect(prose).toMatch(/whatever the note says/)
+    expect(prose).toMatch(/does not accept part of the work/)
+    expect(prose).toMatch(/request a correction instead/)
   })
 
   it('sends that note into the recorded event', () => {

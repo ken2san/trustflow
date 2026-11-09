@@ -422,30 +422,35 @@ export default function AgreementView({
             <p className="text-sm text-slate-300">
               They marked the work delivered. Once you have checked it:
             </p>
-            {/* WHY AN ACCEPTANCE MAY CARRY A STATEMENT.
+            {/* WHY AN ACCEPTANCE MAY CARRY A STATEMENT, AND WHAT IT CANNOT DO.
                 Accepting ends the performance flow for good: the projection
-                moves to PERFORMANCE_ACCEPTED, and the trigger behind it will
-                refuse every later performance event on this agreement. So a
-                receiver who means "the two pages that arrived are fine, the
-                other three are still owed" has, with a bare Accept, recorded
-                something broader than they meant and cannot narrow it
-                afterwards — the log is append-only.
+                moves to PERFORMANCE_ACCEPTED and enforce_performance_order
+                refuses every later performance event on this agreement. The
+                note changes none of that.
 
-                This does not add a partial-acceptance state, and deliberately
-                not: the protocol keeps one meaning for accepted. What it adds
-                is the receiver's own words about WHAT they accepted, in the
-                same record, hashed with it. `note` was already allowlisted for
-                this type and already rendered in the trail; the only thing
-                missing was a way to type it. */}
+                The first version of this field got that wrong in the way that
+                matters. Its example read "accepting the two pages delivered;
+                the remaining three are still outstanding", and the paragraph
+                below offered the note and a correction request as
+                alternatives. Only a correction request keeps the flow open, so
+                that copy walked a receiver into forfeiting the rest of the work
+                while believing they had reserved it — worse than the bare
+                Accept button it replaced. Codex caught it before it shipped.
+
+                So the note is a remark on the acceptance and is worded as one.
+                It carries no scope and reserves nothing; a receiver with
+                outstanding work is sent to Request correction without an
+                alternative. `note` was already allowlisted for this type and
+                already rendered in the trail — only the input was missing. */}
             <label htmlFor="accept-note" className="block text-sm text-slate-300">
-              Anything to note about what you are accepting? (optional)
+              Add a note to this acceptance (optional)
             </label>
             <textarea
               id="accept-note"
               value={acceptNote}
               onChange={e => setAcceptNote(e.target.value)}
               rows={2}
-              placeholder="e.g. accepting the two pages delivered; the remaining three are still outstanding"
+              placeholder="e.g. checked against the agreed list on the 8th"
               className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
             />
             <div className="flex flex-wrap gap-3">
@@ -465,9 +470,11 @@ export default function AgreementView({
               </button>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Accepting closes the delivery step for this agreement — they cannot mark it
-              delivered again afterwards, and the record cannot be taken back. If part of it is
-              still outstanding, say so in the note above, or request a correction instead.
+              Accepting closes the delivery step for this agreement completely, whatever the note
+              says: they cannot mark anything delivered again afterwards, and the record cannot be
+              taken back. The note is a remark on this acceptance — it does not accept part of the
+              work or keep the rest open. If anything is still outstanding, request a correction
+              instead.
             </p>
           </>
         )}
@@ -527,9 +534,17 @@ export default function AgreementView({
           {/* This used to read "Payment confirmed received", in emerald with a
               tick, with no actor anywhere in the sentence — so it read as
               TrustFlow's own finding that money had arrived. What happened is
-              that the payee said it arrived. The comment four lines above the
-              label table has always said this was a claim and not a verified
-              fact; the one string a reader actually sees did not. */}
+              that the payee said it arrived.
+
+              AND WHY THIS SAYS NOTHING ABOUT THE PAYER. The first fix replaced
+              it with "Both sides have now stated it: one that it was sent, one
+              that it arrived", which is not established: `paymentConfirmed`
+              only means the LATEST payment event is payment.acknowledged, and
+              no ordering is imposed among the payment types — a performer may
+              append an acknowledgement with no payer report anywhere in the
+              record, which an API writer certainly can. So that copy invented
+              a statement from the other party. Codex caught it; the disclaimer
+              now describes only the claim actually in hand. */}
           {paymentConfirmed && (
             <>
               <p className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
@@ -537,9 +552,8 @@ export default function AgreementView({
                 {performs ? 'You reported receiving payment' : 'They reported receiving payment'}
               </p>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Both sides have now stated it: one that it was sent, one that it arrived.
-                That is a stronger record than either statement alone, and it is still what the
-                two of you said — TrustFlow cannot see the rail the money moved on.
+                This is the payee's statement that it arrived, with the server's time.
+                TrustFlow cannot see the rail the money moved on.
               </p>
             </>
           )}

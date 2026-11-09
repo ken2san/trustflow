@@ -394,13 +394,23 @@ describe('an acceptance records whether the terms check happened', () => {
       .toEqual({ presented: false, verified: false, version: null })
   })
 
-  it('distinguishes "sent a digest we could not confirm" from "sent none"', () => {
+  it('keeps "presented" and "verified" separate even though one pair is unreachable', () => {
+    // BE PRECISE ABOUT WHAT THIS DISTINGUISHES, because it is easy to overstate
+    // and I did at first. In validate-invite-token as it stands, a presented
+    // digest either verifies or the request is refused — a mismatch answers
+    // terms_changed and an unknown format answers terms_check_unsupported, both
+    // before anything is written. So `presented: true, verified: false` cannot
+    // reach a written event today. Two states are reachable, not three.
+    //
+    // The pair is still two fields rather than one boolean, because they are
+    // different facts: whether the caller offered a digest, and whether the
+    // server agreed with it. Should a future acceptance path ever record a
+    // mismatch instead of refusing it, that record must not be forced to
+    // choose between the two reachable states — which is what a single boolean
+    // would make it do, silently.
     const presentedButUnverified = { presented: true, verified: false, version: 1 }
     expect(acceptanceFacts(CONTRACT, presentedButUnverified)._shown_terms_check)
       .toEqual(presentedButUnverified)
-    // Three states, not two: no digest, a digest that did not verify, and a
-    // digest that did. Collapsing the middle one into either neighbour would
-    // misreport it.
     expect(acceptanceFacts(CONTRACT, UNCHECKED)._shown_terms_check)
       .not.toEqual(presentedButUnverified)
   })

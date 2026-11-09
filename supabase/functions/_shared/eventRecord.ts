@@ -100,7 +100,17 @@ export interface ShownTermsCheck {
   presented: boolean
   /** Did it equal the digest this server computed? False when none was sent. */
   verified: boolean
-  /** The digest format version the caller computed under, as the caller named it. */
+  /**
+   * The digest format version the caller NAMED, or null if it named none.
+   *
+   * Not the version the check effectively ran under. A caller that sends a
+   * digest and no version is checked as v1 by the fallback in
+   * validate-invite-token, and this field still records null — because what is
+   * worth preserving is what the caller said, not what this build inferred from
+   * its silence. A later build that changes the fallback must not be able to
+   * retro-date its own inference onto these records. (Codex's observation on
+   * review, 2026-11-08.)
+   */
   version: number | null
 }
 
