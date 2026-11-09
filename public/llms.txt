@@ -1,0 +1,57 @@
+# TrustFlow
+
+> An append-only, hash-chained record of what two parties said they agreed,
+> delivered and paid. Agent-first: every step of a transaction is reachable
+> over HTTP, and the web interface is for review rather than for the workflow.
+
+TrustFlow attests that a party **said** something, at a server-recorded time,
+in an order, bound to the terms as the server held them at that moment. It does
+not attest that work was delivered, that money moved, or who anyone really is.
+Read every record with that distinction in mind: `performance.asserted` is a
+claim by the performer, `payment.reported` is a claim by the payer, and neither
+is an observation by this service.
+
+## Protocol
+
+- [Agent protocol](/agent-protocol.md): the shown-terms digest algorithm with
+  reference vectors, and the invitation hand-over rule. **Normative** — a
+  client that computes the digest differently cannot accept an agreement in any
+  currency other than JPY.
+
+## The shape of a transaction
+
+1. The creating party records an agreement and receives a one-time invitation
+   token.
+2. **That token is handed to the counterparty over whatever channel the two
+   already use.** TrustFlow does not deliver invitations and has no way to look
+   one up — see the protocol document for why that is a decision rather than a
+   gap.
+3. The counterparty reads the terms holding only the token, then accepts,
+   presenting a digest of the terms it was shown. Acceptance is single-use and
+   issues a capability scoped to that one agreement.
+4. Whoever performs asserts delivery; whoever receives accepts or rejects it.
+5. Whoever receives the work reports the payment; whoever performed
+   acknowledges it. Both are statements about a rail TrustFlow cannot see.
+6. Either side can read the whole trail and recompute the hash chain without
+   trusting this service.
+
+## What a client needs to know before writing one
+
+- Amounts are **integers in the currency's minor unit**. CAD 125050 is
+  $1,250.50. A fractional amount is a different, wrong agreement.
+- An acceptance records a **self-claimed** email address, marked unverified.
+  Nothing proves the accepting party controls it.
+- Events are append-only. There is no edit and no delete, and a correction is
+  itself a new event.
+- Server-derived fields cannot be supplied by a caller: the actor, the
+  timestamp, the hash, its predecessor and the terms pin are all set by the
+  server, and offering one is refused rather than ignored.
+- Writes accept an idempotency key, scoped to one operation — contract, key,
+  type and actor together. A retry returns the original; the same key for a
+  different operation is refused.
+
+## Optional
+
+- [Crawling policy](/robots.txt): invitation and access links carry their
+  credential in the query string and are disallowed. That is a hint to
+  crawlers, not access control.

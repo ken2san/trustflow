@@ -17,7 +17,8 @@
 //   - the counterparty gets no contract id — only an invite token, handed over
 //     on a channel TrustFlow is not part of;
 //   - the counterparty computes the mandatory non-JPY shown-terms digest from
-//     docs/api/agent-protocol.md, importing none of this repo's crypto.
+//     the published spec at public/agent-protocol.md, importing none of this
+//     repo's crypto.
 //
 // After the handover the two coordinate ONLY through the evidence record: each
 // side polls what it is allowed to read and acts when its turn arrives.

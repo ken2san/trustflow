@@ -1,6 +1,6 @@
 // The v2 shown-terms digest, implemented from the PUBLISHED SPECIFICATION.
 //
-//   docs/api/agent-protocol.md §1
+//   public/agent-protocol.md §1  (served at /agent-protocol.md)
 //
 // WHY THIS FILE IS NOT AN IMPORT OF _shared/shownTerms.ts
 // Task 14 asks whether an outside client can compute this digest from the

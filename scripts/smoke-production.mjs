@@ -157,6 +157,32 @@ for (const fn of RETIRED) {
   check(`${fn} stays retired`, !r.deployed, `HTTP ${r.status} ${r.body}`);
 }
 
+// ── The published agent protocol ────────────────────────────────────────────
+//
+// An outside agent cannot accept an agreement in any currency but JPY without
+// the shown-terms digest, and the only statement of that algorithm is the
+// document served here. If it stops being served, a client written against it
+// has no way to find out why its acceptances started failing — so this is a
+// release check, not a nicety. One fetch each, no retries.
+//
+// The content check is deliberately thin: the reference digest. It is the one
+// string a client must reproduce byte for byte, and the unit tests already
+// assert the server agrees with it; here we only care that the file reaching
+// the web is the one that was tested.
+const REFERENCE_DIGEST =
+  '438a61235d399d7dbf60fcc98882eb89065dbc55ad53d5e7b39aef96ab1f9aeb';
+
+for (const [path, mustContain, what] of [
+  ['/llms.txt', '/agent-protocol.md', 'points an agent at the protocol'],
+  ['/agent-protocol.md', REFERENCE_DIGEST, 'carries the reference digest'],
+]) {
+  const r = await fetch(`${APP}${path}`);
+  const body = r.ok ? await r.text() : '';
+  check(`${path} is served and ${what}`,
+    r.ok && body.includes(mustContain),
+    `HTTP ${r.status}, ${body.length} bytes`);
+}
+
 const failed = checks.filter(c => !c.ok);
 console.log(`\n${checks.length} checks, ${failed.length} failed\n`);
 process.exit(failed.length === 0 ? 0 : 1);

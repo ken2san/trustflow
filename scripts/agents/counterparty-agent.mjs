@@ -8,7 +8,8 @@
 //   TF_CHANNEL_DIR — the handover channel. The invite token arrives here
 //     because the owner's agent put it there. TrustFlow does not deliver
 //     invitations and this process has no way to look one up, which is the
-//     operational rule in docs/api/agent-protocol.md §2 made executable.
+//     operational rule in the published spec (public/agent-protocol.md §2)
+//     made executable.
 //
 // WHAT IT IS NOT GIVEN
 // The owner's email, the owner's password, the owner's JWT, any module that
@@ -43,7 +44,8 @@ if (!URL_ || !KEY || !DIR) {
 assertE2EProject(URL_);
 
 // The digest lives in ./published-digest.mjs — written from
-// docs/api/agent-protocol.md §1 and importing none of this repo's crypto, so
+// the published spec (public/agent-protocol.md) §1 and importing none of this
+// repo's crypto, so
 // that tests/unit/shownTerms.test.js can hold it against both published
 // vectors without a live run.
 

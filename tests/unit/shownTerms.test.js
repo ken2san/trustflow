@@ -171,7 +171,8 @@ async function sha256OfADifferentVersion(source) {
 
 // ── The published specification ─────────────────────────────────────────────
 //
-// docs/api/agent-protocol.md states the v2 algorithm, its exact preimages and
+// public/agent-protocol.md — served at /agent-protocol.md — states the v2
+// algorithm, its exact preimages and
 // its digests, so a client can be written without this repository. A
 // specification nothing checks is a specification that drifts: the first
 // change to BUILDERS would leave the document confidently wrong, and the
@@ -191,7 +192,10 @@ async function sha256OfADifferentVersion(source) {
 // one — scripts/agents/counterparty-agent.mjs, run against E2E.
 
 describe('the digest specification published for outside clients', () => {
-  const SPEC_PATH = 'docs/api/agent-protocol.md'
+  // The PUBLISHED file, not a repo-internal copy. Task 16 moved the spec to
+  // public/ so it is served at /agent-protocol.md; testing a second copy would
+  // leave the one outside clients actually read untested.
+  const SPEC_PATH = 'public/agent-protocol.md'
 
   /** The ASCII reference vector, as §1 gives it. */
   const VECTOR = {

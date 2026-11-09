@@ -274,11 +274,12 @@ paths:
         version 1 the amount of a non-JPY agreement is not covered at all, so
         its price could change without the digest moving.
 
-        **The algorithm, its exact preimage and a reference digest are
-        specified in `docs/api/agent-protocol.md`**, which also states how an
-        invitation is expected to reach the accepting party — TrustFlow does
-        not deliver one. A client cannot accept a non-JPY agreement without
-        implementing that digest.
+        **The algorithm, its exact preimages and reference digests are
+        specified in the published agent protocol — `/agent-protocol.md`,
+        indexed from `/llms.txt`, source at `public/agent-protocol.md`** —
+        which also states how an invitation is expected to reach the accepting
+        party, since TrustFlow does not deliver one. A client cannot accept a
+        non-JPY agreement without implementing that digest.
       requestBody:
         required: true
         content:
@@ -309,8 +310,8 @@ paths:
                   nullable: true
                   description: |
                     Lowercase hex SHA-256 of the terms this client was shown.
-                    Computed by the caller — see docs/api/agent-protocol.md for
-                    the exact field set and serialization. Required for every
+                    Computed by the caller — see /agent-protocol.md for the
+                    exact field set and serialization. Required for every
                     currency except JPY.
                 shown_terms_version:
                   type: integer
