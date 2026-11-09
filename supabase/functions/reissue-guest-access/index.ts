@@ -28,8 +28,21 @@
 // Deploy:
 //   npx supabase functions deploy reissue-guest-access
 
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+// DEPENDENCIES, AND WHY THEY LOOK LIKE THIS
+// No std/http import: the HTTP entry point is the runtime's own `Deno.serve`.
+// This used to import `serve` from deno.land/std@0.177.0, which is from early
+// 2023 and whose `serve` is deprecated and gone from later std — so the pin
+// could not be moved forward, only dropped. Supabase's own guidance is to use
+// the built-in.
+//
+// `@supabase/supabase-js` is pinned to an EXACT version. It was `@2`, which
+// esm.sh resolves to the latest 2.x at deploy time: a redeploy that changed
+// nothing in this repository could change the client library underneath an
+// auth and evidence path, and the bundle digests two releases compare would
+// disagree for no reason anybody could name. 2.99.1 is the version the web
+// client has in package-lock.json, so both halves of the system now speak
+// through the same code.
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { buildEventRecord } from '../_shared/eventRecord.ts'
 import { assuranceFromClaims, claimsFromVerifiedJwt } from '../_shared/authAssurance.ts'
@@ -73,7 +86,7 @@ const STATUS_RESPONSES: Record<string, { error: string, status: number }> = {
   not_accepted: { error: 'not_accepted',       status: 409 },
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
   try {

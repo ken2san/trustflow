@@ -6,7 +6,10 @@
 // A guest Hirer is not required to register an account for this MVP — the
 // guest_access_token path is the primary way a Hirer authorizes anything.
 
-import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+// Exact version, matching the four functions that bundle this file and the web
+// client's lockfile. A floating `@2` let esm.sh pick a different library at
+// each deploy, underneath an authorization check.
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 
 export type PartyRole = 'earner' | 'hirer'
 
