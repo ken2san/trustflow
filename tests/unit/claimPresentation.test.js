@@ -19,6 +19,22 @@ import { readFileSync } from 'node:fs'
 // These are text assertions over the view sources because the label tables are
 // module-private and the risk is the literal wording. The same approach already
 // guards the currency list against drifting from the migration that enforces it.
+//
+// WHAT THESE TESTS ARE NOT, stated because the limit was measured rather than
+// guessed. They are wording guards, not a semantic validator. On review Codex
+// built a harness over these very assertion bodies and showed that appending
+//
+//     "Use the note to reserve unfinished work for later review."
+//
+// to the note's label passes all of them: every required phrase is still
+// present, no forbidden phrase appears, and the copy once again instructs a
+// receiver to do the one thing that forfeits the rest of the work. Nor does a
+// matched phrase prove anything is rendered, or rendered at the moment it
+// matters.
+//
+// So do not read a green run here as evidence that new copy is honest. The two
+// defects these catch were both introduced by someone who had just written down
+// the rule they broke; the whole changed wording still needs a reader.
 
 const read = path => readFileSync(path, 'utf8')
 
