@@ -40,9 +40,20 @@
 //
 // No fsync and no durability claim. Power loss is not the threat being
 // addressed; a truncated credential after an ordinary crash was.
+//
+// THE PRECONDITION, STATED BECAUSE IT BOUNDS EVERYTHING ABOVE
+// The containing directory is assumed to be writable only by the owning user.
+// O_EXCL protects CREATION, not a pathname's integrity afterwards: anyone who
+// can write the directory can unlink or replace an entry between the open and
+// the rename, and no flag here prevents that. These helpers are for a local
+// harness keeping its own credentials tidy under the user's own directories.
+// They are NOT an isolation boundary against another principal who can write
+// those directories, and the same-OS-user limitation documented in
+// ../two-agent-transaction.mjs applies here too.
 
 import { randomBytes } from 'node:crypto';
-import { lstat, open, rename, unlink } from 'node:fs/promises';
+import { constants as FS } from 'node:fs';
+import { open, rename, unlink } from 'node:fs/promises';
 
 /** Owner read/write and nothing else. */
 const OWNER_ONLY = 0o600;
@@ -52,21 +63,32 @@ const OWNER_ONLY = 0o600;
  *
  * Returns the path, so a caller can log where it went — never what went there.
  */
-export async function writeCredentialFile(file, value) {
-  const staging = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+export async function writeCredentialFile(file, value, { stagingName = null } = {}) {
+  // Injectable only so a test can precreate this exact pathname and prove the
+  // exclusive open refuses it. Codex's finding 2 on the third review: with a
+  // randomized name no test could reach the staging path, so changing 'wx' to
+  // 'w' passed all nine tests — the O_EXCL protection was unpinned.
+  const staging = stagingName
+    ?? `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
 
   // 'wx' is O_WRONLY|O_CREAT|O_EXCL: it creates, or it fails. It never opens an
   // existing file and never follows a link, which is the whole point.
   const handle = await open(staging, 'wx', OWNER_ONLY);
-  try {
-    await handle.writeFile(JSON.stringify(value, null, 2));
-  } finally {
-    await handle.close();
-  }
 
+  // Everything after the open is covered, not just the rename. A serialization
+  // error, a failed write or a failed close used to exit before the cleanup and
+  // leave a staging copy of the credential behind — restrictive and gitignored,
+  // but a second copy. Codex's finding 3.
   try {
+    try {
+      await handle.writeFile(JSON.stringify(value, null, 2));
+    } finally {
+      await handle.close();
+    }
     await rename(staging, file);
   } catch (err) {
+    // The original error is what the caller needs; a failure to clean up must
+    // not replace it.
     await unlink(staging).catch(() => { /* nothing better to do */ });
     throw err;
   }
@@ -88,14 +110,29 @@ export async function writeCredentialFile(file, value) {
  * undo the time the file was readable — `onExposed` receives that message.
  */
 export async function readCredentialFile(file, { onExposed = null } = {}) {
-  // Before opening: a symlink where a credential should be is not a
-  // permissions problem to repair, it is the wrong file.
-  const link = await lstat(file);
-  if (link.isSymbolicLink()) {
-    throw new Error(`${file} is a symbolic link; a credential file must be a regular file`);
+  // O_NOFOLLOW, not lstat-then-open.
+  //
+  // The first version checked with `lstat` and then opened by path, and Codex
+  // demonstrated the gap: replace the regular file with a symlink between those
+  // two calls and the descriptor's own stat sees a perfectly good regular file
+  // — the link's target — which then gets read and chmodded. The check and the
+  // open disagreed about which object they meant, which is the very thing the
+  // descriptor was introduced to prevent, moved one step earlier.
+  //
+  // Opening with O_NOFOLLOW removes the gap for the final component: if the
+  // path is a symlink at the moment of opening, the open itself fails. It says
+  // nothing about the ancestor directories — see the precondition above.
+  let handle;
+  try {
+    handle = await open(file, FS.O_RDONLY | FS.O_NOFOLLOW);
+  } catch (err) {
+    if (err.code === 'ELOOP' || err.code === 'EMLINK') {
+      throw new Error(
+        `${file} is a symbolic link; a credential file must be a regular file`,
+      );
+    }
+    throw err;
   }
-
-  const handle = await open(file, 'r');
   try {
     const info = await handle.stat();
     if (!info.isFile()) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, stat, chmod, writeFile, symlink, readdir } from 'node:fs/promises'
+import { mkdtemp, rm, stat, chmod, readFile, writeFile, symlink, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -47,18 +47,61 @@ describe('writing a file that holds a credential', () => {
     expect(await readdir(dir)).toEqual(['key.json'])
   })
 
-  it('cannot be redirected by a planted staging file', async () => {
-    // A fixed `.next` name could be pre-created, or pointed at the live key by
-    // a symlink, so that the write corrupted the primary BEFORE the rename
-    // that was supposed to make the replacement atomic. The staging name is
-    // now unique per call and opened O_EXCL, so neither works.
+  it('ignores a staging file left at the name an older version used', async () => {
     const f = path.join(dir, 'key.json')
     await writeCredentialFile(f, { refresh_token: 'live' })
     await writeFile(path.join(dir, 'key.json.next'), 'planted')
-    await symlink(f, path.join(dir, 'key.json.decoy'))
     await writeCredentialFile(f, { refresh_token: 'replacement' })
     expect((await readCredentialFile(f)).refresh_token).toBe('replacement')
     expect(await modeOf(f)).toBe(0o600)
+  })
+
+  // THE MUTATION THESE CLOSE. Codex changed `open(staging, 'wx', …)` to
+  // `open(staging, 'w', …)` — dropping O_EXCL, the protection against reusing
+  // or following whatever already sits at the staging path — and all nine tests
+  // still passed, because a randomized staging name is a name no test can
+  // reach. So the name is injectable now, for these two cases only.
+  it('refuses to write through a file already at the staging path', async () => {
+    const f = path.join(dir, 'key.json')
+    await writeCredentialFile(f, { refresh_token: 'live' })
+    const staging = path.join(dir, 'staging.tmp')
+    await writeFile(staging, 'squatted')
+    await expect(writeCredentialFile(f, { refresh_token: 'nope' }, { stagingName: staging }))
+      .rejects.toMatchObject({ code: 'EEXIST' })
+    // The live key is untouched, and the squatter is left as it was rather
+    // than being written through and renamed into place.
+    expect((await readCredentialFile(f)).refresh_token).toBe('live')
+    expect(await readFile(staging, 'utf8')).toBe('squatted')
+  })
+
+  it('refuses to write through a symlink at the staging path', async () => {
+    // The dangerous shape: a link at the staging path aimed at the live key, so
+    // the write lands on the primary BEFORE the rename that is supposed to make
+    // replacement atomic — reintroducing the truncation the rename exists to
+    // prevent.
+    const f = path.join(dir, 'key.json')
+    await writeCredentialFile(f, { refresh_token: 'live' })
+    const staging = path.join(dir, 'staging.tmp')
+    await symlink(f, staging)
+    await expect(writeCredentialFile(f, { refresh_token: 'nope' }, { stagingName: staging }))
+      .rejects.toMatchObject({ code: 'EEXIST' })
+    expect((await readCredentialFile(f)).refresh_token).toBe('live')
+  })
+
+  it('leaves no staging copy behind when the write itself fails', async () => {
+    // Serialization failing after the file is open. The credential being
+    // written is not in this value, but a leftover staging file would be a
+    // second copy of whatever was, so cleanup covers the whole sequence and
+    // not only the rename. The original error still reaches the caller.
+    const f = path.join(dir, 'key.json')
+    await writeCredentialFile(f, { refresh_token: 'live' })
+    const circular = { refresh_token: 'x' }
+    circular.self = circular
+    const staging = path.join(dir, 'staging.tmp')
+    await expect(writeCredentialFile(f, circular, { stagingName: staging }))
+      .rejects.toThrow(/circular|convert/i)
+    expect(await readdir(dir)).toEqual(['key.json'])
+    expect((await readCredentialFile(f)).refresh_token).toBe('live')
   })
 })
 
