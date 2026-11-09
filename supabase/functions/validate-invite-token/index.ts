@@ -27,18 +27,27 @@
 
 // DEPENDENCIES, AND WHY THEY LOOK LIKE THIS
 // No std/http import: the HTTP entry point is the runtime's own `Deno.serve`.
-// This used to import `serve` from deno.land/std@0.177.0, which is from early
-// 2023 and whose `serve` is deprecated and gone from later std — so the pin
-// could not be moved forward, only dropped. Supabase's own guidance is to use
-// the built-in.
+// This used to import `serve` from deno.land/std@0.177.0, from early 2023. That
+// `serve` is deprecated and its own docs point at `Deno.serve`, so the
+// dependency is removed rather than carried forward — Supabase's guidance is the
+// built-in. A newer std would also have worked: 0.224.0 still exports `serve`,
+// deprecated and scheduled for removal at 1.0. An earlier version of this
+// comment said the pin could only be dropped and not moved forward, which Codex
+// checked and found untrue; the reason to drop it is the deprecation, not an
+// absence of alternatives.
 //
 // `@supabase/supabase-js` is pinned to an EXACT version. It was `@2`, which
 // esm.sh resolves to the latest 2.x at deploy time: a redeploy that changed
 // nothing in this repository could change the client library underneath an
 // auth and evidence path, and the bundle digests two releases compare would
-// disagree for no reason anybody could name. 2.99.1 is the version the web
-// client has in package-lock.json, so both halves of the system now speak
-// through the same code.
+// disagree for no reason anybody could name. 2.99.1 is the release the web
+// client's lockfile names, so both halves declare the SAME SDK RELEASE.
+//
+// Not the same bytes, and the distinction is the point: esm.sh builds for a
+// different target than npm packs for, and a declared version is not an
+// artifact. Comparing measured `ezbr_sha256` between projects stays the check
+// that production got what E2E tested; this pin only stops the input drifting
+// on its own.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'

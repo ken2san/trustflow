@@ -6,9 +6,20 @@
 // A guest Hirer is not required to register an account for this MVP — the
 // guest_access_token path is the primary way a Hirer authorizes anything.
 
-// Exact version, matching the four functions that bundle this file and the web
-// client's lockfile. A floating `@2` let esm.sh pick a different library at
-// each deploy, underneath an authorization check.
+// Pinned for type resolution, not because this file ships anywhere.
+//
+// An earlier version of this comment said the four live functions bundle it.
+// They do not — Codex checked, and so did I: the only importers of
+// `authorizeParty` are create-payment-intent, capture-payment and
+// cancel-payment, all three retired and asserted 404 on every release. And the
+// import below is `import type`, so the emitted JavaScript carries no esm.sh
+// reference at all; the specifier only decides which declarations the
+// typechecker reads.
+//
+// It is pinned to match the live functions and the web client's lockfile so
+// that one release is named in one place. A release operator should NOT read a
+// change here as a runtime authorization change forcing a lockstep deploy —
+// this diff's four functions go together because all four entrypoints changed.
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 
 export type PartyRole = 'earner' | 'hirer'
