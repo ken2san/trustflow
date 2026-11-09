@@ -22,7 +22,7 @@
 // prove only that the database can write rows. The whole point is that these
 // requests are refused exactly where a real caller would be refused.
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readCredentialFile, writeCredentialFile } from './credentialFile.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -72,7 +72,12 @@ let inFlight = null;
 export async function ownerSession() {
   inFlight ??= (async () => {
     try {
-      const cached = JSON.parse(await readFile(SESSION_CACHE, 'utf8'));
+      // Read through the same module, so an old 0644 cache is narrowed the
+      // first time it is used rather than only when it is next rewritten —
+      // Codex pointed out that a cache still valid on read never gets written
+      // and so never got repaired.
+      const cached = await readCredentialFile(SESSION_CACHE,
+        { onExposed: m => console.warn(`[session-cache] ${m}`) });
       if (unexpired(cached) && await stillLive(cached)) return cached;
     } catch { /* absent, unreadable or unreachable — grant a fresh one */ }
 
@@ -84,11 +89,12 @@ export async function ownerSession() {
     const session = await r.json();
     // Deliberately not echoing the body: a failed grant can carry the address.
     if (r.status !== 200) throw new Error(`owner sign-in failed (${r.status})`);
-    // 0600: this cache holds a refresh token, which is the account. A plain
-    // write lands as 0644 under the usual umask — the same P1 Codex found in
-    // scripts/lib/ownerKey.mjs, and this file predates it. Same defect, same
-    // credential class, one argument.
-    await writeFile(SESSION_CACHE, JSON.stringify(session, null, 2), { mode: 0o600 });
+    // Through ./credentialFile.mjs: this cache holds a refresh token, which
+    // carries the account. A plain write landed as 0644 under the usual umask —
+    // the same disclosure Codex found in ./ownerKey.mjs, and this file predates
+    // it — and `{ mode }` does not repair an existing file, which is why this
+    // goes through a fresh-file-and-rename rather than a mode argument.
+    await writeCredentialFile(SESSION_CACHE, session);
     return session;
   })();
 

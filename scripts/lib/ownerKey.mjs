@@ -63,7 +63,7 @@
 //   - do not count on the next exchange neutralising a leaked copy. Treat every
 //     copy as live until the session is revoked.
 
-import { chmod, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { readCredentialFile, writeCredentialFile } from './credentialFile.mjs';
 
 /** Where the key lives by default. Gitignored; it is a credential. */
 export const DEFAULT_KEY_FILE = 'tests/e2e/.owner-api-key.json';
@@ -72,27 +72,25 @@ export const DEFAULT_KEY_FILE = 'tests/e2e/.owner-api-key.json';
 const ALLOWED_KEY_FIELDS = new Set(['refresh_token', 'minted_at', 'rotated_at', 'note']);
 
 /**
- * Make sure only the owning user can read the credential, before reading it.
+ * What to say when the file turns out to have been readable by others.
  *
- * Codex's review found the P1 here: the first version wrote this file with
- * plain `writeFile`, so under the usual umask 022 it landed as 0644 — the
- * account's whole authority, readable by group and other. Gitignoring a
- * credential keeps it out of a commit and does nothing about the filesystem.
- *
- * Narrowed rather than refused, deliberately: refusing would leave the
- * over-permissive file sitting there while the operator reads an error, and
- * there is nothing to decide — 0600 is the only correct mode for this file.
- * The narrowing is reported, because a credential that was world-readable for
- * a while is a fact about the past that a chmod does not undo.
+ * The containment advice matters and the first version of it was wrong. It said
+ * "mint a new one", and minting COPIES the refresh token out of the same
+ * session — so an operator following it would have re-provisioned the very
+ * session the attacker holds a token for, and called it contained. Codex's
+ * finding 2 on the re-review, and it contradicted the session-family paragraph
+ * at the top of this same file.
  */
-async function requireOwnerOnly(file) {
-  const mode = (await stat(file)).mode & 0o777;
-  if (mode & 0o077) {
-    await chmod(file, 0o600);
-    console.warn(`[owner-key] ${file} was mode ${mode.toString(8)} — narrowed to 600.`);
-    console.warn('[owner-key] It was readable beyond its owner until now. '
-      + 'If this machine has other users, treat the key as disclosed and mint a new one.');
-  }
+function reportExposure(message) {
+  console.warn(`[owner-key] ${message}`);
+  console.warn('[owner-key] A chmod does not undo that. If this machine has other users,');
+  console.warn('[owner-key] treat the key as disclosed. Containment is, in order:');
+  console.warn('[owner-key]   1. revoke the compromised SESSION — not just this file. Copying or');
+  console.warn('[owner-key]      refreshing the same session is not containment: the leaked token');
+  console.warn('[owner-key]      belongs to that session and keeps its authority.');
+  console.warn('[owner-key]   2. sign in again to get a DISTINCT session, then provision its token.');
+  console.warn('[owner-key]   3. expect any access token already issued to stay usable until it');
+  console.warn('[owner-key]      expires; sign-out does not retract one.');
 }
 
 /**
@@ -106,34 +104,34 @@ async function requireOwnerOnly(file) {
  * not exist.
  */
 export async function loadOwnerKey(file) {
-  await requireOwnerOnly(file).catch((err) => {
-    throw new Error(
-      `no owner key at ${file} (${err.code ?? 'unreadable'}). `
-      + 'Mint one from a session a human already signed in to:\n'
-      + '  node scripts/agents/mint-owner-key.mjs',
-    );
-  });
-
   let parsed;
   try {
-    parsed = JSON.parse(await readFile(file, 'utf8'));
+    parsed = await readCredentialFile(file, { onExposed: reportExposure });
   } catch (err) {
-    // The reason is named, never the content. A JSON parse error can carry an
-    // excerpt of its input, and the input here is a credential.
-    throw new Error(
-      `${file} is not readable as JSON (${err.code ?? err.name ?? 'parse error'}). `
-      + 'Not printing it: this file is a credential.',
-    );
+    if (err.code === 'ENOENT') {
+      throw new Error(
+        `no owner key at ${file}. `
+        + 'Mint one from a session a human already signed in to:\n'
+        + '  node scripts/agents/mint-owner-key.mjs',
+      );
+    }
+    throw err;
   }
+
   if (typeof parsed?.refresh_token !== 'string' || !parsed.refresh_token) {
     throw new Error(`${file} carries no refresh_token`);
   }
   const unexpected = Object.keys(parsed).filter(k => !ALLOWED_KEY_FIELDS.has(k));
   if (unexpected.length) {
+    // The COUNT, not the names. Those names come from a file this code has
+    // already decided it does not trust the shape of, and echoing untrusted
+    // strings out of a credential file is the same mistake as echoing a parse
+    // error's excerpt — one Codex pointed out survived the last fix.
     throw new Error(
-      `${file} carries unexpected fields: ${unexpected.join(', ')}. `
-      + 'This file holds one credential and its provenance, nothing else — '
-      + 'an address or a password here would mean the wrong file.',
+      `${file} carries ${unexpected.length} unexpected field(s). `
+      + `Only ${[...ALLOWED_KEY_FIELDS].join(', ')} are permitted: this file holds `
+      + 'one credential and its provenance, nothing else — an address or a '
+      + 'password here would mean the wrong file.',
     );
   }
   return parsed.refresh_token;
@@ -167,28 +165,23 @@ export async function ownerSessionFromKey(url, anonKey, file = DEFAULT_KEY_FILE)
     throw new Error(`owner key exchange failed (${r.status})`);
   }
 
-  // Before returning, not after acting, and atomically.
+  // Before returning, not after acting, and through ./credentialFile.mjs —
+  // which creates a fresh owner-only file and renames it over this one, so a
+  // crash cannot leave the agent's only credential truncated and the
+  // destination's previous mode cannot survive the replacement. Both of those
+  // were defects here; that module's header has the measurements.
   //
-  // Writing straight to `file` truncates it first, so a crash mid-write leaves
-  // a zero-length or half-written key file — the agent's only copy of its
-  // credential, gone, and the failure appears at the NEXT run rather than this
-  // one. Write beside it and rename, which is atomic within a filesystem: the
-  // file is either the old key or the new one, never a fragment. Found by
-  // Codex reviewing this module.
-  //
-  // Considered and rejected: also keeping the previous token in the file as a
-  // fallback. The measurement above says the previous string stays usable, so
-  // that would persist a second live copy of the credential to buy recovery
-  // from a case the rename already prevents.
+  // Considered and rejected: also keeping the previous token as a fallback
+  // field. The measurement above says old copies stay usable, so that would
+  // persist a second live copy of the credential to buy recovery from a case
+  // the rename already prevents.
   if (session.refresh_token && session.refresh_token !== refreshToken) {
-    const staging = `${file}.next`;
-    await writeFile(staging, JSON.stringify({
+    await writeCredentialFile(file, {
       refresh_token: session.refresh_token,
       rotated_at: new Date().toISOString(),
       note: 'Rotated by scripts/lib/ownerKey.mjs. The previous string is not '
         + 'promptly revoked — see that file. Treat every copy as live.',
-    }, null, 2), { mode: 0o600 });
-    await rename(staging, file);
+    });
   }
 
   return {

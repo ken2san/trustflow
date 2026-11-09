@@ -14,7 +14,7 @@
 //
 // E2E ONLY, like everything in this directory.
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readCredentialFile, writeCredentialFile } from '../lib/credentialFile.mjs';
 import { SUPABASE_URL } from '../../tests/e2e/liveEnv.js';
 import { assertE2EProject } from '../lib/e2eGuard.mjs';
 import { DEFAULT_KEY_FILE } from '../lib/ownerKey.mjs';
@@ -22,15 +22,16 @@ import { DEFAULT_KEY_FILE } from '../lib/ownerKey.mjs';
 const ref = assertE2EProject(SUPABASE_URL);
 const SOURCE = process.env.TF_TEST_EARNER_SESSION ?? 'tests/e2e/.earner-session.json';
 
-// Parsed inside a try, because a JSON parse error can quote its input and the
-// input here may be a credential — Codex's finding 4: point TF_TEST_EARNER_SESSION
-// at a file holding a bare token and the unhandled exception prints part of it.
+// Both the read and the write go through ../lib/credentialFile.mjs: the read so
+// that a parse error names its reason and never its content (a parse error can
+// quote its input, and this input is a session), and the write so the key lands
+// as a fresh owner-only file however the previous one was created.
 let session;
 try {
-  session = JSON.parse(await readFile(SOURCE, 'utf8'));
+  session = await readCredentialFile(SOURCE, { onExposed: m => console.warn(`  ${m}`) });
 } catch (err) {
-  console.error(`cannot read ${SOURCE} as JSON (${err.code ?? err.name ?? 'parse error'}).`);
-  console.error('Not printing it: that file holds a session.');
+  console.error(`cannot read ${SOURCE}: ${err.message}`);
+  console.error('Run npm run test:api once to populate it.');
   process.exit(1);
 }
 if (!session?.refresh_token) {
@@ -38,16 +39,13 @@ if (!session?.refresh_token) {
   process.exit(1);
 }
 
-// 0600 at creation, not afterwards. Under the usual umask 022 a plain write
-// lands as 0644, which is the account's whole authority readable by group and
-// other; a chmod after the fact leaves a window. Codex's P1.
-await writeFile(DEFAULT_KEY_FILE, JSON.stringify({
+await writeCredentialFile(DEFAULT_KEY_FILE, {
   refresh_token: session.refresh_token,
   minted_at: new Date().toISOString(),
-  note: 'One opaque credential for an agent. A new one is returned on every '
-    + 'exchange and scripts/lib/ownerKey.mjs persists it; the previous string '
-    + 'is not promptly revoked, so treat every copy as live.',
-}, null, 2), { mode: 0o600 });
+  note: 'One opaque credential for an agent. An exchange may return a '
+    + 'different token and scripts/lib/ownerKey.mjs persists it; the previous '
+    + 'string is not promptly revoked, so treat every copy as live.',
+});
 
 console.log(`minted ${DEFAULT_KEY_FILE} for project ${ref}, mode 600`);
 // Not even a redacted prefix. `redact()` keeps the first six characters, which

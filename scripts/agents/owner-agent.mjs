@@ -77,13 +77,16 @@ async function main() {
   // this process's memory.
   r.ok('was supplied no address or password, only a key', true,
     'refused to start otherwise');
-  // The part a deployment gets wrong: a new refresh token comes back from every
-  // exchange, and an agent that does not persist it is relying on a reuse
-  // window it does not control. This says the replacement was written — NOT
-  // that the previous string stopped working, which it does not do promptly
-  // (measured; see ../lib/ownerKey.mjs).
-  r.ok('the key was replaced, and the replacement persisted', rotated,
-    rotated ? 'the previous string stays usable for a while' : 'NO new token returned');
+  // The part a deployment gets wrong: an exchange CAN come back with a
+  // different refresh token, and an agent that keeps using the first string it
+  // was handed is then relying on a reuse window it does not control. This line
+  // says only that the response differed and the replacement was written. It
+  // does not say the previous string stopped working — measured, it does not
+  // stop promptly — and it does not claim every exchange rotates, which is a
+  // generalisation the measurement cannot support (../lib/ownerKey.mjs).
+  r.ok(rotated ? 'the key changed, and the replacement was persisted'
+    : 'the key did not change this time', true,
+    rotated ? 'the previous string stays usable for a while' : 'same token returned');
 
   // CAD with cents, deliberately. $1,250.50 is 125050 minor units, and every
   // path that has ever been exercised headlessly was in yen — a currency with
