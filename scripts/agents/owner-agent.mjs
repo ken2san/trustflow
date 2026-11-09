@@ -1,27 +1,45 @@
 #!/usr/bin/env node
-// The creating party's agent. A separate process, holding an account.
+// The creating party's agent. A separate process, holding a key.
 //
-// Its authority is a verified Earner's JWT, obtained by `ownerSession()` — a
-// password grant, which exists ONLY for harnesses. The product's own sign-in is
-// an emailed OTP behind a Turnstile challenge and no agent can complete it;
-// see .ada/claude-report-13.md §4. That gap is the honest limit of this run:
-// everything after the first credential is agent-reachable, and the first
-// credential is not.
+// WHAT IT IS GIVEN
+//   TF_SUPABASE_URL, TF_SUPABASE_ANON_KEY — public, in every request the web
+//     app makes.
+//   TF_OWNER_KEY_FILE — one opaque string, a Supabase refresh token, handed
+//     over once by a human who signed in. `grant_type=refresh_token` is not a
+//     sign-in, so no address, password, mailbox or CAPTCHA is involved. See
+//     ../lib/ownerKey.mjs.
+//   TF_CHANNEL_DIR — where it leaves the invitation for the other agent.
+//
+// WHAT IT IS NOT GIVEN
+// The earner's address or password, and no module that reads them. It does not
+// import the password-grant client, nor tests/e2e/liveEnv.js, which refuses to
+// load without those two variables. That is the whole difference from the
+// previous run: the credential is now one a real agent could be handed.
+//
+// What the key is NOT is a scoped API key. It is the account. Every event below
+// records `_auth_method: account_session` and names the owner, because that is
+// what happened — nothing in the record distinguishes this process from the
+// human. .ada/claude-report-15.md §3 says what a real first-party key needs.
 //
 // It never learns the counterparty's address, capability or verdict except by
 // reading the evidence trail like anyone else. Coordination between the two
 // processes is: one invite token, handed over once, in one direction.
 
 import { randomUUID } from 'node:crypto';
-import { ownerSession, rest, invoke, SUPABASE_URL, PROJECT_REF } from '../lib/tfClient.mjs';
-import { redact } from '../lib/e2eGuard.mjs';
-import { channel, reporter, until } from './lib.mjs';
+import { assertE2EProject, redact } from '../lib/e2eGuard.mjs';
+import { ownerSessionFromKey } from '../lib/ownerKey.mjs';
+import { channel, fn, rest as restCall, reporter, until } from './lib.mjs';
 
+const URL_ = process.env.TF_SUPABASE_URL;
+const KEY = process.env.TF_SUPABASE_ANON_KEY;
+const KEY_FILE = process.env.TF_OWNER_KEY_FILE;
 const DIR = process.env.TF_CHANNEL_DIR;
-if (!DIR) {
-  console.error('owner: TF_CHANNEL_DIR is required');
+if (!URL_ || !KEY || !KEY_FILE || !DIR) {
+  console.error('owner: TF_SUPABASE_URL, TF_SUPABASE_ANON_KEY, TF_OWNER_KEY_FILE'
+    + ' and TF_CHANNEL_DIR are required');
   process.exit(2);
 }
+const PROJECT_REF = assertE2EProject(URL_);
 
 const r = reporter('owner');
 const RUN = randomUUID().slice(0, 8);
@@ -35,13 +53,26 @@ function tomorrowLocalISO() {
 
 async function main() {
   const ch = channel(DIR);
-  const { token, userId } = await ownerSession();
-  r.ok('holds a verified session', Boolean(token && userId), `project ${PROJECT_REF}`);
+
+  // No address, no password, no mailbox, no CAPTCHA — one string, exchanged.
+  const { token, userId, rotated } = await ownerSessionFromKey(URL_, KEY, KEY_FILE);
+  r.ok('exchanged a handed-over key for a session', Boolean(token && userId),
+    `project ${PROJECT_REF}`);
+  r.ok('holds no address or password of its own',
+    !process.env.TF_TEST_EARNER_EMAIL && !process.env.TF_TEST_EARNER_PASSWORD,
+    'neither is in this process\'s environment');
+  // The part a deployment gets wrong: a new refresh token comes back from every
+  // exchange, and an agent that does not persist it is relying on a reuse
+  // window it does not control. This says the replacement was written — NOT
+  // that the previous string stopped working, which it does not do promptly
+  // (measured; see ../lib/ownerKey.mjs).
+  r.ok('the key was replaced, and the replacement persisted', rotated,
+    rotated ? 'the previous string stays usable for a while' : 'NO new token returned');
 
   // CAD with cents, deliberately. $1,250.50 is 125050 minor units, and every
   // path that has ever been exercised headlessly was in yen — a currency with
   // no minor unit, where the mandatory-digest branch does not apply.
-  const created = await rest(token, 'contracts?select=*', {
+  const created = await restCall(URL_, KEY, token, 'contracts?select=*', {
     method: 'POST',
     headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
@@ -73,13 +104,13 @@ async function main() {
 
   // From here the two sides coordinate only through the record.
   await until('the counterparty to accept', async () => {
-    const got = await rest(token, `contracts?id=eq.${contract.id}&select=state`);
+    const got = await restCall(URL_, KEY, token, `contracts?id=eq.${contract.id}&select=state`);
     return got.body?.[0]?.state === 'TERMS_ACCEPTED' ? got.body[0] : null;
   });
   r.ok('saw the agreement accepted by the other side', true, 'TERMS_ACCEPTED');
 
-  const asserted = await invoke('log-event', {
-    ownerToken: token,
+  const asserted = await fn(URL_, KEY, 'log-event', {
+    bearer: token,
     body: {
       type: 'performance.asserted', contract_id: contract.id,
       idempotency_key: `agent-deliver-${RUN}`,
@@ -89,7 +120,7 @@ async function main() {
   r.ok('asserted delivery', asserted.status === 201 || asserted.status === 200,
     `HTTP ${asserted.status} ${asserted.reason ?? ''}`);
 
-  const ownEvents = () => rest(token, `events?contract_id=eq.${contract.id}&select=type,created_at`);
+  const ownEvents = () => restCall(URL_, KEY, token, `events?contract_id=eq.${contract.id}&select=type,created_at`);
 
   await until('the counterparty to accept the delivery', async () => {
     const got = await ownEvents();
@@ -105,8 +136,8 @@ async function main() {
 
   // The payee's own statement that it arrived. Not an observation: TrustFlow
   // cannot see the rail the money moved on.
-  const ack = await invoke('log-event', {
-    ownerToken: token,
+  const ack = await fn(URL_, KEY, 'log-event', {
+    bearer: token,
     body: {
       type: 'payment.acknowledged', contract_id: contract.id,
       idempotency_key: `agent-ack-${RUN}`,
@@ -120,7 +151,7 @@ async function main() {
   r.ok('the trail holds the whole transaction', (final.body?.length ?? 0) >= 5,
     `${final.body?.length} events`);
 
-  await ch.put('done.json', { contract_id: contract.id, url: SUPABASE_URL });
+  await ch.put('done.json', { contract_id: contract.id });
 }
 
 main()

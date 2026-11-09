@@ -107,3 +107,6 @@ tests/e2e/.earner-session.json
 # Its cross-worker lock. Removed in a finally, so it is only ever left behind
 # by a run that died holding it — which is exactly when it must not be staged.
 tests/e2e/.earner-session.json.lock
+
+# An agent-held owner credential. A refresh token is the whole account.
+tests/e2e/.owner-api-key.json

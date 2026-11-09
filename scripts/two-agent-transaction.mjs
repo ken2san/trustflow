@@ -11,7 +11,9 @@
 //
 //   - no shared memory, no shared module scope, no shared client object;
 //   - each side selects and sends its own credential, and the counterparty
-//     process is handed none of the owner's;
+//     process is handed none of the owner's. Neither child is given the
+//     earner's address or password: the owner exchanges a handed-over key
+//     (./lib/ownerKey.mjs), which is the credential a real agent could hold;
 //   - the counterparty gets no contract id — only an invite token, handed over
 //     on a channel TrustFlow is not part of;
 //   - the counterparty computes the mandatory non-JPY shown-terms digest from
@@ -47,6 +49,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SUPABASE_URL, SUPABASE_KEY } from '../tests/e2e/liveEnv.js';
 import { assertE2EProject } from './lib/e2eGuard.mjs';
+import { DEFAULT_KEY_FILE } from './lib/ownerKey.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ref = assertE2EProject(SUPABASE_URL);
@@ -79,19 +82,29 @@ console.log(`handover channel: ${dir}\n`);
 // Started together, on purpose. The counterparty begins by waiting for an
 // invitation that does not exist yet, which is the real shape of the thing:
 // neither side is a step in the other's script.
+// Deliberately absent from BOTH children: TF_TEST_EARNER_EMAIL and
+// TF_TEST_EARNER_PASSWORD. They inherit this process's environment, so the two
+// are cleared rather than merely not mentioned. The owner now authenticates
+// from a handed-over key instead, which is the point of this run — neither
+// process holds the product's sign-in material.
+//
+// It stops the credential being HANDED over. It does not stop a child that
+// wants it from reading .env.e2e off disk. See "WHAT THIS IS NOT" above.
+const noSignInMaterial = { TF_TEST_EARNER_EMAIL: '', TF_TEST_EARNER_PASSWORD: '' };
+
 const [ownerCode, guestCode] = await Promise.all([
-  run('owner', 'owner-agent.mjs', { TF_CHANNEL_DIR: dir }),
-  run('guest', 'counterparty-agent.mjs', {
+  run('owner', 'owner-agent.mjs', {
+    ...noSignInMaterial,
     TF_CHANNEL_DIR: dir,
     TF_SUPABASE_URL: SUPABASE_URL,
     TF_SUPABASE_ANON_KEY: SUPABASE_KEY,
-    // Deliberately absent: TF_TEST_EARNER_EMAIL / _PASSWORD. The child
-    // inherits this process's environment, so they are cleared rather than
-    // merely not mentioned. This stops the owner's credential being handed
-    // over; it does not stop a child that wants it from reading .env.e2e off
-    // disk. See "WHAT THIS IS NOT" above.
-    TF_TEST_EARNER_EMAIL: '',
-    TF_TEST_EARNER_PASSWORD: '',
+    TF_OWNER_KEY_FILE: process.env.TF_OWNER_KEY_FILE ?? DEFAULT_KEY_FILE,
+  }),
+  run('guest', 'counterparty-agent.mjs', {
+    ...noSignInMaterial,
+    TF_CHANNEL_DIR: dir,
+    TF_SUPABASE_URL: SUPABASE_URL,
+    TF_SUPABASE_ANON_KEY: SUPABASE_KEY,
   }),
 ]);
 

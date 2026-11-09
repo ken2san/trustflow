@@ -59,6 +59,31 @@ export function reporter(who) {
   };
 }
 
+/**
+ * PostgREST, under whichever bearer the caller holds.
+ *
+ * Here rather than borrowed from scripts/lib/tfClient.mjs because that module
+ * imports tests/e2e/liveEnv.js, which THROWS when the earner address and
+ * password are absent. A process that is meant to hold only a key must not
+ * import a module that refuses to load without a password — otherwise
+ * "it holds no password" is a claim about intent rather than about the process.
+ */
+export async function rest(url, key, bearer, pathAndQuery, init = {}) {
+  const r = await fetch(`${url}/rest/v1/${pathAndQuery}`, {
+    ...init,
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${bearer}`,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const text = await r.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  return { status: r.status, body };
+}
+
 /** A POST to an Edge Function under whichever headers the caller holds. */
 export async function fn(url, key, name, { body, bearer = null, guestToken = null }) {
   const headers = {
