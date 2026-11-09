@@ -15,8 +15,17 @@
 // including the non-ASCII one, which is the case that actually breaks outside
 // clients and which a single live run in CAD never touches.
 //
-// If this disagrees with the server, the DOCUMENT is wrong. That is the point,
-// and it is the only reason to keep a second implementation alive.
+// If this disagrees with the server, something is wrong between the document,
+// this file and the server, and finding out which is the point — that is the
+// only reason to keep a second implementation alive. It is not automatically
+// the document's fault: a mismatch can equally be a bug here, which is why the
+// unit tests hold this file against the published vectors AND against the
+// server's own helper.
+//
+// It is also not a second runtime: rule 5 names ECMAScript JSON.stringify, so
+// this shares that one dependency with the server by design. Agreement on
+// these vectors is agreement on these vectors, not proof that a Python or Go
+// client will match.
 
 import { createHash } from 'node:crypto'
 

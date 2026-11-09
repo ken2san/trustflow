@@ -97,8 +97,8 @@ Those eight keys and no others. Serialize it with these rules:
      does this by default** — produces a different digest for the same
      agreement, and the acceptance is refused with `409 terms_changed` though
      nobody edited anything. In Python: `ensure_ascii=False`.
-   - Escaped, and only these: `"` as `\"`, `\` as `\\`, and the control
-     characters U+0000–U+001F. Those use the short forms `\b \t \n \f \r`
+   - Escaped, and only these (plus the lone surrogate below): `"` as `\"`,
+     `\` as `\\`, and the control characters U+0000–U+001F. Those use the short forms `\b \t \n \f \r`
      where one exists, otherwise `\u00XX` with **lowercase** hex digits.
    - **Not** escaped, though some serializers do: `/`, U+2028, U+2029, and any
      other printable character. A lone surrogate is written `\udXXX`,
@@ -178,8 +178,17 @@ da90b2c392a530fd5a81ae5f5e3cbe84c71b8f60e4bfb06378f717208831ace9
 ```
 
 `tests/unit/shownTerms.test.js` asserts the implementation reproduces both
-preimages and both digests, and that this file still states them, so the two
-cannot drift apart silently.
+preimages and both digests, that this file still states them, and that the
+field table names exactly the keys the digest covers and the source each comes
+from.
+
+What that does **not** cover: prose. A rule reworded into something subtly
+different, or a default described wrongly in a sentence rather than in the
+table, would not fail a test. Codex found one such mutation during review —
+swapping the source column of the amount row would mislead a client while
+leaving every assertion green, which is why that column is now checked too.
+Treat the two vectors as the authority when the prose and the bytes seem to
+disagree.
 
 ### Why the server does not simply hand the digest over
 

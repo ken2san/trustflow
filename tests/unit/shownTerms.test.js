@@ -240,21 +240,22 @@ describe('the digest specification published for outside clients', () => {
   }
 
   /**
-   * The keys the NORMATIVE TABLE names, parsed from it — not searched for
-   * anywhere in the file. The table is the three-column one under §1 whose
-   * first cell is a backticked key.
+   * The NORMATIVE TABLE under §1, parsed — not searched for anywhere in the
+   * file. Each row is {key, source, fallback}: the key the digest carries,
+   * which invitation field it comes from, and what to do when that is absent.
    */
-  async function documentedKeys(text) {
-    const rows = text.split('\n')
-    const start = rows.findIndex(l => l.startsWith('| Key | Source field |'))
+  async function documentedRows(text) {
+    const lines = text.split('\n')
+    const start = lines.findIndex(l => l.startsWith('| Key | Source field |'))
     expect(start, `${SPEC_PATH}: the normative field table is gone`).toBeGreaterThan(-1)
-    const keys = []
-    for (const line of rows.slice(start + 2)) {
+    const rows = []
+    for (const line of lines.slice(start + 2)) {
       if (!line.startsWith('|')) break
-      const cell = /^\|\s*`([^`]+)`/.exec(line)
-      if (cell) keys.push(cell[1])
+      const cells = line.split('|').slice(1, -1).map(c => c.trim())
+      const key = /^`([^`]+)`/.exec(cells[0] ?? '')
+      if (key) rows.push({ key: key[1], source: cells[1] ?? '', fallback: cells[2] ?? '' })
     }
-    return keys
+    return rows
   }
 
   it('serializes the reference vector to the preimage it publishes', async () => {
@@ -291,12 +292,36 @@ describe('the digest specification published for outside clients', () => {
   })
 
   it('documents exactly the fields the digest covers — no more, no fewer', async () => {
-    const documented = (await documentedKeys(await spec())).slice().sort()
+    const documented = (await documentedRows(await spec())).map(r => r.key).sort()
     const covered = Object.keys(shownTerms(VECTOR, 2)).slice().sort()
     // Set equality, from the table itself. A field added to BUILDERS[2] and
     // not to the table fails here even if its name appears elsewhere in the
     // prose, which is how the previous version of this test was defeated.
     expect(documented).toEqual(covered)
+  })
+
+  // The third mutation Codex found: keep every key, but point one of them at
+  // the wrong source field. Every other assertion here stays green while a
+  // client following the table hashes null instead of the price and gets a
+  // `terms_changed` it cannot diagnose. So the source column is checked too.
+  it('names the right source field for each key', async () => {
+    const rows = await documentedRows(await spec())
+    for (const { key, source, fallback } of rows) {
+      if (key === 'v') {
+        expect(fallback, 'the version row must state the literal').toContain('2')
+        continue
+      }
+      const named = /`([^`]+)`/.exec(source)
+      expect(named, `${SPEC_PATH}: the source cell for ${key} names no field`).not.toBeNull()
+      // Every term reads from the invitation field of the same name. The one
+      // field with a second source states the fallback in its own cell.
+      expect(named[1], `${SPEC_PATH}: ${key} is documented as coming from ${named?.[1]}`)
+        .toBe(key)
+      if (key === 'amount_minor') {
+        expect(fallback).toContain('amount_jpy')
+      }
+    }
+    expect(rows.length).toBe(8)
   })
 
   it('keeps the excluded fields out of the hash whatever the row carries', async () => {
