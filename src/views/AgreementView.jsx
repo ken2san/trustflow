@@ -40,7 +40,12 @@ const RECORD_LABELS = {
   // A party's claim about payment made outside TrustFlow. See the payment
   // section below — this is not a Stripe-verified fact.
   'payment.reported':      'Reported payment sent',
-  'payment.acknowledged':  'Confirmed payment received',
+  // NOT 'Confirmed payment received'. Every other label on this list says what
+  // a party stated; this one said what happened, and it is the one act on the
+  // list TrustFlow has least business asserting — money moves on a rail it
+  // cannot see. An acknowledgement is the payee's say-so that it arrived, which
+  // is the strongest claim available here and still only a claim.
+  'payment.acknowledged':  'Reported receiving payment',
   'payment.disputed':      'Reported payment as not received',
   // The owner replaced the counterparty's access credential. Worded as an
   // event about access rather than about the agreement, because that is what
@@ -87,6 +92,8 @@ export default function AgreementView({
 }) {
   const [correcting, setCorrecting] = React.useState(false);
   const [reason, setReason] = React.useState('');
+  const [acceptNote, setAcceptNote] = React.useState('');
+  const [ackNote, setAckNote] = React.useState('');
   const [reissuing, setReissuing] = React.useState(false);
   const [reissuedUrl, setReissuedUrl] = React.useState(null);
   const [reissueError, setReissueError] = React.useState(null);
@@ -415,9 +422,35 @@ export default function AgreementView({
             <p className="text-sm text-slate-300">
               They marked the work delivered. Once you have checked it:
             </p>
+            {/* WHY AN ACCEPTANCE MAY CARRY A STATEMENT.
+                Accepting ends the performance flow for good: the projection
+                moves to PERFORMANCE_ACCEPTED, and the trigger behind it will
+                refuse every later performance event on this agreement. So a
+                receiver who means "the two pages that arrived are fine, the
+                other three are still owed" has, with a bare Accept, recorded
+                something broader than they meant and cannot narrow it
+                afterwards — the log is append-only.
+
+                This does not add a partial-acceptance state, and deliberately
+                not: the protocol keeps one meaning for accepted. What it adds
+                is the receiver's own words about WHAT they accepted, in the
+                same record, hashed with it. `note` was already allowlisted for
+                this type and already rendered in the trail; the only thing
+                missing was a way to type it. */}
+            <label htmlFor="accept-note" className="block text-sm text-slate-300">
+              Anything to note about what you are accepting? (optional)
+            </label>
+            <textarea
+              id="accept-note"
+              value={acceptNote}
+              onChange={e => setAcceptNote(e.target.value)}
+              rows={2}
+              placeholder="e.g. accepting the two pages delivered; the remaining three are still outstanding"
+              className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
+            />
             <div className="flex flex-wrap gap-3">
               <button
-                onClick={onAccept}
+                onClick={async () => { await onAccept(acceptNote.trim()); setAcceptNote(''); }}
                 disabled={busy}
                 className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-emerald-400 hover:text-white transition-all disabled:opacity-40 flex items-center gap-2"
               >
@@ -431,6 +464,11 @@ export default function AgreementView({
                 Request correction
               </button>
             </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Accepting closes the delivery step for this agreement — they cannot mark it
+              delivered again afterwards, and the record cannot be taken back. If part of it is
+              still outstanding, say so in the note above, or request a correction instead.
+            </p>
           </>
         )}
 
@@ -486,10 +524,24 @@ export default function AgreementView({
         <section className="rounded-[24px] border border-white/10 bg-[#0f172a]/60 px-6 py-6 space-y-4">
           <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Payment</h2>
 
+          {/* This used to read "Payment confirmed received", in emerald with a
+              tick, with no actor anywhere in the sentence — so it read as
+              TrustFlow's own finding that money had arrived. What happened is
+              that the payee said it arrived. The comment four lines above the
+              label table has always said this was a claim and not a verified
+              fact; the one string a reader actually sees did not. */}
           {paymentConfirmed && (
-            <p className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
-              <CheckCircle2 className="w-4 h-4" /> Payment confirmed received
-            </p>
+            <>
+              <p className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                <CheckCircle2 className="w-4 h-4" />
+                {performs ? 'You reported receiving payment' : 'They reported receiving payment'}
+              </p>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Both sides have now stated it: one that it was sent, one that it arrived.
+                That is a stronger record than either statement alone, and it is still what the
+                two of you said — TrustFlow cannot see the rail the money moved on.
+              </p>
+            </>
           )}
 
           {!paymentConfirmed && !canReportPayment && !canRespondToPayment && (
@@ -569,9 +621,28 @@ export default function AgreementView({
               <p className="text-sm text-slate-300">
                 They reported sending payment. Once you have checked:
               </p>
+              {/* WHY THIS ONE TAKES A NOTE TOO.
+                  An amount can be paid in parts, or one transfer can cover two
+                  agreements — a deposit and a balance run as two contracts is
+                  the pattern this product is being asked to support by
+                  composition rather than by a feature. "Confirm received" with
+                  no words attached cannot say WHICH money arrived, and the
+                  payee is the only party who knows. `note` was already
+                  allowlisted for this type; nothing collected it. */}
+              <label htmlFor="ack-note" className="block text-sm text-slate-300">
+                What did this cover? (optional)
+              </label>
+              <textarea
+                id="ack-note"
+                value={ackNote}
+                onChange={e => setAckNote(e.target.value)}
+                rows={2}
+                placeholder="e.g. the CA$3,000 deposit, received by transfer today"
+                className="w-full bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-2xl px-5 py-3 text-white text-sm outline-none transition-all placeholder:text-slate-400"
+              />
               <div className="flex flex-wrap gap-3">
                 <button
-                  onClick={onAcknowledgePayment}
+                  onClick={async () => { await onAcknowledgePayment(ackNote.trim()); setAckNote(''); }}
                   disabled={busy}
                   className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-emerald-400 hover:text-white transition-all disabled:opacity-40"
                 >

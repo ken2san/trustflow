@@ -29,7 +29,10 @@ const TYPE_LABELS = {
   'rating.submitted':     'Rating submitted',
   // A party's claim about payment made outside TrustFlow, not a verified fact.
   'payment.reported':     'Payment reported sent',
-  'payment.acknowledged': 'Payment confirmed received',
+  // Was 'Payment confirmed received', which stated the arrival as a fact in a
+  // table whose own comment says these are claims. See AgreementView's copy of
+  // this label for the full reasoning.
+  'payment.acknowledged': 'Reported receiving payment',
   'payment.disputed':     'Payment reported as not received',
 };
 

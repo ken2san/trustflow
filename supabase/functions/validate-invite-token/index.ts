@@ -206,6 +206,17 @@ serve(async (req: Request) => {
         }
       }
 
+      // What this acceptance will permanently record about the check below.
+      // Declared here, before the branch, so that the path which skips the
+      // check entirely still produces a value: an acceptance whose digest was
+      // never presented is the case worth recording, and leaving it undefined
+      // would be the same silence the field exists to remove.
+      const termsCheck = {
+        presented: typeof shown_terms_digest === 'string' && shown_terms_digest.length > 0,
+        verified: false,
+        version: typeof shown_terms_version === 'number' ? shown_terms_version : null,
+      }
+
       if (typeof shown_terms_digest === 'string' && shown_terms_digest.length > 0) {
         // The version the caller computed, not the one this build prefers. A
         // client shipped before the version travelled separately sends none,
@@ -227,6 +238,9 @@ serve(async (req: Request) => {
         if (currentDigest !== shown_terms_digest) {
           return json({ error: 'terms_changed' }, 409)
         }
+        // Reached only by equality above, so this is the server's own
+        // observation and not the caller's word for it.
+        termsCheck.verified = true
       }
 
       // The deal as the server holds it, plus the identity this acceptance is
@@ -259,6 +273,10 @@ serve(async (req: Request) => {
         // One acceptance per contract, enforced by the database rather than by
         // this function remembering to check.
         idempotencyKey: `acceptance:${context.contract.id}`,
+        // Whether the terms this accepter was shown were checked against the
+        // terms the server holds. Recorded even when they were not, because
+        // nothing else in the record would ever say so.
+        shownTermsCheck: termsCheck,
       })
 
       const { data: result, error: acceptError } = await supabase

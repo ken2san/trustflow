@@ -71,12 +71,53 @@ function partyAssertedOnly(payload: unknown): Record<string, unknown> {
  * an invitation can be forwarded — and that divergence is itself evidence.
  * Neither is verified, and nothing here says otherwise.
  */
-export function acceptanceFacts(contract: Record<string, unknown>) {
+/**
+ * What the server observed about the terms-presentation check at an acceptance.
+ *
+ * `presented: false` is the whole reason this exists. The shown-terms digest is
+ * optional for a JPY contract during the compatibility period — a client that
+ * sends none is accepted, and the acceptance it produces is today
+ * INDISTINGUISHABLE from one whose digest was checked and matched. That is a
+ * fact about the act which can never be reconstructed afterwards: once the
+ * acceptance is written, nothing anywhere says whether what the accepter saw
+ * was ever compared against the terms.
+ *
+ * So it is recorded as an absence rather than left as one, the same way
+ * `_claimed_identity_verified: false` already states a negative rather than
+ * omitting the field. A reader of an old record cannot tell the two apart; a
+ * reader of a new one can.
+ *
+ * WHAT IT DOES NOT MEAN. `verified: true` means the digest the client sent
+ * equalled the one this server computed over its own copy of the terms. The
+ * digest is computed BY THE CLIENT, so this says the client's rendering agreed
+ * with the server's terms — not that a human read them, not that a screen
+ * displayed them, and not that a hostile client could not have forged the
+ * value. It is evidence against drift between the terms and what was shown,
+ * which is the only thing it was ever built to be.
+ */
+export interface ShownTermsCheck {
+  /** Did the caller send a digest at all? */
+  presented: boolean
+  /** Did it equal the digest this server computed? False when none was sent. */
+  verified: boolean
+  /** The digest format version the caller computed under, as the caller named it. */
+  version: number | null
+}
+
+export function acceptanceFacts(
+  contract: Record<string, unknown>,
+  shownTermsCheck: ShownTermsCheck | null = null,
+) {
   return {
     _agreement: buildAgreementSnapshot(contract),
     _invited_recipient: (contract.invited_hirer_email as string | null) ?? null,
     _claimed_identity: (contract.hirer_email as string | null) ?? null,
     _claimed_identity_verified: false,
+    // Null only for a caller that has not been taught to report it. Every
+    // acceptance path in this repo passes one; the default exists so that a
+    // path which forgets records nothing rather than recording a false
+    // negative, which would be worse than silence.
+    ...(shownTermsCheck ? { _shown_terms_check: { ...shownTermsCheck } } : {}),
   }
 }
 
@@ -106,7 +147,7 @@ export interface EventRecord {
  */
 export async function buildEventRecord({
   type, contract, actorId, party, assurance, payload, prevEventHash,
-  idempotencyKey = null,
+  idempotencyKey = null, shownTermsCheck = null,
 }: {
   type: string
   contract: Record<string, unknown>
@@ -122,6 +163,13 @@ export async function buildEventRecord({
   payload?: unknown
   prevEventHash: string
   idempotencyKey?: string | null
+  /**
+   * Only read for an acceptance, where it records whether the terms the
+   * accepter was shown were checked against the terms the server holds. See
+   * ShownTermsCheck. Ignored for every other type, because no other act has a
+   * presentation to bind.
+   */
+  shownTermsCheck?: ShownTermsCheck | null
 }): Promise<EventRecord> {
   const roleHere = roleInAgreement(party, contract.performed_by as string | null)
 
@@ -137,7 +185,7 @@ export async function buildEventRecord({
     // travel with the data because a machine reader cannot consult a document.
     _auth_method: legacyAuthMethod(assurance),
     _authentication: assuranceForRecord(assurance),
-    ...(type === ACCEPTANCE_TYPE ? acceptanceFacts(contract) : {}),
+    ...(type === ACCEPTANCE_TYPE ? acceptanceFacts(contract, shownTermsCheck) : {}),
   }
 
   // The terms this event refers to, derived from the agreement rather than

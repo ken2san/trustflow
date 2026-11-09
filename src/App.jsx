@@ -1307,12 +1307,18 @@ const App = () => {
             busy={agreementBusy}
             error={agreementError}
             onAssertDelivery={(note) => recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ASSERTED, { note })}
-            onAccept={() => recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ACCEPTED)}
+            // An empty note is omitted rather than recorded as "". The payload is
+            // hashed, so a blank statement would be a thing this party is on
+            // record as having said; absent and empty are not the same, and the
+            // absent one is what actually happened.
+            onAccept={(note) =>
+              recordAgreementEvent(EVENT_TYPES.PERFORMANCE_ACCEPTED, note ? { note } : {})}
             onRequestCorrection={(reason) =>
               recordAgreementEvent(EVENT_TYPES.PERFORMANCE_REJECTED, { reason })}
             onReportPayment={(note) =>
               recordAgreementEvent(EVENT_TYPES.PAYMENT_REPORTED, { note })}
-            onAcknowledgePayment={() => recordAgreementEvent(EVENT_TYPES.PAYMENT_ACKNOWLEDGED)}
+            onAcknowledgePayment={(note) =>
+              recordAgreementEvent(EVENT_TYPES.PAYMENT_ACKNOWLEDGED, note ? { note } : {})}
             onDisputePayment={(note) =>
               recordAgreementEvent(EVENT_TYPES.PAYMENT_DISPUTED, { note })}
             onExport={agreement?.source === 'owner' ? exportAgreementRecord

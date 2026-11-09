@@ -365,3 +365,91 @@ describe('events written before this change', () => {
     expect(legacyPayload._auth_method).toBeUndefined()
   })
 })
+
+// ── What the record says about the terms-presentation check ─────────────────
+//
+// The shown-terms digest is optional for a JPY contract during the
+// compatibility period: a client that sends none is accepted, and the
+// acceptance it writes was — until this change — byte-for-byte the same kind of
+// record as one whose digest was checked and matched. Whether the accepter's
+// view of the terms was ever compared against the server's is a fact about that
+// moment, and nothing reconstructs it afterwards.
+//
+// So it is recorded as an absence rather than left as one, following the
+// `_claimed_identity_verified: false` precedent beside it: state the negative,
+// do not omit the field.
+describe('an acceptance records whether the terms check happened', () => {
+  const CHECKED   = { presented: true,  verified: true,  version: 2 }
+  const UNCHECKED = { presented: false, verified: false, version: null }
+
+  it('states a verified check', () => {
+    expect(acceptanceFacts(CONTRACT, CHECKED)._shown_terms_check)
+      .toEqual({ presented: true, verified: true, version: 2 })
+  })
+
+  it('states the absence of one, rather than omitting it', () => {
+    // The case the field exists for. `presented: false` is a claim about this
+    // acceptance; a missing key would be a claim about nothing.
+    expect(acceptanceFacts(CONTRACT, UNCHECKED)._shown_terms_check)
+      .toEqual({ presented: false, verified: false, version: null })
+  })
+
+  it('distinguishes "sent a digest we could not confirm" from "sent none"', () => {
+    const presentedButUnverified = { presented: true, verified: false, version: 1 }
+    expect(acceptanceFacts(CONTRACT, presentedButUnverified)._shown_terms_check)
+      .toEqual(presentedButUnverified)
+    // Three states, not two: no digest, a digest that did not verify, and a
+    // digest that did. Collapsing the middle one into either neighbour would
+    // misreport it.
+    expect(acceptanceFacts(CONTRACT, UNCHECKED)._shown_terms_check)
+      .not.toEqual(presentedButUnverified)
+  })
+
+  it('records nothing at all when the caller does not report one', () => {
+    // A writer that has not been taught to pass this must leave the record
+    // silent, not assert a false negative — silence is recoverable by reading
+    // the deploy history; a wrong `presented: false` is not.
+    expect(acceptanceFacts(CONTRACT)).not.toHaveProperty('_shown_terms_check')
+    expect(acceptanceFacts(CONTRACT, null)).not.toHaveProperty('_shown_terms_check')
+  })
+
+  it('binds the fact into the payload hash', async () => {
+    // Recorded is not the same as attested. If the two acceptances hashed
+    // identically, the field would be a comment.
+    const checked   = await acceptance({ shownTermsCheck: CHECKED })
+    const unchecked = await acceptance({ shownTermsCheck: UNCHECKED })
+    expect(checked.payload._shown_terms_check.verified).toBe(true)
+    expect(unchecked.payload._shown_terms_check.verified).toBe(false)
+    expect(checked.payload_hash).not.toBe(unchecked.payload_hash)
+    expect(checked.event_hash).not.toBe(unchecked.event_hash)
+  })
+
+  it('stays under the server namespace, so a caller cannot forge it', async () => {
+    const record = await acceptance({
+      shownTermsCheck: UNCHECKED,
+      // A party claiming its own terms check verified. Underscore-prefixed keys
+      // are stripped from caller payloads, so this must not survive.
+      payload: {
+        counterparty_name: 'Guest',
+        _shown_terms_check: { presented: true, verified: true, version: 2 },
+      },
+    })
+    expect(record.payload._shown_terms_check).toEqual(UNCHECKED)
+  })
+
+  it('is an acceptance fact only, and not attached to other events', async () => {
+    const asserted = await buildEventRecord({
+      type: 'performance.asserted',
+      contract: CONTRACT,
+      actorId: 'earner:1',
+      party: 'earner',
+      assurance: bearerAssurance('invite_token'),
+      payload: { note: 'done' },
+      prevEventHash: 'GENESIS',
+      shownTermsCheck: { presented: true, verified: true, version: 2 },
+    })
+    // Nothing else in the protocol has a presentation to bind, and a
+    // terms-check field on an unrelated act would imply one.
+    expect(asserted.payload).not.toHaveProperty('_shown_terms_check')
+  })
+})
