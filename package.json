@@ -23,6 +23,7 @@
     "receipt": "node scripts/make-receipt.mjs",
     "verify:receipt": "node scripts/verify-receipt.mjs",
     "sim:counterparty": "node scripts/sim-counterparty.mjs",
+    "sim:two-agents": "node scripts/two-agent-transaction.mjs",
     "lint": "eslint .",
     "offer:tester": "node scripts/offer-for-tester.mjs",
     "smoke:prod": "node scripts/smoke-production.mjs"
