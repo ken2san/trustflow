@@ -3,6 +3,7 @@
   "entry": [
     "src/main.jsx",
     "scripts/*.mjs",
+    "scripts/agents/*.mjs",
     "tests/**/*.{js,jsx}",
     "*.config.js"
   ],

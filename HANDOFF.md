@@ -826,10 +826,18 @@ failure that happened here on the day:
    are Deno edge functions nobody imports from the app, and they are what the
    evidence trail runs on. Taking the first output at face value would have
    deleted the backend. The `entry`/`ignore` config exists for that reason.
-   Three files it still reports are left alone deliberately, because each has a
-   decision behind it: `src/lib/tsa.js` (the RFC 3161 entry), `ModalDialog.jsx`
-   (the modal-system entry) and `src/i18n.js`. It agrees with Codex that
-   `src/lib/trustpoints.js` is not an orphan — `tests/unit` imports it.
+   Of the three files it still reported, two were deleted in Task 17 and one
+   was kept, after checking each rather than taking the list: `src/lib/tsa.js`
+   went because its server half — the `timestamp-event` function — is retired
+   and asserted 404 on every release, so the "RFC 3161 entry point" could only
+   ever have 404'd; `src/i18n.js` was a nine-line no-op with no locales
+   directory and no caller. **`ModalDialog.jsx` stays**, because three active
+   instruction files tell agents to use it for every modal, and deleting it
+   would leave that guidance pointing at nothing and the next UI task inventing
+   ad-hoc markup. knip also reported `scripts/agents/*` as unused, which is
+   false — they are spawned as child processes, which it cannot see; the entry
+   glob now covers them. It agrees with Codex that `src/lib/trustpoints.js` is
+   not an orphan — `tests/unit` imports it.
 3. **A config can silently not do what it says.** The pre-commit hook's
    `if: "Bash(git commit *)"` filter in `.claude/settings.json` does not work —
    the hook fired on a Bash call with no git command in it. Nobody noticed for

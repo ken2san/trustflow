@@ -86,7 +86,7 @@
 
 - **Testing**: Add unit and E2E tests (Jest, React Testing Library, Cypress) to ensure reliability and prevent regressions.
 - **Accessibility**: Improve keyboard navigation, screen reader support, and add ARIA attributes where appropriate.
-- **Internationalization (i18n)**: Expand i18n support for multi-language UI, leveraging or extending existing i18n.js.
+- **Internationalization (i18n)**: Multi-language UI. There is no scaffolding to extend — the `src/i18n.js` stub this line used to point at was a no-op with no locales directory and was removed in Task 17.
 - **UX Animation**: Add smooth transitions for step changes and key actions to enhance user experience.
 - **API/DB Integration**: Replace local state with backend integration for file storage, history, and notifications.
 - **User Guidance**: Add inline help, tooltips, or a quickstart guide to assist users with complex workflows.

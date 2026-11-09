@@ -168,7 +168,9 @@ Present in the repository, not in the live flow:
   are deployed, and `PaymentModal` exists, but nothing opens it. Stripe Connect
   remains the decided rail (`Decisions.md`); it is not wired.
 - **RFC 3161 timestamping.** `timestamp-event` was deleted from Supabase on
-  2026-09-26 and `src/lib/tsa.js` is imported by nothing. There is no external
+  2026-09-26, and the client that called it (`src/lib/tsa.js`) was removed in
+  Task 17 once nothing imported it — a module whose only server half is retired
+  reads like a working path and could only have 404'd. There is no external
   notarisation today; the chain and the server's attestation are the whole
   guarantee.
 - **AI scoping.** No Gemini integration exists anywhere in the code.

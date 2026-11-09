@@ -16,8 +16,18 @@ check:
 create-project:
 	gcloud projects create $(PROJECT_ID)
 
+# The VITE_* values are inlined into the bundle at build time and the Dockerfile
+# refuses without them — see the comment there for the silent failure this
+# prevents. Passed by NAME, so they are forwarded from this shell rather than
+# written into the Makefile or read out of a file here. Export them first, e.g.
+#   set -a && . ./.env && set +a && make build
+# None of the three is a secret; all are served in the bundle to every visitor.
 build:
-	docker buildx build --platform linux/amd64 --load -t $(IMAGE_NAME) .
+	docker buildx build --platform linux/amd64 --load \
+		--build-arg VITE_SUPABASE_URL \
+		--build-arg VITE_SUPABASE_ANON_KEY \
+		--build-arg VITE_TURNSTILE_SITE_KEY \
+		-t $(IMAGE_NAME) .
 
 push:
 	docker push $(IMAGE_NAME)

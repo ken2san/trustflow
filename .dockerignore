@@ -1,0 +1,41 @@
+# What must never reach a build context, let alone an image layer.
+#
+# The build only needs the sources, package.json and package-lock.json. Anything
+# else here is either a credential, a working file, or something the build
+# produces itself — and a file copied into a layer stays in that layer even if a
+# later step deletes it.
+
+# Credentials. .env* covers .env, .env.e2e and .env.secrets; the harness key and
+# session cache are refresh tokens, which carry an account.
+.env
+.env.*
+!.env.example
+tests/e2e/.earner-session.json
+tests/e2e/.owner-api-key.json
+*.tmp
+*.pem
+*.key
+*.p12
+id_rsa*
+
+# Agent working notes. Git-excluded, not for an image.
+.ada/
+
+# Installed and built artifacts — the image builds its own.
+node_modules/
+dist/
+test-results/
+playwright-report/
+.visual-baseline/
+
+# Repository and editor state.
+.git/
+.github/
+.claude/
+.vscode/
+.DS_Store
+
+# Test and tooling trees the production bundle does not need.
+tests/
+scripts/
+docs/
