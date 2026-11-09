@@ -6,10 +6,27 @@
 // grants — which failed tests that had nothing to do with authentication.
 //
 // The session is cached on disk and reused until it is close to expiry, so a
-// whole run normally costs one grant rather than five. The file holds a live
-// access token, so it is gitignored alongside the anonymous fixture.
+// whole run normally costs one grant rather than five.
+//
+// THE CACHE IS A CREDENTIAL, AND IS READ AND WRITTEN AS ONE.
+// It holds a refresh token, which carries the whole account — not merely an
+// access token that expires in an hour. It is gitignored, and gitignoring a
+// secret keeps it out of a commit and does nothing about the filesystem: this
+// file used a plain `writeFile`, so on a fresh checkout the cache was created
+// **0644**, group- and world-readable. Codex found the same defect in
+// `scripts/lib/tfClient.mjs` — the other writer of this same path — in the
+// Task 15 review, and that fix missed this one.
+//
+// Both ends now go through `scripts/lib/credentialFile.mjs`, which creates a
+// fresh owner-only file and renames it over the destination (so an existing
+// 0644 cache cannot keep its mode through a replacement — `writeFile`'s `mode`
+// option applies only on creation, which is how the first version of that fix
+// failed), and which on READ narrows an over-permissive file and says it was
+// exposed. The read side matters on its own: a cache that is still valid is
+// never rewritten, so without it an old 0644 file would never be repaired.
 
-import { readFile, writeFile, open, rm, stat } from 'node:fs/promises';
+import { readFile, open, rm, stat } from 'node:fs/promises';
+import { readCredentialFile, writeCredentialFile } from '../../scripts/lib/credentialFile.mjs';
 import {
   SUPABASE_URL, SUPABASE_KEY, EARNER_EMAIL, EARNER_PASSWORD,
 } from './liveEnv.js';
@@ -110,9 +127,13 @@ export async function getEarnerSession(request) {
       // `inFlight` coordinates only this worker. Re-read after locking because
       // another worker may have populated the shared cache while we waited.
       try {
-        const cached = JSON.parse(await readFile(CACHE, 'utf8'));
+        // Narrows the file's mode if it is loose, before reading the token out
+        // of it, and refuses a symlink where a credential belongs.
+        const cached = await readCredentialFile(CACHE, {
+          onExposed: message => console.warn(`[earner-session] ${message}`),
+        });
         if (unexpired(cached) && await stillLive(request, cached, url, key)) return cached;
-      } catch { /* no cache, unreadable, or unreachable */ }
+      } catch { /* no cache, unreadable, not a regular file, or unreachable */ }
 
       const response = await request.fetch(`${url}/auth/v1/token?grant_type=password`, {
         method: 'POST',
@@ -123,7 +144,7 @@ export async function getEarnerSession(request) {
       if (response.status() !== 200) {
         throw new Error(`earner sign-in failed (${response.status()}): ${JSON.stringify(session)}`);
       }
-      await writeFile(CACHE, JSON.stringify(session, null, 2));
+      await writeCredentialFile(CACHE, session);
       return session;
     } finally {
       await lock.close();

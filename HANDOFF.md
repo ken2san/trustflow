@@ -227,12 +227,6 @@ heading keeps its old wording even though the file around it changed.
 - **`AgreementView` has three near-identical "expand a textarea, confirm or
   cancel" blocks.** Worth one shared component eventually; deferred as a
   refactor of working code.
-- **`tests/e2e/earnerSession.js` writes the session cache with no file mode.**
-  It is the second writer of a file holding a refresh token; Task 17 fixed
-  `scripts/lib/tfClient.mjs` and missed this one. On this machine the file is
-  already 0600 so `writeFile` preserves it, but a fresh checkout would create it
-  **0644**. One line to fix, via `writeCredentialFile` from
-  `scripts/lib/credentialFile.mjs`.
 
 ### `trustpoints_ledger` — three separate statements, kept separate
 
@@ -365,7 +359,13 @@ Kept as constraints, not stories.
 - `src/lib/earnerAuth.js` — sign-in, `isEarnerVerified()`, and the one place a
   raw Supabase Auth error becomes a message that says what to do.
 - `scripts/lib/credentialFile.mjs` — how a file holding a credential is read and
-  written. Use it for any new one.
+  written: owner-only creation, atomic replacement, mode repair on read, and a
+  parse error that never quotes its input. **Both** files holding a refresh
+  token go through it (`tests/e2e/.earner-session.json` via
+  `tests/e2e/earnerSession.js` and `scripts/lib/tfClient.mjs`;
+  `tests/e2e/.owner-api-key.json` via `scripts/lib/ownerKey.mjs`). Use it for
+  any new one — and note that `writeFile`'s `mode` option does not repair an
+  existing file, which is why this module exists at all.
 - `tests/e2e/liveEnv.js` — credentials, and the refusal to run without them.
 - `.ada/claude-report-*.md` — the detailed record of each piece of work, and
   where measurements live.
