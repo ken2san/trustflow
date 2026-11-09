@@ -164,15 +164,22 @@ as tampered with, and an export that falsely cries tampering is worse than none.
 
 Present in the repository, not in the live flow:
 
-- **Payment.** `create-payment-intent`, `capture-payment` and `cancel-payment`
-  are deployed, and `PaymentModal` exists, but nothing opens it. Stripe Connect
-  remains the decided rail (`Decisions.md`); it is not wired.
+- **Payment.** Gone, in both halves this bullet used to claim. The three
+  functions — `create-payment-intent`, `capture-payment`, `cancel-payment` —
+  were un-deployed on 2026-11-06 and their source was deleted in Task 20;
+  `scripts/smoke-production.mjs` asserts all three stay 404 on every release.
+  `PaymentModal` never existed: the sentence pointed at an empty directory.
+  Stripe Connect remains the decided rail if settlement is ever wired
+  (`Decisions.md`), and nothing about it is built. What the protocol does carry
+  is a party's *claim* about payment — `payment.reported`,
+  `payment.acknowledged`, `payment.disputed` — and no verified payment fact.
 - **RFC 3161 timestamping.** `timestamp-event` was deleted from Supabase on
-  2026-09-26, and the client that called it (`src/lib/tsa.js`) was removed in
-  Task 17 once nothing imported it — a module whose only server half is retired
-  reads like a working path and could only have 404'd. There is no external
-  notarisation today; the chain and the server's attestation are the whole
-  guarantee.
+  2026-09-26, the client that called it (`src/lib/tsa.js`) was removed in
+  Task 17 once nothing imported it, and the function's source went in Task 20.
+  There is no external notarisation today; the chain and the server's
+  attestation are the whole guarantee. `tsa_token` columns and the
+  `tsa_token_present` field in the exports remain, always null — they say a
+  token was never obtained, which is a fact worth keeping.
 - **AI scoping.** No Gemini integration exists anywhere in the code.
 - **Trust Score / TrustPoints / Trust Passport.** `src/lib/trustpoints.js`,
   `WalletView` and `ProfileModal` operate on local mock profile state. The

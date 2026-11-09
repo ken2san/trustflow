@@ -321,6 +321,33 @@ What the run did **not** cover is Next Priority #1.
   covering the identity/trust model discussion and why `invited_hirer_email`
   stays a required field.
 
+- **`trustpoints_ledger` has no writer, and that is the finished state — not a
+  gap waiting to be filled.** Its only inserts in the entire repository lived in
+  `capture-payment` (two) and `cancel-payment` (one), and both were deleted in
+  Task 20. Client writes were already revoked
+  (`20260924000003_small_security_fixes.sql`: `revoke insert, update, delete,
+  truncate … from anon, authenticated`), so inserts were only ever
+  service-role — i.e. Edge-function-only. Nothing reads it either: no client
+  code queries the table or the `trustpoints_balance` view, and
+  `src/lib/trustpoints.js` is a pure rules module whose `TRUSTPOINTS_RULES`
+  export is unused.
+
+  **The table and the view are retained deliberately.** They are empty (measured
+  on E2E, 2026-11-09, together with `earner_payout_profiles`, contracts carrying
+  any `stripe_*` id, events of type `payment.intent_created`/`captured`/
+  `refunded`, events of type `trustpoints.*`, and contracts in `SETTLED` — all
+  zero). Production was **not** queried; confirming it there is a precondition
+  of any drop and needs its own approval. An empty table costs nothing to keep,
+  `user_id` references `auth.users` and `contract_id` references `contracts`,
+  and `.ada/ada-notes.md` already records the position that dropping these is a
+  separate decision.
+
+  **Do not read the migration as evidence of a live writer.**
+  `20260527000001_trustpoints_ledger.sql` says "Inserts via Edge Functions
+  only", which is true as a privilege statement and misleading as a description
+  now that no function inserts. A migration is immutable, so this note is the
+  correction. No points are awarded anywhere, and none have ever been.
+
 ## Active Constraints
 
 - **Re-issuing guest access is not an instant revocation, and nothing

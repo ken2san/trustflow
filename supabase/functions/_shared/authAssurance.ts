@@ -383,8 +383,10 @@ export function assuranceForRecord(a: AuthAssurance): Record<string, unknown> {
  * What changes is where the value comes from. It now follows the credential
  * that was actually presented, so the one case the ternary would have got wrong
  * — a counterparty who holds a real account and acts with a JWT, which
- * `partyAuth.ts` already supports — is recorded as the account session it is
- * rather than as an invitation it never used.
+ * `log-event`'s own actor resolution supports — is recorded as the account
+ * session it is rather than as an invitation it never used. (This used to cite
+ * `_shared/partyAuth.ts`, deleted in Task 20 with the only three functions
+ * that imported it.)
  */
 export function legacyAuthMethod(a: AuthAssurance): string {
   if (a.assurance === 'anonymous') return 'anonymous'

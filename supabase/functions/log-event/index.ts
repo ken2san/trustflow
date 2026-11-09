@@ -81,10 +81,16 @@ const json = (body: unknown, status: number) =>
 
 // Types a party may record about their own contract. Deliberately excludes
 // runtime.snapshot (application state, now in runtime_snapshots) and every
-// type whose truth is decided by the payment processor rather than by a
-// party's assertion — payment.*, trustpoints.* and the dispute verdicts are
-// written by capture-payment / cancel-payment with the service role, or by a
-// future arbitration path, and must not be assertable from a browser.
+// type whose truth would have to be decided by something other than a party's
+// assertion — the processor-verified payment.*, trustpoints.* and the dispute
+// verdicts.
+//
+// NOTHING WRITES THOSE. Until Task 20 this comment said they were "written by
+// capture-payment / cancel-payment with the service role", and Decisions.md
+// (2026-11-06) had already recorded that as describing an implementation that
+// never existed: those functions wrote no events at all. Their source is now
+// deleted too, so the names below are absent from this set because no writer
+// exists and none is planned — not because one lives elsewhere.
 const ALLOWED_TYPES = new Set([
   'contract.initiated',
   'contract.accepted',
@@ -103,11 +109,10 @@ const ALLOWED_TYPES = new Set([
   // control — bank transfer, cash, anything outside Stripe. Deliberately the
   // same shape as performance.*: a claim, not a processor fact. These three
   // leaf names are the only payment.* types a party may ever write. Every
-  // other payment.* name (intent_created, captured, refunded — see the
-  // comment above ALLOWED_TYPES) stays absent from this set on purpose: those
-  // are Stripe-verified facts written by capture-payment / cancel-payment
-  // with the service role, and must never be confused with a party's
-  // unverified say-so.
+  // other payment.* name (intent_created, captured, refunded) stays absent on
+  // purpose: they would be processor-verified facts, no code has ever written
+  // one, and the functions that were supposed to are gone — see the comment
+  // above ALLOWED_TYPES. They must never be confused with a party's say-so.
   'payment.reported',
   'payment.acknowledged',
   'payment.disputed',

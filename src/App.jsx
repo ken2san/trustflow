@@ -118,11 +118,11 @@ import { captchaConfigured } from './lib/captcha.js';
 
 
 
-// DisputeModal moved to components/modals/DisputeModal.jsx
-
-
-// PaymentModal moved to components/modals/PaymentModal.jsx
-
+// Two comments stood here saying DisputeModal and PaymentModal had "moved to
+// components/modals/". Neither file was ever there: the directory existed and
+// was empty, and it is gone with them (Task 20). A pointer to a file that does
+// not exist costs the next reader a search and teaches them to distrust the
+// comments that are true.
 
 
 // --- Page Views ---

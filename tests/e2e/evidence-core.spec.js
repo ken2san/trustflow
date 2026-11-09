@@ -98,6 +98,15 @@ test('a unilateral assertion cannot reach settlement', async ({ request }) => {
   // so the guarantee moves rather than disappearing, and gets stronger: there
   // is no settlement endpoint at all. Deleting the assertion instead would
   // have removed the only check that a one-sided claim cannot settle anything.
+  //
+  // Stronger again since Task 20: that retirement un-deployed the functions,
+  // and their SOURCE is now deleted as well, so there is nothing left to
+  // redeploy by accident — `supabase functions deploy` with no function name
+  // deploys every directory it finds, which was the whole argument for the
+  // deletion. This assertion is the E2E half of that guard (the production
+  // half is the retired-slug check in scripts/smoke-production.mjs), and it
+  // tests the deployed gateway rather than the tree, so it keeps working and
+  // keeps meaning something.
   const capture = await api(request, '/functions/v1/capture-payment', {
     guestToken, body: { contractId: contract.id },
   });

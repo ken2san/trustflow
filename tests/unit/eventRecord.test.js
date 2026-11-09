@@ -207,8 +207,9 @@ describe('the authentication an event records', () => {
   const accountClaims = { aal: 'aal1', amr: [{ method: 'otp', timestamp: 1791731476 }] }
 
   it('follows the credential, not the role', async () => {
-    // The case the old ternary got wrong, and which partyAuth.ts already
-    // supports: a counterparty who holds a real account and acts with a JWT.
+    // The case the old ternary got wrong, and which log-event's own actor
+    // resolution supports: a counterparty who holds a real account and acts
+    // with a JWT.
     // The ternary would have called that an invitation capability.
     const record = await buildEventRecord({
       type: 'performance.accepted', contract: CONTRACT,
