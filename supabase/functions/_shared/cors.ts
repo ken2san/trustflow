@@ -54,34 +54,87 @@ export const ALLOW_HEADERS =
   'authorization, x-client-info, apikey, content-type, x-guest-access-token'
 
 /**
- * Origins the web app is actually served from.
+ * EXACT origins only. No pattern — and the reason is the whole lesson of this
+ * module's first version.
  *
- * `project-trustflow.vercel.app` is the only domain attached to the Vercel
- * project (verified against the Vercel API, 2026-11-09 — there is no custom
- * domain). The two loopback entries are the dev server and the Playwright
- * `baseURL` (`playwright.config.js`: `http://localhost:5173`); both are kept
- * because a browser sends whichever host the developer typed.
+ * That version matched
+ * `^https://project-trustflow-[a-z0-9]+(?:-team-kenji)?\.vercel\.app$`, which
+ * looked like "this project's previews" and was not. Codex's review found both
+ * halves wrong:
+ *
+ *   - it REJECTED the real branch alias, because Vercel's documented form is
+ *     `<project>-git-<branch>-<scope>.vercel.app` and `git-main` contains a
+ *     hyphen that `[a-z0-9]+` cannot match. So the one preview URL a developer
+ *     actually keeps open was the one it refused;
+ *   - and it ACCEPTED `https://project-trustflow-attacker.vercel.app`, because
+ *     the team suffix was optional. That is also the shape of the ROOT alias of
+ *     a separate project named `project-trustflow-attacker`, and
+ *     `<name>.vercel.app` is claimed globally, first come first served.
+ *
+ * The second is the part worth remembering: **a name prefix is not ownership.**
+ * Requiring `-team-kenji` does not fix it either, because anyone may create a
+ * project called `project-trustflow-x-team-kenji` in their own account and get
+ * that exact root alias. No pattern over `vercel.app` can establish that a
+ * hostname belongs to this project, so this module stops trying.
+ *
+ * Every entry below was read back from the Vercel API for project
+ * `prj_T6yXoI5wDvJKNfzlmgWAyF4tErAm` on 2026-11-09 — `list_aliases` returned
+ * exactly these five, all owned by this project, and `list_project_domains`
+ * confirmed there is no custom domain.
  */
 const ALLOWED_ORIGINS = new Set([
+  // Production.
   'https://project-trustflow.vercel.app',
+  'https://project-trustflow-team-kenji.vercel.app',
+  // The stable branch alias for main — the preview URL that does not change
+  // per deploy, and the one Codex's finding 1 was about.
+  'https://project-trustflow-git-main-team-kenji.vercel.app',
+  // Older aliases, still owned by this project and still resolving.
+  'https://trustflow-team-kenji.vercel.app',
+  'https://trustflow-git-main-team-kenji.vercel.app',
+  // The dev server and the Playwright `baseURL` (`playwright.config.js`).
+  // Both forms, because a browser sends whichever host was typed.
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ])
 
 /**
- * This project's own Vercel preview deployments, e.g.
- * `https://project-trustflow-p8zf16a6m-team-kenji.vercel.app`.
+ * Extra exact origins, for the per-commit preview URLs this cannot predict.
  *
- * Every push to main creates one and they point at the production Supabase
- * project, so refusing them would break looking at a deploy before it is the
- * live one. Anchored at both ends and tied to this project's name and team, so
- * it admits this project's previews and not `vercel.app` in general.
+ * A deployment URL like `https://project-trustflow-p8zf16a6m-team-kenji.vercel.app`
+ * changes on every push, so the only way to match it by shape is to accept a
+ * namespace — which is the defect above. The opt-in is therefore explicit: set
+ * `TF_ALLOWED_ORIGINS` on the function to a comma-separated list of exact
+ * origins when one is actually needed.
+ *
+ * **This is a deliberate trade, not an oversight.** A developer opening a
+ * per-commit preview against the live backend now has to either use the branch
+ * alias above, run the dev server, or add that one origin. What they get in
+ * exchange is a list where every entry was verified to belong to this project.
+ *
+ * Read per call rather than once at module load, so the unit tests can
+ * exercise the opt-in — a module-load read would make this branch untestable
+ * from Node, and an untested security branch is the one that is wrong.
+ *
+ * Read through `globalThis` because this module is imported by Deno Edge
+ * Functions and by the Node test runner. A bare `Deno.env` would throw at
+ * import time under vitest, which is how the first version of this broke.
  */
-const PREVIEW_ORIGIN =
-  /^https:\/\/project-trustflow-[a-z0-9]+(?:-team-kenji)?\.vercel\.app$/
+function extraOrigins(): Set<string> {
+  const g = globalThis as {
+    Deno?: { env?: { get?: (k: string) => string | undefined } }
+    process?: { env?: Record<string, string | undefined> }
+  }
+  const raw = g.Deno?.env?.get?.('TF_ALLOWED_ORIGINS')
+    ?? g.process?.env?.TF_ALLOWED_ORIGINS
+    ?? ''
+  return new Set(
+    raw.split(',').map(value => value.trim()).filter(value => value.length > 0),
+  )
+}
 
 function originAllowed(origin: string): boolean {
-  return ALLOWED_ORIGINS.has(origin) || PREVIEW_ORIGIN.test(origin)
+  return ALLOWED_ORIGINS.has(origin) || extraOrigins().has(origin)
 }
 
 /**

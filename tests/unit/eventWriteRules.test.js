@@ -269,8 +269,12 @@ describe('comparing a presented guest token', () => {
   })
 
   it('refuses a token that differs only in the last character', () => {
-    // The case a short-circuiting compare would answer fastest, and the one a
-    // constant-time compare must answer in the same time as any other.
+    // A near-miss: every character but the last is right. An earlier version
+    // of this comment called it "the case a short-circuiting compare would
+    // answer fastest", which is backwards — a last-character mismatch is the
+    // SLOWEST case for an early-exit compare, and a first-character mismatch
+    // is the fastest. Codex's finding 3. These tests pin correctness; nothing
+    // here measures time.
     expect(guestCredentialStillValid(row(future), token.slice(0, -1) + 'c')).toBe(false)
   })
 

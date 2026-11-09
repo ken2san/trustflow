@@ -86,24 +86,42 @@ export function idempotencyOutcome(
 export const GUEST_ACCESS_TOKEN_TTL_DAYS = 30
 
 /**
- * Compare two strings in time that does not depend on where they first differ.
+ * Compare two strings without an early exit at the first differing character.
  *
- * Hand-written rather than `node:crypto`'s `timingSafeEqual`, deliberately.
- * This module is bundled into Deno Edge Functions and this commit cannot be
- * deploy-tested, so introducing a `node:` specifier would mean shipping a
- * runtime dependency whose availability in that runtime I could not verify
- * first. Twelve lines of arithmetic have no such question, and the unit tests
- * exercise them in the same way the functions will.
+ * WHAT THIS IS, STATED AT THE SIZE IT HOLDS. It is **fixed-work, best-effort**:
+ * for a non-empty candidate it always walks the full stored length and decides
+ * once at the end. It is **not** a cryptographic constant-time guarantee, and
+ * an earlier version of this comment claimed otherwise. Codex's finding 3
+ * listed exactly why that claim was too strong, and all of it stands:
  *
- * The length difference is not hidden and does not need to be: both values are
- * 36-character UUIDs when they are anything at all, and a caller already knows
- * the length of the token it sent. What is hidden is the position of the first
- * mismatch, which is the part that would otherwise be recoverable one
- * character at a time.
+ *   - an empty candidate returns before the loop runs at all, so it does not
+ *     take the same path as a wrong non-empty one;
+ *   - JavaScript gives no timing guarantees. String representations, the
+ *     `charCodeAt` path and whatever the JIT decides are all outside this
+ *     function's control;
+ *   - and `!==` *typically* short-circuits but is not required by the language
+ *     to, so the thing being improved on was itself an implementation detail.
+ *
+ * What it does remove is the obvious structural leak: the position of the first
+ * mismatch no longer decides how much work happens. If a real guarantee is ever
+ * needed, that means a vetted primitive — `node:crypto`'s `timingSafeEqual`
+ * over fixed-size buffers — and verifying it is available in the actual Edge
+ * Runtime before relying on it.
+ *
+ * Hand-written rather than that primitive, deliberately and for one reason:
+ * this module is bundled into Deno Edge Functions and the commit that
+ * introduced it could not be deploy-tested, so a `node:` specifier would have
+ * meant shipping a runtime dependency whose availability there was unverified.
+ *
+ * Length is not hidden and does not need to be: the stored value is a
+ * 36-character UUID, that length is public, and the caller knows the length of
+ * what it sent.
  */
 function secretEquals(stored: string, presented: string): boolean {
-  // Compare over the stored length regardless, so a short or long candidate
-  // costs the same as a wrong one of the right length.
+  // Fold the length difference into the same accumulator rather than returning
+  // early on it, and then walk the stored length whatever the candidate's
+  // length is. This does not make a short candidate *cost* the same — see the
+  // empty-input caveat above — it removes length as a separate early exit.
   let differences = stored.length ^ presented.length
   for (let i = 0; i < stored.length; i++) {
     // charCodeAt past the end is NaN, and NaN | 0 is 0 — a value no real
@@ -130,18 +148,15 @@ function secretEquals(stored: string, presented: string): boolean {
  * counts as the credential. A row with no token, no expiry, or an expiry that
  * does not parse is not a credential — absent is refused, never waved through.
  *
- * The equality is constant-time, and the honest reason is hygiene rather than
- * a demonstrated attack. `!==` on strings returns at the first differing
- * character, so the time it takes is a function of a secret. Whether that is
- * *exploitable* here is another matter and the answer is almost certainly no:
- * an attacker would have to already know the `contract_id`, and then recover
- * 122 bits of v4 UUID one character at a time through the Supabase gateway and
- * a Deno isolate, over the internet, with every request also doing a database
- * read. Nobody is doing that. It is changed because a credential comparison
- * that leaks timing is the kind of thing that stays flagged in every review
- * until it is fixed, the fix costs six lines and no behaviour, and
- * defence-in-depth on the one secret compare in this codebase is cheap.
- * Reviewer finding M3.
+ * The equality is **fixed-work**, which is a weaker claim than constant-time
+ * and is the one the implementation can actually support — see `secretEquals`.
+ * The reason for it is hygiene rather than a demonstrated attack: an attacker
+ * would have to already know the `contract_id`, and then recover 122 bits of
+ * v4 UUID through the Supabase gateway and a Deno isolate, over the internet,
+ * with every request also doing a database read. Nobody is doing that. It is
+ * changed because a credential comparison with an obvious early exit stays
+ * flagged in every review until it is fixed, and the fix costs no behaviour.
+ * Reviewer finding M3; the claim was narrowed after Codex's finding 3.
  */
 export function guestCredentialStillValid(
   contract: {
