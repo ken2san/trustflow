@@ -3,6 +3,8 @@ import {
   GENESIS_HASH, HASH_VERSION, stableStringify, payloadHash, deriveDodHash,
   eventCanonical, canonicalVersionOf, recomputeEventHash, canonicalTimestamp, sha256Hex,
   buildAgreementSnapshot, deriveAgreementHash, bindsWholeAgreement,
+  SUPPORTED_HASH_VERSIONS, SUPPORTED_SNAPSHOT_VERSIONS, SNAPSHOT_VERSION,
+  isSupportedSnapshotVersion,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
 
 // This module is the one definition of what an attested event's hash covers,
@@ -238,5 +240,153 @@ describe('canonicalTimestamp', () => {
   it('is applied inside the canonical, not just available beside it', () => {
     expect(eventCanonical({ ...base, created_at: '2026-09-25T10:00:00+00:00' }, 1))
       .toBe(eventCanonical(base, 1))
+  })
+})
+
+// ── The evolution contract ──────────────────────────────────────────────────
+//
+// Rank 1 of Codex's data-model review: the versioning was present and the
+// machinery around it was incomplete, in three ways that all failed the same
+// direction — silently treating an unknown version as the newest one it knew.
+//
+// These tests exist to make the next version's arrival boring. Every one of
+// them would have passed before the guards; what they pin is that supported
+// versions keep producing EXACTLY the bytes they produce today, so the guards
+// cannot have changed a stored hash, and that an unsupported version is
+// refused rather than guessed.
+
+describe('the canonical is frozen per version', () => {
+  // Deliberately a literal, not a helper: if a future edit changes what this
+  // builds, the point is to see it in the diff.
+  const EVENT = {
+    id: '11111111-1111-4111-8111-111111111111',
+    type: 'performance.asserted',
+    contract_id: '22222222-2222-4222-8222-222222222222',
+    actor_id: '33333333-3333-4333-8333-333333333333',
+    dod_hash: 'dodhash',
+    created_at: '2026-11-09T12:00:00.000Z',
+    prev_event_hash: 'prevhash',
+    payload_hash: 'payloadhash',
+    agreement_hash: 'agreementhash',
+  }
+
+  // The exact strings this build produces. Any change to these is a change to
+  // every stored event_hash of that version — which is the thing that must
+  // never happen by accident.
+  const FROZEN = {
+    1: '{"id":"11111111-1111-4111-8111-111111111111","type":"performance.asserted","contract_id":"22222222-2222-4222-8222-222222222222","actor_id":"33333333-3333-4333-8333-333333333333","dod_hash":"dodhash","created_at":"2026-11-09T12:00:00.000Z"}',
+    2: '{"id":"11111111-1111-4111-8111-111111111111","type":"performance.asserted","contract_id":"22222222-2222-4222-8222-222222222222","actor_id":"33333333-3333-4333-8333-333333333333","dod_hash":"dodhash","created_at":"2026-11-09T12:00:00.000Z","prev_hash":"prevhash"}',
+    3: '{"id":"11111111-1111-4111-8111-111111111111","type":"performance.asserted","contract_id":"22222222-2222-4222-8222-222222222222","actor_id":"33333333-3333-4333-8333-333333333333","dod_hash":"dodhash","created_at":"2026-11-09T12:00:00.000Z","prev_hash":"prevhash","payload_hash":"payloadhash"}',
+    4: '{"id":"11111111-1111-4111-8111-111111111111","type":"performance.asserted","contract_id":"22222222-2222-4222-8222-222222222222","actor_id":"33333333-3333-4333-8333-333333333333","dod_hash":"dodhash","created_at":"2026-11-09T12:00:00.000Z","prev_hash":"prevhash","payload_hash":"payloadhash","agreement_hash":"agreementhash"}',
+  }
+
+  for (const version of [1, 2, 3, 4]) {
+    it(`v${version} produces byte-for-byte the string it always has`, () => {
+      expect(eventCanonical(EVENT, version)).toBe(FROZEN[version])
+    })
+  }
+
+  it('lists exactly the versions it can produce', () => {
+    expect([...SUPPORTED_HASH_VERSIONS]).toEqual([1, 2, 3, 4])
+    expect(SUPPORTED_HASH_VERSIONS).toContain(HASH_VERSION)
+  })
+
+  it('refuses an unknown version instead of hashing it as the newest', () => {
+    // THE TRAP. Before the guard, v5 fell through to the v4 shape, so a row
+    // written by a future build would have been hashed as v4 and reported
+    // verified. Codex confirmed by probe that v4 and v5 produced identical
+    // bytes.
+    for (const version of [5, 44, 0, -1, 1.5, NaN, null, undefined, '4']) {
+      expect(() => eventCanonical(EVENT, version), `version ${String(version)}`)
+        .toThrow(/unsupported canonical version/)
+    }
+    expect(eventCanonical(EVENT, 5 - 1)).toBe(FROZEN[4])
+  })
+
+  it('does not claim an unknown version binds the whole agreement', () => {
+    expect(bindsWholeAgreement(4)).toBe(true)
+    expect(bindsWholeAgreement(3)).toBe(false)
+    // `>= 4` alone answered true here, which is the same silent-understanding
+    // bug one function along.
+    expect(bindsWholeAgreement(5)).toBe(false)
+    expect(bindsWholeAgreement(99)).toBe(false)
+  })
+
+  it('still identifies a pre-column row as v1 or v2 by its chain link', () => {
+    // Preserved exactly: a row with no recorded version predates the column.
+    expect(canonicalVersionOf({})).toBe(1)
+    expect(canonicalVersionOf({ prev_event_hash: 'x' })).toBe(2)
+    expect(canonicalVersionOf({ hash_version: 3 })).toBe(3)
+  })
+})
+
+describe('the agreement snapshot is frozen per version', () => {
+  const CONTRACT = {
+    project_name: 'Translate a birth certificate',
+    dod: ['Translate the document', 'Return a stamped PDF'],
+    amount_minor: 125050,
+    currency: 'CAD',
+    deadline: '2026-12-01',
+    performed_by: 'creator',
+    earner_display_name: 'Acme Translations',
+    // Row fields that must never reach the snapshot.
+    state: 'TERMS_ACCEPTED',
+    guest_access_token: 'secret',
+    hirer_email: 'someone@example.test',
+  }
+
+  const FROZEN_V1 = '{"amount":125050,"currency":"CAD","deadline":"2026-12-01",'
+    + '"dod":["Translate the document","Return a stamped PDF"],"offered_by":"Acme Translations",'
+    + '"performed_by":"creator","project_name":"Translate a birth certificate","snapshot_version":1}'
+
+  it('builds v1 byte-for-byte as it always has', () => {
+    expect(stableStringify(buildAgreementSnapshot(CONTRACT, 1))).toBe(FROZEN_V1)
+  })
+
+  it('defaults to the current version, which is still 1', () => {
+    expect(SNAPSHOT_VERSION).toBe(1)
+    expect(stableStringify(buildAgreementSnapshot(CONTRACT))).toBe(FROZEN_V1)
+  })
+
+  it('hashes v1 to the same digest whether the version is passed or defaulted', async () => {
+    // The guard added a parameter. This is the test that it added nothing else.
+    expect(await deriveAgreementHash(CONTRACT)).toBe(await deriveAgreementHash(CONTRACT, 1))
+    expect(await deriveAgreementHash(CONTRACT))
+      .toBe(await sha256Hex(FROZEN_V1))
+  })
+
+  it('refuses a snapshot version it cannot build', () => {
+    for (const version of [2, 0, 1.5, null, '1']) {
+      expect(() => buildAgreementSnapshot(CONTRACT, version), `version ${String(version)}`)
+        .toThrow(/unsupported agreement snapshot version/)
+    }
+  })
+
+  it('treats an explicit undefined as "use the current version", not as unknown', () => {
+    // A default parameter fires on undefined, so this builds v1 rather than
+    // throwing. Asserted rather than left implicit: my first version of the
+    // test above expected a refusal here and was wrong about the language, not
+    // about the code.
+    expect(stableStringify(buildAgreementSnapshot(CONTRACT, undefined))).toBe(FROZEN_V1)
+  })
+
+  it('lists exactly the snapshot versions it can build', () => {
+    expect([...SUPPORTED_SNAPSHOT_VERSIONS]).toEqual([1])
+    expect(isSupportedSnapshotVersion(1)).toBe(true)
+    expect(isSupportedSnapshotVersion(2)).toBe(false)
+  })
+
+  it('still omits every field that is not a term', () => {
+    const snapshot = buildAgreementSnapshot(CONTRACT)
+    for (const key of ['state', 'guest_access_token', 'hirer_email']) {
+      expect(Object.keys(snapshot)).not.toContain(key)
+    }
+  })
+
+  it('still reads the old amount column when the new one is absent', async () => {
+    // A JPY row written before the rename must keep producing the hash it had.
+    const { amount_minor: _omitted, ...legacy } = CONTRACT
+    expect(await deriveAgreementHash({ ...legacy, amount_jpy: 125050, currency: 'JPY' }))
+      .toBe(await deriveAgreementHash({ ...CONTRACT, amount_minor: 125050, currency: 'JPY' }))
   })
 })

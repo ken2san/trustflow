@@ -52,7 +52,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
 import {
-  GENESIS_HASH, canonicalVersionOf, payloadHash,
+  GENESIS_HASH, bindsWholeAgreement, canonicalVersionOf, isSupportedHashVersion,
+  isSupportedSnapshotVersion, payloadHash,
   buildAgreementSnapshot,
 } from '../_shared/eventCanonical.ts'
 import {
@@ -76,18 +77,36 @@ const MAX_EVENTS = 500
 /**
  * Which agreed terms the contract row no longer matches.
  *
- * Built by re-deriving the snapshot from the CURRENT row with the same function
- * that produced the accepted one, so this comparison cannot drift from what the
+ * Built by re-deriving the snapshot from the CURRENT row under THE VERSION THE
+ * AGREEMENT WAS ACCEPTED UNDER, so this comparison cannot drift from what the
  * hash actually binds. An empty list means the row still says what was agreed;
  * a non-empty one means the record moved and the accepted terms are the ones
  * the evidence proves.
+ *
+ * THE VERSION IS READ FROM THE ACCEPTED SNAPSHOT, and that is the whole point
+ * of this change. It used to build with the CURRENT version, which was correct
+ * only while there has only ever been one. Codex's data-model review found what
+ * happens on the day there are two: a v2 builder that adds, say,
+ * `deadline_zone: null` would make every v1 agreement look CHANGED to its own
+ * counterparty — `undefined` on the accepted side, `null` on the rebuilt one —
+ * and the screen would tell them their terms had moved when nobody touched
+ * them. For a product whose only claim is the record, that is the claim
+ * failing.
+ *
+ * An accepted snapshot whose version this build does not know returns `null`:
+ * "cannot say", which is what the field means elsewhere. It is not an empty
+ * list, because an empty list asserts the terms are unchanged.
  */
 function termsChangedSinceAcceptance(
   accepted: Record<string, unknown> | null,
   contract: Record<string, unknown>,
 ): string[] | null {
   if (!accepted) return null
-  const current = buildAgreementSnapshot(contract) as unknown as Record<string, unknown>
+  const acceptedVersion = accepted.snapshot_version
+  if (!isSupportedSnapshotVersion(acceptedVersion)) return null
+  const current = buildAgreementSnapshot(
+    contract, acceptedVersion as number,
+  ) as unknown as Record<string, unknown>
   return Object.keys(current)
     .filter(key => key !== 'snapshot_version')
     .filter(key => JSON.stringify(current[key]) !== JSON.stringify(accepted[key]))
@@ -238,11 +257,21 @@ Deno.serve(async (req: Request) => {
           trust_model:     hashVersion >= 2 ? 'server_attested' : 'client_asserted',
           event_hash:      row.event_hash ?? null,
           prev_event_hash: row.prev_event_hash ?? null,
-          hash_valid:      row.event_hash ? row.event_hash === recomputed : null,
+          // `recomputed` is null when this build does not know the row's
+          // canonical version. `null` here means CANNOT SAY, and conflating it
+          // with `false` would tell a counterparty their record had been
+          // altered when the truth is that this build cannot check it.
+          hash_valid:      row.event_hash && recomputed !== null
+            ? row.event_hash === recomputed
+            : null,
           chain_linked:    row.prev_event_hash ? row.prev_event_hash === expectedPrev : null,
           substance_valid: substanceValid,
-          // From v4 the whole deal is bound, not just its completion criteria.
-          binds_whole_agreement: hashVersion >= 4,
+          // From v4 the whole deal is bound, not just its completion criteria —
+          // and only for a version this build understands, so an unknown one
+          // does not claim to bind anything.
+          binds_whole_agreement: bindsWholeAgreement(hashVersion),
+          // Stated rather than left to be inferred from three nulls.
+          canonical_version_supported: isSupportedHashVersion(hashVersion),
         },
       })
 

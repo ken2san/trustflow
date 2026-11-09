@@ -29,7 +29,8 @@
 // otherwise would be the same overclaim as `integrity_status: VERIFIED`.
 
 import {
-  type CanonicalEvent, GENESIS_HASH, canonicalVersionOf, eventCanonical, sha256Hex,
+  type CanonicalEvent, GENESIS_HASH, canonicalVersionOf, eventCanonical,
+  isSupportedHashVersion, sha256Hex,
 } from './eventCanonical.ts'
 
 /**
@@ -150,9 +151,15 @@ export function missingCanonicalInputs(block: Record<string, unknown> | null): s
  */
 export function recomputeFromCanonicalBlock(
   block: Record<string, unknown>,
-): Promise<string> {
+): Promise<string> | null {
   const version = (block.hash_version as number | null)
     ?? canonicalVersionOf(block as never)
+  // `null` means "this build cannot verify this row", which is a different
+  // answer from "it does not match" and must not be collapsed into it. The
+  // guest trail reads it as unknown rather than failing the whole response:
+  // one row written by a future build must not make a counterparty's record
+  // unreadable, and it must not be reported as verified either.
+  if (!isSupportedHashVersion(version)) return null
   return sha256Hex(eventCanonical(block as unknown as CanonicalEvent, version))
 }
 

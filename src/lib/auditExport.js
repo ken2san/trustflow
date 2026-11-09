@@ -19,7 +19,8 @@
 // access to TrustFlow servers.
 
 import {
-  GENESIS_HASH, eventCanonical, canonicalVersionOf, payloadHash, sha256Hex,
+  GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
+  isSupportedHashVersion, payloadHash, sha256Hex,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
 
 const EXPORT_VERSION = '1.1'
@@ -67,16 +68,25 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
   const verifiedEvents = []
   for (const ev of chronological) {
     const hashVersion = canonicalVersionOf(ev)
-    const recomputedHash = await sha256Hex(eventCanonical(ev, hashVersion))
+    // A version this build cannot produce is reported as unsupported, not
+    // hashed under a guess. eventCanonical throws rather than falling through
+    // to the newest shape, so an export must ask first — otherwise one row
+    // from a future build would make the whole export fail, and a guessed
+    // digest would read as a verification.
+    const versionSupported = isSupportedHashVersion(hashVersion)
+    const recomputedHash = versionSupported
+      ? await sha256Hex(eventCanonical(ev, hashVersion))
+      : null
 
     // From v3 the payload is bound into the hash. null for older rows — their
     // substance was never attested, which is not the same as failing a check.
     const substanceMatch = hashVersion >= 3 && ev.payload_hash
       ? (await payloadHash(ev.payload ?? {})) === ev.payload_hash
       : null
-    const hashMatch = ev.event_hash
+    const hashMatch = ev.event_hash && recomputedHash !== null
       ? ev.event_hash === recomputedHash
-      : null  // hash not yet stored (pre-chain events, before this field existed)
+      : null  // hash not yet stored (pre-chain events), or a version this
+              // build cannot verify. Either way: cannot say, not "altered".
     const chainLinkMatch = ev.prev_event_hash
       ? ev.prev_event_hash === prevHash
       : null  // pre-chain event — no prev_event_hash was ever recorded for it
@@ -85,8 +95,9 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
       ...ev,
       _export_verification: {
         canonical_version: hashVersion,
+        canonical_version_supported: versionSupported,
         substance_match:   substanceMatch,
-        binds_whole_agreement: hashVersion >= 4,
+        binds_whole_agreement: bindsWholeAgreement(hashVersion),
         recomputed_hash:   recomputedHash,
         stored_hash:       ev.event_hash ?? null,
         hash_match:        hashMatch,

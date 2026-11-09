@@ -37,6 +37,28 @@ export const GENESIS_HASH = 'GENESIS'
  */
 export const HASH_VERSION = 4
 
+/**
+ * Every canonical version this build knows how to produce or verify.
+ *
+ * THE TRAP THIS CLOSES. `eventCanonical` used to fall through to the v4 shape
+ * for any version above 3, so a v5 row — or a typo writing `hash_version: 44` —
+ * would have been hashed and verified as v4 and reported as *verified*. Codex
+ * confirmed by probe that v4 and v5 produced identical canonical bytes. Nothing
+ * writes a 5 today; the cost is paid the day something does, and it is paid in
+ * the one place that must never be approximate.
+ *
+ * So an unsupported version is an ERROR here rather than a guess, and readers
+ * that show a party a verification result use `isSupportedHashVersion` first and
+ * say "unsupported" instead of "verified" or crashing. Supported versions keep
+ * producing byte-identical output; this adds a refusal, not a format.
+ */
+export const SUPPORTED_HASH_VERSIONS: readonly number[] = [1, 2, 3, 4]
+
+/** Whether this build can produce and verify a given canonical version. */
+export function isSupportedHashVersion(version: unknown): boolean {
+  return typeof version === 'number' && SUPPORTED_HASH_VERSIONS.includes(version)
+}
+
 export interface CanonicalEvent {
   id: string
   type: string
@@ -86,7 +108,69 @@ export interface AgreementSnapshot {
  * records what the server showed the counterparty, so a client that could
  * influence it could record a different deal from the one on screen.
  */
-export function buildAgreementSnapshot(contract: Record<string, unknown>): AgreementSnapshot {
+export const SNAPSHOT_VERSION = 1
+
+/** Every agreement-snapshot version this build can produce. */
+export const SUPPORTED_SNAPSHOT_VERSIONS: readonly number[] = [1]
+
+/** Whether this build knows how to build a given snapshot version. */
+export function isSupportedSnapshotVersion(version: unknown): boolean {
+  return typeof version === 'number' && SUPPORTED_SNAPSHOT_VERSIONS.includes(version)
+}
+
+/**
+ * One builder per snapshot version, and a builder is FROZEN once a single
+ * agreement has been accepted under it.
+ *
+ * WHY A REGISTRY FOR ONE ENTRY. Because the alternative is what was here
+ * before: a single function that every caller used for every purpose. Editing
+ * it — adding `deadline_zone: null`, say — would have changed the hash of every
+ * agreement ever accepted, and silently, since nothing recomputes an old
+ * agreement_hash to notice. The version-2 builder, when there is one, goes in
+ * beside this one. **The version-1 builder is never edited again**, and
+ * `tests/unit/eventCanonical.test.js` pins its exact bytes so that an edit
+ * fails the build rather than a stored hash.
+ *
+ * This is the shape `shownTerms.ts` already uses for its two digest versions,
+ * for the same reason.
+ */
+const SNAPSHOT_BUILDERS: Record<number, (c: Record<string, unknown>) => AgreementSnapshot> = {
+  1: buildSnapshotV1,
+}
+
+/**
+ * Build the snapshot for a given version — by default the current one.
+ *
+ * Pass the version explicitly when acting on or reading an AGREEMENT THAT WAS
+ * ALREADY ACCEPTED: its terms are pinned to the version it was accepted under,
+ * and rebuilding them under a newer one would compare, or re-reference, a shape
+ * nobody agreed to. There is one version today, so the parameter is dormant;
+ * it exists so that the day there are two, the call sites already say which
+ * they mean rather than being found one at a time.
+ */
+export function buildAgreementSnapshot(
+  contract: Record<string, unknown>,
+  version: number = SNAPSHOT_VERSION,
+): AgreementSnapshot {
+  // Checked with the predicate, NOT by indexing the registry. Object keys are
+  // strings, so `SNAPSHOT_BUILDERS['1']` resolves the version-1 builder while
+  // `isSupportedSnapshotVersion('1')` says no — two answers to one question,
+  // and the lenient one would let a version that arrived as JSON text through
+  // a check it should fail. Found by its own test.
+  if (!isSupportedSnapshotVersion(version)) {
+    throw new Error(
+      `unsupported agreement snapshot version ${String(version)}; this build knows `
+      + `${SUPPORTED_SNAPSHOT_VERSIONS.join(', ')}`,
+    )
+  }
+  return SNAPSHOT_BUILDERS[version](contract)
+}
+
+/**
+ * Snapshot version 1. **Do not edit this function.** Its output is the preimage
+ * of every `agreement_hash` ever stored.
+ */
+function buildSnapshotV1(contract: Record<string, unknown>): AgreementSnapshot {
   return {
     snapshot_version: 1,
     project_name: (contract.project_name as string | null) ?? null,
@@ -117,8 +201,11 @@ export function buildAgreementSnapshot(contract: Record<string, unknown>): Agree
 }
 
 /** The hash of that snapshot. */
-export function deriveAgreementHash(contract: Record<string, unknown>): Promise<string> {
-  return sha256Hex(stableStringify(buildAgreementSnapshot(contract)))
+export function deriveAgreementHash(
+  contract: Record<string, unknown>,
+  version: number = SNAPSHOT_VERSION,
+): Promise<string> {
+  return sha256Hex(stableStringify(buildAgreementSnapshot(contract, version)))
 }
 
 /**
@@ -185,6 +272,18 @@ export function deriveDodHash(dod: unknown): Promise<string> {
  * Key order is part of the format and must not be rearranged.
  */
 export function eventCanonical(event: CanonicalEvent, version: number): string {
+  // Refused, not approximated. Emitting v4 bytes for a version this build does
+  // not know would produce a digest that looks like a verification and is not
+  // one. Callers that must keep going for a party-facing readout check
+  // `isSupportedHashVersion` first; the operator tools let this throw, which is
+  // the louder and better outcome for them.
+  if (!isSupportedHashVersion(version)) {
+    throw new Error(
+      `unsupported canonical version ${String(version)}; this build knows `
+      + `${SUPPORTED_HASH_VERSIONS.join(', ')}`,
+    )
+  }
+
   const base = {
     id:          event.id,
     type:        event.type,
@@ -214,9 +313,16 @@ export function canonicalVersionOf(row: { hash_version?: number | null, prev_eve
   return row.prev_event_hash ? 2 : 1
 }
 
-/** Whether a version binds the whole agreement rather than only its criteria. */
+/**
+ * Whether a version binds the whole agreement rather than only its criteria.
+ *
+ * Supported versions only: `>= 4` alone would answer **true** for a version
+ * this build cannot verify, which is the same silent-understanding bug as the
+ * canonical fall-through. An unknown version binds something unknown, and the
+ * honest answer is not "yes".
+ */
 export function bindsWholeAgreement(version: number): boolean {
-  return version >= 4
+  return isSupportedHashVersion(version) && version >= 4
 }
 
 /** Recompute a stored event's hash under its own rules. */
