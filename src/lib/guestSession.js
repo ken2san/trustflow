@@ -2,8 +2,9 @@
 // The guest Hirer's credential for one contract.
 //
 // A guest Hirer has no auth.users row, so they cannot present a JWT. When they
-// accept an invite, validate-invite-token issues a guest_access_token (90-day
-// TTL) bound to that contract. That token is how the log-event function knows a
+// accept an invite, validate-invite-token issues a guest_access_token (30-day
+// TTL — see supabase/functions/_shared/eventWriteRules.ts for why that number)
+// bound to that contract. That token is how the log-event function knows a
 // request is genuinely from the party who accepted — it is the guest half of
 // server-side identity derivation.
 //
@@ -56,7 +57,7 @@ export function getGuestAgreementLabel(contractId) {
  * The credential was being stored and then only ever read by callers that
  * already knew which contract they wanted — so a guest who navigated away
  * after accepting had no route back. Their token sat in this browser for its
- * full 90 days, unusable, while the invitation link told them their record
+ * full lifetime, unusable, while the invitation link told them their record
  * was "reachable from the access link you were given when you accepted",
  * which was never given: acceptance shows a screen, not a link.
  *

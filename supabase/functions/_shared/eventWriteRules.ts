@@ -51,6 +51,70 @@ export function idempotencyOutcome(
 }
 
 /**
+ * How long a guest access token stays valid, in days.
+ *
+ * **30, reduced from 90** (reviewer finding M3). It lives here, next to
+ * `guestCredentialStillValid`, because the two functions that mint one —
+ * `validate-invite-token` at acceptance and `reissue-guest-access` when the
+ * owner replaces it — each had their own `const GUEST_ACCESS_TOKEN_TTL_DAYS =
+ * 90`, and two copies of a security lifetime is one copy too many.
+ *
+ * WHY 30 AND NOT LESS. This token is a bearer credential sitting in one
+ * browser's localStorage, and it is also the counterparty's **only** route back
+ * to their own record — there is no account to sign into, and
+ * `src/lib/guestSession.js` exists because a guest who navigated away had no
+ * way back at all. So the lifetime has to outlast the deal and a reasonable
+ * period of looking at the record afterwards. 30 days covers the small service
+ * agreements this is built for end to end, plus weeks of reading, while cutting
+ * the window a forwarded or screenshotted link stays usable by two thirds.
+ *
+ * WHY NOT LONGER. Nothing expires it early. Re-issuing is the only revocation
+ * this system has, and it needs the owner to act, so an unnoticed leak stays
+ * live for the whole TTL.
+ *
+ * WHAT IT COSTS. A counterparty who comes back on day 31 is refused and has to
+ * ask the owner to re-issue — a path that exists, is tested, and records
+ * `access.reissued`. That is a real cost, paid deliberately: the alternative is
+ * a credential that works for a quarter of a year after anyone involved has
+ * stopped thinking about the deal.
+ *
+ * Changing this affects tokens minted AFTER a deploy. Tokens already issued
+ * keep the expiry stored on their row; nothing rewrites them, and nothing
+ * should — shortening a credential already granted would lock out a
+ * counterparty who did nothing wrong.
+ */
+export const GUEST_ACCESS_TOKEN_TTL_DAYS = 30
+
+/**
+ * Compare two strings in time that does not depend on where they first differ.
+ *
+ * Hand-written rather than `node:crypto`'s `timingSafeEqual`, deliberately.
+ * This module is bundled into Deno Edge Functions and this commit cannot be
+ * deploy-tested, so introducing a `node:` specifier would mean shipping a
+ * runtime dependency whose availability in that runtime I could not verify
+ * first. Twelve lines of arithmetic have no such question, and the unit tests
+ * exercise them in the same way the functions will.
+ *
+ * The length difference is not hidden and does not need to be: both values are
+ * 36-character UUIDs when they are anything at all, and a caller already knows
+ * the length of the token it sent. What is hidden is the position of the first
+ * mismatch, which is the part that would otherwise be recoverable one
+ * character at a time.
+ */
+function secretEquals(stored: string, presented: string): boolean {
+  // Compare over the stored length regardless, so a short or long candidate
+  // costs the same as a wrong one of the right length.
+  let differences = stored.length ^ presented.length
+  for (let i = 0; i < stored.length; i++) {
+    // charCodeAt past the end is NaN, and NaN | 0 is 0 — a value no real
+    // character shares with a UUID's alphabet, so a truncated candidate cannot
+    // match by falling off the end.
+    differences |= stored.charCodeAt(i) ^ (presented.charCodeAt(i) | 0)
+  }
+  return differences === 0
+}
+
+/**
  * Is this guest capability still the one the contract carries, and still live?
  *
  * The same test as at the start of the request, meant to be applied again
@@ -65,6 +129,19 @@ export function idempotencyOutcome(
  * value is a UUID the server minted, and anything looser would widen what
  * counts as the credential. A row with no token, no expiry, or an expiry that
  * does not parse is not a credential — absent is refused, never waved through.
+ *
+ * The equality is constant-time, and the honest reason is hygiene rather than
+ * a demonstrated attack. `!==` on strings returns at the first differing
+ * character, so the time it takes is a function of a secret. Whether that is
+ * *exploitable* here is another matter and the answer is almost certainly no:
+ * an attacker would have to already know the `contract_id`, and then recover
+ * 122 bits of v4 UUID one character at a time through the Supabase gateway and
+ * a Deno isolate, over the internet, with every request also doing a database
+ * read. Nobody is doing that. It is changed because a credential comparison
+ * that leaks timing is the kind of thing that stays flagged in every review
+ * until it is fixed, the fix costs six lines and no behaviour, and
+ * defence-in-depth on the one secret compare in this codebase is cheap.
+ * Reviewer finding M3.
  */
 export function guestCredentialStillValid(
   contract: {
@@ -76,7 +153,7 @@ export function guestCredentialStillValid(
 ): boolean {
   if (!contract || !presentedToken) return false
   if (typeof contract.guest_access_token !== 'string') return false
-  if (contract.guest_access_token !== presentedToken) return false
+  if (!secretEquals(contract.guest_access_token, presentedToken)) return false
   const expires = contract.guest_access_token_expires_at
   if (typeof expires !== 'string' || !expires) return false
   const expiresAt = new Date(expires)

@@ -50,6 +50,7 @@
 // that production got what E2E tested; this pin only stops the input drifting
 // on its own.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
+import { corsHeaders } from '../_shared/cors.ts'
 import {
   GENESIS_HASH, canonicalVersionOf, payloadHash,
   buildAgreementSnapshot,
@@ -59,16 +60,12 @@ import {
   recomputeFromCanonicalBlock,
 } from '../_shared/guestEventView.ts'
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-guest-access-token',
-}
-
-const json = (body: unknown, status: number) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS, 'Content-Type': 'application/json' },
-  })
+// CORS is per request now, from ../_shared/cors.ts: the allowed origin depends
+// on who asked, so there is no constant to share. A caller that sends no Origin
+// — every server-side client, including the harnesses and anything following
+// /agent-protocol.md — is unaffected. The header list lives there too, as one
+// union for all four functions; see that file for why that is safer than a
+// per-function list.
 
 const MAX_EVENTS = 500
 
@@ -128,7 +125,20 @@ function describeActor(
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(req) })
+
+  // Built here, not at module scope, because the allowed origin depends on
+  // this request. Every `json(...)` call below is inside this handler, so the
+  // signature stays two arguments and no call site changed — which matters for
+  // a commit that cannot be deploy-tested: there is no third argument to forget
+  // at one of the twenty-odd refusal paths.
+  const cors = corsHeaders(req)
+  const json = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+
 
   try {
     const guestToken = req.headers.get('x-guest-access-token')

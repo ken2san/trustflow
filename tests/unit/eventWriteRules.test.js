@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
-  isolationFaultLine,
+  GUEST_ACCESS_TOKEN_TTL_DAYS, createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome, isolationFaultLine,
 } from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
@@ -235,5 +234,62 @@ describe('isolationFaultLine — the refusal an operator has to see', () => {
   it('still produces a line when the database sent no message', () => {
     expect(isolationFaultLine('reissue-guest-access', { code: 'TF005' }))
       .toContain('(no message)')
+  })
+})
+
+
+// ── The guest credential: lifetime and comparison ───────────────────────────
+
+describe('the guest access token lifetime', () => {
+  it('is 30 days, in one place', () => {
+    // Reduced from 90 (reviewer finding M3). Pinned so the number cannot drift
+    // back silently, and so the two functions that mint a token keep reading it
+    // from here rather than carrying their own copies, which is what they did.
+    expect(GUEST_ACCESS_TOKEN_TTL_DAYS).toBe(30)
+  })
+
+  it('still outlasts a deal and a period of reading it afterwards', () => {
+    // The guarantee the number has to keep: this token is the counterparty's
+    // only route back to their own record, so a value small enough to be tidy
+    // would lock them out of the thing the product exists to give them.
+    expect(GUEST_ACCESS_TOKEN_TTL_DAYS).toBeGreaterThanOrEqual(14)
+  })
+})
+
+describe('comparing a presented guest token', () => {
+  const token = '8a1c3f6e-0000-4000-8000-0123456789ab'
+  const row = at => ({
+    guest_access_token: token,
+    guest_access_token_expires_at: at,
+  })
+  const future = new Date(Date.now() + 86_400_000).toISOString()
+
+  it('accepts the token it stored', () => {
+    expect(guestCredentialStillValid(row(future), token)).toBe(true)
+  })
+
+  it('refuses a token that differs only in the last character', () => {
+    // The case a short-circuiting compare would answer fastest, and the one a
+    // constant-time compare must answer in the same time as any other.
+    expect(guestCredentialStillValid(row(future), token.slice(0, -1) + 'c')).toBe(false)
+  })
+
+  it('refuses a token that differs only in the first character', () => {
+    expect(guestCredentialStillValid(row(future), '9' + token.slice(1))).toBe(false)
+  })
+
+  it('refuses a truncated token, which must not match by running out', () => {
+    // charCodeAt past the end is NaN; the comparison folds that to a value no
+    // character shares, so a prefix cannot pass.
+    expect(guestCredentialStillValid(row(future), token.slice(0, 20))).toBe(false)
+    expect(guestCredentialStillValid(row(future), '')).toBe(false)
+  })
+
+  it('refuses a token with the right prefix and extra characters', () => {
+    expect(guestCredentialStillValid(row(future), token + 'x')).toBe(false)
+  })
+
+  it('refuses a case-folded token', () => {
+    expect(guestCredentialStillValid(row(future), token.toUpperCase())).toBe(false)
   })
 })

@@ -449,7 +449,8 @@ paths:
       x-trustflow-status: live
       description: |
         Owner authority only, re-checked inside the transaction. Overwrites
-        `guest_access_token`, restarts the 90-day window, and appends
+        `guest_access_token`, restarts its window — 30 days, from
+        `_shared/eventWriteRules.ts`, reduced from 90 — and appends
         `access.reissued` in the same transaction — which is how a reader knows
         the events after it may not be the same person as the ones before.
 

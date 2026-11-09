@@ -49,27 +49,27 @@
 // that production got what E2E tested; this pin only stops the input drifting
 // on its own.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
+import { corsHeaders } from '../_shared/cors.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import { shownTermsDigest } from '../_shared/shownTerms.ts'
-import { eventWriteFault, isolationFaultLine } from '../_shared/eventWriteRules.ts'
+import {
+  GUEST_ACCESS_TOKEN_TTL_DAYS, eventWriteFault, isolationFaultLine,
+} from '../_shared/eventWriteRules.ts'
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-const json = (body: unknown, status: number) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS, 'Content-Type': 'application/json' },
-  })
+// CORS is per request now, from ../_shared/cors.ts: the allowed origin depends
+// on who asked, so there is no constant to share. A caller that sends no Origin
+// — every server-side client, including the harnesses and anything following
+// /agent-protocol.md — is unaffected. The header list lives there too, as one
+// union for all four functions; see that file for why that is safer than a
+// per-function list.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Guest access token validity — generous, covers a typical contract's lifetime.
-const GUEST_ACCESS_TOKEN_TTL_DAYS = 90
+// GUEST_ACCESS_TOKEN_TTL_DAYS now comes from ../_shared/eventWriteRules.ts,
+// which also holds the check that enforces it. It was 90 here and 90 there.
 
 // A concurrent append can move the chain tip between reading it and committing.
 // The transaction refuses rather than linking to the wrong predecessor, and we
@@ -87,7 +87,20 @@ const STATUS_RESPONSES: Record<string, { error: string, status: number }> = {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(req) })
+
+  // Built here, not at module scope, because the allowed origin depends on
+  // this request. Every `json(...)` call below is inside this handler, so the
+  // signature stays two arguments and no call site changed — which matters for
+  // a commit that cannot be deploy-tested: there is no third argument to forget
+  // at one of the twenty-odd refusal paths.
+  const cors = corsHeaders(req)
+  const json = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+
 
   try {
     const {
