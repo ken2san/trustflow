@@ -337,7 +337,8 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
   }
 
   return (
-    <div className="space-y-10 animate-fade-in-up max-w-2xl mx-auto">
+    <>
+    <div className="space-y-10 animate-fade-in-up max-w-2xl mx-auto pb-28">
 
       {/* Header */}
       <div className="text-center space-y-3">
@@ -435,13 +436,6 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       {/* CTAs */}
       <div className="flex flex-col gap-3 max-w-md mx-auto w-full pb-8">
         <button
-          onClick={() => setStage('identify')}
-          className="w-full py-5 bg-white text-[#020617] rounded-[24px] font-black text-lg flex items-center justify-center gap-3 hover:bg-indigo-400 hover:text-white transition-all shadow-2xl"
-        >
-          Review Agreement
-          <ArrowRight className="w-5 h-5" />
-        </button>
-        <button
           onClick={onDecline}
           className="w-full py-4 border border-white/10 rounded-[24px] font-bold text-slate-400 hover:text-white hover:border-white/20 transition-all flex items-center justify-center gap-2 text-sm"
         >
@@ -453,6 +447,16 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
         </p>
       </div>
     </div>
+    <div className="fixed inset-x-0 bottom-0 z-20 bg-[#020617] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <button
+        onClick={() => setStage('identify')}
+        className="w-full max-w-md mx-auto py-5 bg-white text-[#020617] rounded-[24px] font-black text-lg flex items-center justify-center gap-3 hover:bg-indigo-400 hover:text-white transition-all shadow-2xl"
+      >
+        Review Agreement
+        <ArrowRight className="w-5 h-5" />
+      </button>
+    </div>
+    </>
   );
 };
 

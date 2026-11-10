@@ -195,6 +195,9 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   //    this product does. Those claims are the thing most worth reading blind.
   await expect(page.getByText(ACCEPTED.project_name).first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Who does the work')).toBeVisible();
+  const reviewButton = page.getByRole('button', { name: 'Review Agreement' });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(reviewButton).toBeInViewport({ ratio: 1 });
   const details = page.locator('details').filter({ hasText: 'Details: what you get by joining' });
   await expect(details).not.toHaveAttribute('open');
   await details.locator('summary').click();
