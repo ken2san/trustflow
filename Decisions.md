@@ -136,7 +136,12 @@ event. **New acceptances do not write it either:** `accept_invitation` leaves it
 NULL, so from 2026-11-10 the column covers only the rows the backfill reached.
 NULL means "ask the evidence", so this is incomplete rather than wrong. Making
 acceptance write it is the follow-up that has to land before anything reads the
-column (Task 38, F1).
+column (Task 38, F1). **Written as `20261110150000_accept_writes_snapshot_version.sql`,
+NOT APPLIED anywhere yet** (Codex reviews first, then E2E, then production on
+the owner's word). It reads the **earliest** acceptance after the insert, not
+the event being written, so the column agrees with the reader on contracts that
+already held an acceptance, and it re-runs the backfill for rows accepted in
+between.
 
 **What it is not.** Not a rehash: no event is rewritten and no stored hash
 recomputed. Not an agreed term: it is absent from the agreement snapshot, so it
