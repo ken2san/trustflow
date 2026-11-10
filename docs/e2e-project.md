@@ -52,8 +52,11 @@ Verified with data rather than inference: production's newest contract is
 ## Rebuilding from migrations — and what that test found
 
 `supabase db push` has **no `--project-ref` flag**. Either link, or pass a
-connection string. The repo stays linked to production so that a bare
-`supabase db push` still means production; the E2E project is targeted explicitly:
+connection string. **The repo's CLI link is on E2E** (`yqjtawffpesplqyurlpj`;
+check with `supabase projects list`, the `●` row), so a bare `supabase db push`
+means **E2E**. Production is never reached through the link: it is pushed only
+with an explicit `--db-url` (2026-11-10, Task 44), and the link is not moved
+there and back. Either project can be targeted explicitly:
 
 ```
 supabase db push --db-url "postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres" \
@@ -184,8 +187,11 @@ so they are written down rather than rediscovered.
 project sat one behind — `20260929000200_delete_unaccepted_drafts` was in
 production and not here, so neither the `owner_delete_unaccepted_draft` policy
 nor the `delete` grant existed and deleting a draft removed nothing. Now at
-parity (29). Pushing here needs the explicit `--db-url` form; a bare
-`supabase db push` means production, deliberately.
+parity (29). Since then the link has moved to this project, so a bare
+`supabase db push` now means E2E. Production takes the explicit `--db-url` form
+instead, with its own password from the same 1Password item. Confirm the `●`
+row in `supabase projects list` before any push, because the meaning of a bare
+`db push` follows the link, not this document.
 
 The database password for this project is in **1Password, `Private` /
 `Supabase_Kenji`**, in the field `trustflow e2e password DB` — alongside
