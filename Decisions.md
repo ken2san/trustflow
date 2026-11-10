@@ -1100,7 +1100,7 @@ means "no token is recorded" and not that one was never obtained.
 - Direct browser → freetsa.org — rejected; CORS-blocked in production browsers
 - On-chain timestamping — deferred to Phase 4+ (cost and complexity unjustified at prototype stage)
 
-**Consequences (historical)**: while it existed, all contract events went through the Edge Function and `src/lib/tsa.js` selected the path. Neither is present now, and no event in this system carries a token.
+**Consequences (historical)**: while it existed, all contract events went through the Edge Function and `src/lib/tsa.js` selected the path. Neither is present now, so **there is no current writer that obtains or stores a token** — no new event can carry one. That is a statement about writers, not about history: `events.tsa_token` is a nullable column, any value written while the proxy existed is preserved untouched, and this entry does not assert that every historical row is empty. The exported `tsa_token_present` is a boolean, so a row with no token exports `false`, meaning "no token is recorded on this event" and not that one was never obtained.
 
 ---
 
