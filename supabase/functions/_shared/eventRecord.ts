@@ -347,6 +347,26 @@ export async function acceptedSnapshotVersion(
     .eq('contract_id', contractId)
     .eq('type', ACCEPTANCE_TYPE)
     .order('created_at', { ascending: true })
+    // `id` breaks the tie, and it has to be here because the backfill in
+    // 20261109210000 orders by (created_at, id) and the two must agree. They
+    // did not: this read ordered by created_at alone, so on two acceptances
+    // sharing a timestamp — one valid, one malformed — the migration and the
+    // writers could pick different rows, and the cached column would disagree
+    // with the refusal the writers were already making. Codex's finding 1 on
+    // the Task 30 re-review, and my own comment in that migration had claimed
+    // they matched.
+    //
+    // Ties cannot be CREATED any more: `events_require_monotonic_created_at`
+    // (20261108121500) refuses an event whose created_at is not strictly later
+    // than the last on the same contract. They can still be READ — rows
+    // written before that trigger existed are exactly why it was added — so
+    // the order has to be total for historical rows, not merely for the ones
+    // today's writers produce.
+    //
+    // Ascending `id`, matching the migration. `log-event` and
+    // `reissue-guest-access` use (created_at desc, id desc) for the chain tip,
+    // which is the same rule read from the other end.
+    .order('id', { ascending: true })
     .limit(1)
     .maybeSingle()
 

@@ -668,3 +668,89 @@ describe('a draft that is accepted mid-write', () => {
     expect(calls()).toBe(3)
   })
 })
+
+// ── Two acceptances sharing a timestamp ─────────────────────────────────────
+//
+// Codex's finding 1 on the Task 30 re-review. The backfill in
+// 20261109210000 orders acceptances by (created_at, id); this reader ordered by
+// created_at alone. On two acceptances with the same stamp — one valid, one
+// malformed — the migration and the writers could pick different rows, so the
+// cached column would disagree with the refusal the writers were already
+// making. My comment in that migration had claimed the two matched.
+//
+// Ties cannot be created any anymore: events_require_monotonic_created_at
+// refuses an event not strictly later than the last on its contract. They can
+// still be READ, because rows written before that trigger are exactly why it
+// was added — so the order has to be total over historical rows.
+
+describe('the order this reader asks the database for', () => {
+  /** Records the query it was built into, so the ordering can be asserted. */
+  const recordingAdmin = (rows) => {
+    const calls = { order: [], eq: [], limit: null }
+    const chain = {
+      from: () => chain,
+      select: () => chain,
+      eq: (col, val) => { calls.eq.push([col, val]); return chain },
+      order: (col, opts) => { calls.order.push([col, opts?.ascending]); return chain },
+      limit: (n) => { calls.limit = n; return chain },
+      // Resolve the way PostgREST would: apply the recorded ordering to the
+      // supplied rows, so the assertion is about the RESULT and not only about
+      // which methods were called.
+      maybeSingle: async () => {
+        const sorted = [...rows].sort((a, b) => {
+          for (const [col, asc] of calls.order) {
+            const dir = asc === false ? -1 : 1
+            if (a[col] < b[col]) return -1 * dir
+            if (a[col] > b[col]) return 1 * dir
+          }
+          return 0
+        })
+        return { data: sorted[0] ?? null, error: null }
+      },
+    }
+    return { chain, calls }
+  }
+
+  const acceptance = (id, created_at, snapshot_version) => ({
+    id, created_at,
+    payload: { _agreement: snapshot_version === undefined ? {} : { snapshot_version } },
+  })
+
+  it('asks for a total order: created_at then id, both ascending', async () => {
+    const { chain, calls } = recordingAdmin([acceptance('a', 't1', 1)])
+    await acceptedSnapshotVersion(chain, 'c', { mustBeAccepted: true })
+    expect(calls.order).toEqual([['created_at', true], ['id', true]])
+    expect(calls.limit).toBe(1)
+  })
+
+  it('takes the lower id when two acceptances share a timestamp', async () => {
+    // The malformed one sorts first by id, so the answer must be the refusal —
+    // the same answer the migration now produces for the same rows.
+    const { chain } = recordingAdmin([
+      acceptance('b-later-id', '2026-11-09T00:00:00.000Z', 1),
+      acceptance('a-earlier-id', '2026-11-09T00:00:00.000Z', 'not-a-number'),
+    ])
+    expect(await acceptedSnapshotVersion(chain, 'c', { mustBeAccepted: true }))
+      .toEqual({ error: 'accepted_version_unsupported' })
+  })
+
+  it('takes the valid one when it is the lower id, so the refusal is not blanket', async () => {
+    const { chain } = recordingAdmin([
+      acceptance('b-later-id', '2026-11-09T00:00:00.000Z', 'not-a-number'),
+      acceptance('a-earlier-id', '2026-11-09T00:00:00.000Z', 1),
+    ])
+    expect(await acceptedSnapshotVersion(chain, 'c', { mustBeAccepted: true }))
+      .toEqual({ version: 1 })
+  })
+
+  it('still prefers the earlier timestamp over the lower id', async () => {
+    // created_at leads; id only breaks a tie. The valid row here is later in
+    // time and lower in id, and must lose.
+    const { chain } = recordingAdmin([
+      acceptance('a-low-id', '2026-11-09T00:00:01.000Z', 1),
+      acceptance('z-high-id', '2026-11-09T00:00:00.000Z', 'not-a-number'),
+    ])
+    expect(await acceptedSnapshotVersion(chain, 'c', { mustBeAccepted: true }))
+      .toEqual({ error: 'accepted_version_unsupported' })
+  })
+})

@@ -31,10 +31,40 @@ alter table contracts
   add column if not exists accepted_snapshot_version integer;
 
 comment on column contracts.accepted_snapshot_version is
-  'The agreement-snapshot version this contract''s acceptance bound, copied '
-  'from the acceptance event''s payload. NULL means no acceptance has been '
-  'recorded, or its version could not be read. Not part of the agreement and '
-  'not hashed into any event.';
+  'The agreement-snapshot version number this contract''s acceptance recorded, '
+  'copied from the acceptance event''s payload. NOT a guarantee that the value '
+  'is a version any build supports: a consumer must check it and refuse an '
+  'unsupported one, exactly as acceptedSnapshotVersion does. NULL means no '
+  'usable version is recorded here and the acceptance event is the only '
+  'source. Not part of the agreement and not hashed into any event.';
+
+-- WHAT THIS COLUMN PROMISES, AND WHAT IT DOES NOT.
+--
+-- Codex's finding 2 on the Task 30 re-review: the backfill keeps any integral
+-- JSON number in signed-integer range, including 0 and 2, while the runtime
+-- supports only version 1. So "unsupported versions stay NULL" — which my
+-- Task 29 report claimed — was too broad. It is documented rather than
+-- restricted, and the reason is that the two are different facts:
+--
+--   NULL          no usable version is recorded HERE. Could be a draft with no
+--                 acceptance, or an acceptance whose payload this migration
+--                 could not read. A consumer must fall back to the acceptance
+--                 event, which is what distinguishes those cases today —
+--                 `accepted_version_missing` versus
+--                 `accepted_version_unsupported`.
+--   a number      the number the acceptance actually recorded. It MAY be a
+--                 version no build supports.
+--
+-- Restricting the column to `= 1` would collapse "the acceptance bound v2" into
+-- "nothing is recorded", and those must stay apart: the first is a refusal with
+-- a reason, the second is a fallback. A cache of evidence should not be more
+-- opinionated than the evidence, and a column that silently drops a value it
+-- does not recognise is how a future version becomes invisible.
+--
+-- THE CONTRACT FOR THE CONSUMER, when the functions are changed to read this:
+-- treat a non-NULL value exactly as `acceptedSnapshotVersion` treats the value
+-- it reads from the event — check it against the supported set and refuse if it
+-- is not there. Treat NULL as "ask the evidence", not as "version 1".
 
 -- Derived from evidence that already exists, not invented.
 --
@@ -219,6 +249,88 @@ begin
 
   if pg_temp.accepted_snapshot_version(v_contract) is distinct from 1 then
     raise exception 'SELF-TEST FAILED: a valid earliest acceptance was not read'
+      using errcode = 'TF900';
+  end if;
+
+  -- TWO ACCEPTANCES SHARING A TIMESTAMP. Codex's finding 1 on the Task 30
+  -- re-review: this file ordered by (created_at, id) while the runtime reader
+  -- ordered by created_at alone, so on a tie the two could pick different rows
+  -- and the cached column would disagree with the refusal the writers were
+  -- already making. Both order by (created_at, id) now, and this is the case
+  -- that pins it.
+  --
+  -- The trigger has to come off to build the fixture, and that is the point
+  -- rather than a workaround: `events_require_monotonic_created_at`
+  -- (20261108121500) refuses an event whose created_at is not strictly later
+  -- than the last on its contract, so a tie cannot be CREATED today. It can
+  -- still be READ — rows written before that trigger existed are exactly why
+  -- it was added — and this backfill reads history. Disabling it here models
+  -- those grandfathered rows; the rollback below puts it back, and the DDL is
+  -- transactional so a failure part-way cannot leave it off.
+  insert into public.contracts (project_name, dod, amount_minor, currency, state)
+  values ('backfill self-test: tied stamps, lower id invalid', '["self-test"]'::jsonb,
+          1, 'JPY', 'TERMS_ACCEPTED')
+  returning id into v_contract;
+
+  alter table public.events disable trigger events_require_monotonic_created_at;
+
+  -- Same instant. The LOWER id carries the malformed version, so the answer
+  -- must be NULL: id breaks the tie, and the lower one wins.
+  insert into public.events (id, type, contract_id, actor_id, created_at, event_hash, payload)
+  values ('00000000-0000-4000-8000-00000000aaaa', 'dod.consent_recorded', v_contract::text,
+          'migration-self-test', v_at, 'self-test-tie-a',
+          '{"_agreement": {"snapshot_version": "1"}}'::jsonb);
+
+  insert into public.events (id, type, contract_id, actor_id, created_at, event_hash,
+                             prev_event_hash, payload)
+  values ('00000000-0000-4000-8000-00000000bbbb', 'dod.consent_recorded', v_contract::text,
+          'migration-self-test', v_at, 'self-test-tie-b', 'self-test-tie-a',
+          '{"_agreement": {"snapshot_version": 1}}'::jsonb);
+
+  if pg_temp.accepted_snapshot_version(v_contract) is not null then
+    raise exception 'SELF-TEST FAILED: on tied stamps a higher-id acceptance overrode the lower one'
+      using errcode = 'TF900';
+  end if;
+
+  -- The control, so the NULL above is the tie-break and not the tie itself:
+  -- same instant, and this time the LOWER id is the valid one.
+  insert into public.contracts (project_name, dod, amount_minor, currency, state)
+  values ('backfill self-test: tied stamps, lower id valid', '["self-test"]'::jsonb,
+          1, 'JPY', 'TERMS_ACCEPTED')
+  returning id into v_contract;
+
+  insert into public.events (id, type, contract_id, actor_id, created_at, event_hash, payload)
+  values ('00000000-0000-4000-8000-00000000cccc', 'dod.consent_recorded', v_contract::text,
+          'migration-self-test', v_at, 'self-test-tie-c',
+          '{"_agreement": {"snapshot_version": 1}}'::jsonb);
+
+  insert into public.events (id, type, contract_id, actor_id, created_at, event_hash,
+                             prev_event_hash, payload)
+  values ('00000000-0000-4000-8000-00000000dddd', 'dod.consent_recorded', v_contract::text,
+          'migration-self-test', v_at, 'self-test-tie-d', 'self-test-tie-c',
+          '{"_agreement": {"snapshot_version": 2}}'::jsonb);
+
+  if pg_temp.accepted_snapshot_version(v_contract) is distinct from 1 then
+    raise exception 'SELF-TEST FAILED: on tied stamps the lower-id acceptance was not read'
+      using errcode = 'TF900';
+  end if;
+
+  alter table public.events enable trigger events_require_monotonic_created_at;
+
+  -- And the documented behaviour of finding 2, asserted so the comment cannot
+  -- drift from the code: an unsupported NUMBER is kept, not nulled. The
+  -- consumer refuses it; this column records what the acceptance said.
+  insert into public.contracts (project_name, dod, amount_minor, currency, state)
+  values ('backfill self-test: unsupported number kept', '["self-test"]'::jsonb,
+          1, 'JPY', 'TERMS_ACCEPTED')
+  returning id into v_contract;
+
+  insert into public.events (type, contract_id, actor_id, created_at, event_hash, payload)
+  values ('dod.consent_recorded', v_contract::text, 'migration-self-test',
+          v_at, 'self-test-unsupported', '{"_agreement": {"snapshot_version": 2}}'::jsonb);
+
+  if pg_temp.accepted_snapshot_version(v_contract) is distinct from 2 then
+    raise exception 'SELF-TEST FAILED: an unsupported numeric version was not preserved as recorded'
       using errcode = 'TF900';
   end if;
 
