@@ -233,7 +233,13 @@ Deno.serve(async (req: Request) => {
       // assertion can be checked as well as its authorship. null rather than
       // false for older rows: TrustFlow never attested their payloads, which is
       // a different statement from the check having failed.
-      const substanceValid = hashVersion >= 3 && row.payload_hash
+      //
+      // `versionSupported` first, because `hashVersion >= 3` would ASSUME the
+      // payload semantics of a version this build does not know — Codex's
+      // finding 1 again, one line along. An unknown version's payload coverage
+      // is unknown, not v3-style.
+      const versionSupported = isSupportedHashVersion(hashVersion)
+      const substanceValid = versionSupported && hashVersion >= 3 && row.payload_hash
         ? (await payloadHash(row.payload ?? {})) === row.payload_hash
         : null
 
@@ -270,8 +276,12 @@ Deno.serve(async (req: Request) => {
           // and only for a version this build understands, so an unknown one
           // does not claim to bind anything.
           binds_whole_agreement: bindsWholeAgreement(hashVersion),
-          // Stated rather than left to be inferred from three nulls.
-          canonical_version_supported: isSupportedHashVersion(hashVersion),
+          // Stated rather than left to be inferred from three nulls. The
+          // version itself is here too: `canonical` carries it for
+          // recomputation, but a reader deciding what to do about an
+          // unsupported row should not have to go looking in another object.
+          canonical_version: hashVersion,
+          canonical_version_supported: versionSupported,
         },
       })
 
@@ -345,9 +355,21 @@ Deno.serve(async (req: Request) => {
         server_attested:      attested.length,
         client_asserted:      events.length - attested.length,
         // True only if every row that carries the material to be checked
-        // checks out. Rows with nothing to verify do not count as verified.
+        // checks out, AND every row could actually be checked.
+        //
+        // `hash_valid !== false` alone was not enough: an unsupported version
+        // sets it to null, null is not false, and a row nothing had verified
+        // therefore counted towards `verified: true`. Codex's finding 1. A
+        // guest reading `verified` takes it as "this record holds up"; it must
+        // not mean "nothing contradicted it".
         verified: attested.length > 0
+          && attested.every(e => e.integrity.canonical_version_supported !== false)
           && attested.every(e => e.integrity.hash_valid !== false && e.integrity.chain_linked !== false),
+        // Separate from `verified: false`, which would read as a detected
+        // problem. This says the question could not be answered here.
+        unsupported_canonical_versions: events
+          .filter(e => e.integrity.canonical_version_supported === false)
+          .map(e => ({ id: e.id, version: e.integrity.canonical_version ?? null })),
         truncated: (rows?.length ?? 0) >= MAX_EVENTS,
         // Whether the detail fields are tamper-evident, stated rather than left
         // for a reader to discover. True only when every returned event was

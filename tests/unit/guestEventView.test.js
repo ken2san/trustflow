@@ -3,9 +3,7 @@ import {
   CANONICAL_INPUTS, PAYLOAD_ALLOWLIST, filterPayload, canonicalInputsOf,
   missingCanonicalInputs, recomputeFromCanonicalBlock, guestVerificationNotes,
 } from '../../supabase/functions/_shared/guestEventView.ts'
-import {
-  eventCanonical, HASH_VERSION,
-} from '../../supabase/functions/_shared/eventCanonical.ts'
+import { HASH_VERSION, SNAPSHOT_VERSION, eventCanonical } from '../../supabase/functions/_shared/eventCanonical.ts'
 import { buildEventRecord } from '../../supabase/functions/_shared/eventRecord.ts'
 import { bearerAssurance } from '../../supabase/functions/_shared/authAssurance.ts'
 
@@ -39,6 +37,7 @@ const rowFrom = (record) => ({
 })
 
 const assertionRecord = (overrides = {}) => buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
   type: 'performance.asserted',
   contract: CONTRACT,
   actorId: 'guest:invited@example.test',
@@ -202,5 +201,65 @@ describe('guestVerificationNotes', () => {
     const notes = guestVerificationNotes()
     expect(notes.independently_verifiable).toHaveLength(3)
     expect(notes.independently_verifiable.join(' ')).not.toContain('identity')
+  })
+})
+
+// ── The guest trail must not call an unverifiable row verified ──────────────
+//
+// The counterparty's half of Codex's finding 1. `chain.verified` is what a
+// guest — or an agent acting for one — reads to decide whether the record holds
+// up, and `hash_valid !== false` let a row nothing had checked count towards
+// it.
+
+describe('an unsupported canonical version in the guest trail', () => {
+  it('is reported as unrecomputable rather than as a mismatch', async () => {
+    const block = {
+      id: 'e1', type: 'performance.asserted', contract_id: 'c', actor_id: 'a',
+      dod_hash: null, created_at: '2026-11-01T00:00:00.000Z',
+      prev_event_hash: 'GENESIS', payload_hash: null, agreement_hash: null,
+      hash_version: 5,
+    }
+    // null, not a throw and not a wrong digest: the guest path must stay
+    // readable when one row comes from a build this one does not know.
+    expect(await recomputeFromCanonicalBlock(block)).toBeNull()
+  })
+
+  it('treats a recorded zero as unknown, not as a legacy row', async () => {
+    // Codex's finding 3 through this reader. Before the nullish fix, 0 was
+    // falsy, so this block was recomputed as v2 — a version it never claimed —
+    // and would have produced a digest that could accidentally match.
+    const block = {
+      id: 'e1', type: 'performance.asserted', contract_id: 'c', actor_id: 'a',
+      dod_hash: null, created_at: '2026-11-01T00:00:00.000Z',
+      prev_event_hash: 'GENESIS', payload_hash: null, agreement_hash: null,
+      hash_version: 0,
+    }
+    expect(await recomputeFromCanonicalBlock(block)).toBeNull()
+  })
+
+  it('still recomputes every version it does support', async () => {
+    // The regression guard: the guard must not have made a known row
+    // unverifiable.
+    for (const hash_version of [1, 2, 3, 4]) {
+      const block = {
+        id: 'e1', type: 'performance.asserted', contract_id: 'c', actor_id: 'a',
+        dod_hash: null, created_at: '2026-11-01T00:00:00.000Z',
+        prev_event_hash: 'GENESIS', payload_hash: 'p', agreement_hash: 'a',
+        hash_version,
+      }
+      expect(await recomputeFromCanonicalBlock(block), `v${hash_version}`)
+        .toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
+  it('infers a version only when none was recorded', async () => {
+    const noVersion = {
+      id: 'e1', type: 'work.submitted', contract_id: 'c', actor_id: 'a',
+      dod_hash: null, created_at: '2026-11-01T00:00:00.000Z',
+      prev_event_hash: null, payload_hash: null, agreement_hash: null,
+    }
+    expect(await recomputeFromCanonicalBlock(noVersion)).toMatch(/^[0-9a-f]{64}$/)
+    expect(await recomputeFromCanonicalBlock({ ...noVersion, prev_event_hash: 'x' }))
+      .toMatch(/^[0-9a-f]{64}$/)
   })
 })

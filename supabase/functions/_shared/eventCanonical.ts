@@ -309,7 +309,14 @@ export function eventCanonical(event: CanonicalEvent, version: number): string {
  * they carry a chain link at all.
  */
 export function canonicalVersionOf(row: { hash_version?: number | null, prev_event_hash?: string | null }): number {
-  if (row.hash_version) return row.hash_version
+  // Nullish, not truthy. `if (row.hash_version)` sent a RECORDED ZERO down the
+  // legacy path, so `hash_version: 0` — an explicit "unknown", or a bug in
+  // whatever wrote it — came back as 1 or 2 and was then verified as a version
+  // it never claimed, never reaching `isSupportedHashVersion`. Only an ABSENT
+  // or null version may be inferred from the chain link; anything recorded is
+  // returned as recorded, and judged by the supported-version check.
+  // Codex's finding 3.
+  if (row.hash_version !== null && row.hash_version !== undefined) return row.hash_version
   return row.prev_event_hash ? 2 : 1
 }
 

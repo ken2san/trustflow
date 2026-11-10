@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  ACCEPTANCE_TYPE, buildEventRecord, acceptanceFacts, roleInAgreement,
-} from '../../supabase/functions/_shared/eventRecord.ts'
-import {
-  eventCanonical, canonicalVersionOf, payloadHash, sha256Hex, deriveAgreementHash,
-} from '../../supabase/functions/_shared/eventCanonical.ts'
+import { ACCEPTANCE_TYPE, acceptanceFacts, acceptedSnapshotVersion, buildEventRecord, roleInAgreement } from '../../supabase/functions/_shared/eventRecord.ts'
+import { SNAPSHOT_VERSION, canonicalVersionOf, deriveAgreementHash, eventCanonical, payloadHash, sha256Hex } from '../../supabase/functions/_shared/eventCanonical.ts'
 import {
   assuranceFromClaims, bearerAssurance,
 } from '../../supabase/functions/_shared/authAssurance.ts'
@@ -30,6 +26,7 @@ const CONTRACT = {
 }
 
 const acceptance = (overrides = {}) => buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
   type: ACCEPTANCE_TYPE,
   contract: CONTRACT,
   actorId: `guest:${CONTRACT.hirer_email}`,
@@ -114,6 +111,7 @@ describe('what an acceptance records', () => {
     // A forwarded invitation is legitimate, and the divergence is evidence.
     const forwarded = { ...CONTRACT, hirer_email: 'someone.else@example.test' }
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: ACCEPTANCE_TYPE, contract: forwarded,
       actorId: 'guest:someone.else@example.test', party: 'guest_hirer',
       assurance: bearerAssurance('invite_token'),
@@ -132,6 +130,7 @@ describe('what an acceptance records', () => {
     // the same class of defect as an unbound price.
     const claimed = 'accepted.just.now@example.test'
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: ACCEPTANCE_TYPE,
       contract: { ...CONTRACT, hirer_email: claimed },
       actorId: `guest:${claimed}`, party: 'guest_hirer',
@@ -145,6 +144,7 @@ describe('what an acceptance records', () => {
 
   it('states the accepting party is the performer when they do the work', async () => {
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: ACCEPTANCE_TYPE,
       contract: { ...CONTRACT, performed_by: 'counterparty' },
       actorId: 'guest:x@example.test', party: 'guest_hirer',
@@ -159,6 +159,7 @@ describe('what an acceptance records', () => {
   it('does not attach the agreement to an ordinary assertion', async () => {
     // Only the acceptance carries the snapshot. Every event carries the hash.
     const asserted = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.asserted', contract: CONTRACT,
       actorId: 'earner-uuid', party: 'earner',
       assurance: assuranceFromClaims({
@@ -217,6 +218,7 @@ describe('the authentication an event records', () => {
     // an account session an invitation capability whenever the party was the
     // counterparty.
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.accepted', contract: CONTRACT,
       actorId: 'hirer-uuid', party: 'guest_hirer',
       assurance: assuranceFromClaims(accountClaims),
@@ -231,6 +233,7 @@ describe('the authentication an event records', () => {
   it('tells the two bearer credentials apart', async () => {
     const accepting = await acceptance()
     const later = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.accepted', contract: CONTRACT,
       actorId: 'guest:invited@example.test', party: 'guest_hirer',
       assurance: bearerAssurance('guest_access_token'),
@@ -246,6 +249,7 @@ describe('the authentication an event records', () => {
 
   it('records the method and level the session actually carried', async () => {
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.asserted', contract: CONTRACT,
       actorId: 'earner-uuid', party: 'earner',
       assurance: assuranceFromClaims(accountClaims, new Date(1791731776 * 1000)),
@@ -262,6 +266,7 @@ describe('the authentication an event records', () => {
     // shown to the counterparty, and created_at minus the relative figure
     // reproduces the instant for anyone who needs it.
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.asserted', contract: CONTRACT,
       actorId: 'earner-uuid', party: 'earner',
       assurance: assuranceFromClaims(accountClaims),
@@ -277,6 +282,7 @@ describe('the authentication an event records', () => {
 
   it('answers the act-binding question rather than leaving the field out', async () => {
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.asserted', contract: CONTRACT,
       actorId: 'earner-uuid', party: 'earner',
       // As recent as it is possible to be: authenticated this instant.
@@ -294,6 +300,7 @@ describe('the authentication an event records', () => {
 
   it('cannot be forged by a caller sending its own assurance', async () => {
     const record = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.asserted', contract: CONTRACT,
       actorId: 'guest:invited@example.test', party: 'guest_hirer',
       assurance: bearerAssurance('guest_access_token'),
@@ -455,6 +462,7 @@ describe('an acceptance records whether the terms check happened', () => {
 
   it('is an acceptance fact only, and not attached to other events', async () => {
     const asserted = await buildEventRecord({
+    agreementSnapshotVersion: SNAPSHOT_VERSION,
       type: 'performance.asserted',
       contract: CONTRACT,
       actorId: 'earner:1',
@@ -467,5 +475,103 @@ describe('an acceptance records whether the terms check happened', () => {
     // Nothing else in the protocol has a presentation to bind, and a
     // terms-check field on an unrelated act would imply one.
     expect(asserted.payload).not.toHaveProperty('_shown_terms_check')
+  })
+})
+
+// ── Which terms a later act refers to ───────────────────────────────────────
+//
+// Codex's finding 2 on Task 26: `buildEventRecord` derived the agreement hash
+// with whatever snapshot builder happened to be CURRENT. Correct only while one
+// version has ever existed. The day a v2 builder arrives, a later assertion on
+// a v1 agreement would reference terms in a shape nobody accepted — and the
+// acceptance it follows would still be v1.
+
+describe('the snapshot version a later act refers to', () => {
+  const base = {
+    type: 'performance.asserted',
+    contract: CONTRACT,
+    actorId: 'earner-uuid',
+    party: 'earner',
+    assurance: assuranceFromClaims({ aal: 'aal1', amr: [{ method: 'otp', timestamp: 1 }] }),
+    payload: {},
+    prevEventHash: 'abc',
+  }
+
+  it('is required, and an omitted one is refused rather than defaulted', async () => {
+    // A required TypeScript parameter is still undefined at run time, and
+    // deriveAgreementHash's own default would then build the current version —
+    // silently, which is the whole failure. So the guard is a runtime check.
+    await expect(buildEventRecord({ ...base })).rejects
+      .toThrow(/requires agreementSnapshotVersion/)
+  })
+
+  it('refuses a version this build cannot build', async () => {
+    for (const version of [2, 0, null, '1', 1.5]) {
+      await expect(
+        buildEventRecord({ ...base, agreementSnapshotVersion: version }),
+        `version ${String(version)}`,
+      ).rejects.toThrow(/requires agreementSnapshotVersion/)
+    }
+  })
+
+  it('derives the same hash as before when the accepted version is the current one', async () => {
+    // The proof this guard changed no output today: there is one version, so
+    // every act passes 1, and 1 is what the old code produced.
+    const record = await buildEventRecord({ ...base, agreementSnapshotVersion: 1 })
+    expect(record.agreement_hash).toBe(await deriveAgreementHash(CONTRACT))
+    expect(record.agreement_hash).toBe(await deriveAgreementHash(CONTRACT, 1))
+  })
+})
+
+describe('reading the accepted snapshot version back', () => {
+  // A stand-in for the admin client: one chainable builder whose terminal
+  // `maybeSingle()` resolves to whatever the test wants the table to hold.
+  const admin = result => {
+    const chain = {
+      from: () => chain, select: () => chain, eq: () => chain,
+      order: () => chain, limit: () => chain,
+      maybeSingle: async () => result,
+    }
+    return chain
+  }
+
+  it('returns the version the acceptance recorded', async () => {
+    const got = await acceptedSnapshotVersion(
+      admin({ data: { payload: { _agreement: { snapshot_version: 1 } } }, error: null }),
+      'contract-id',
+    )
+    expect(got).toEqual({ version: 1 })
+  })
+
+  it('falls back to the current version when nothing has been accepted yet', async () => {
+    // A draft can carry events before anyone accepts it — api-e2e asserts an
+    // owner may record against an unaccepted draft — and nothing is pinned
+    // then, so the current version is the right answer rather than a guess.
+    expect(await acceptedSnapshotVersion(admin({ data: null, error: null }), 'c'))
+      .toEqual({ version: SNAPSHOT_VERSION })
+  })
+
+  it('refuses when the read fails, rather than treating it as "no acceptance"', async () => {
+    // The two look identical to a caller that only checks for rows, and one of
+    // them means the terms are pinned to something this act cannot see.
+    expect(await acceptedSnapshotVersion(admin({ data: null, error: { message: 'boom' } }), 'c'))
+      .toEqual({ error: 'accepted_version_unreadable' })
+  })
+
+  it('refuses an accepted version this build cannot build', async () => {
+    for (const recorded of [2, 99, 0, null, undefined, '1']) {
+      expect(
+        await acceptedSnapshotVersion(
+          admin({ data: { payload: { _agreement: { snapshot_version: recorded } } }, error: null }),
+          'c',
+        ),
+        `recorded ${String(recorded)}`,
+      ).toEqual({ error: 'accepted_version_unsupported' })
+    }
+  })
+
+  it('refuses an acceptance whose payload has no agreement at all', async () => {
+    expect(await acceptedSnapshotVersion(admin({ data: { payload: {} }, error: null }), 'c'))
+      .toEqual({ error: 'accepted_version_unsupported' })
   })
 })

@@ -321,3 +321,136 @@ describe('event ordering', () => {
     expect(doc.integrity_status).toBe('CHAIN_LINK_BROKEN')
   })
 })
+
+// ── An unverifiable row must not come out VERIFIED ──────────────────────────
+//
+// Codex's finding 1 on Task 26. Marking an unsupported version's per-event
+// hash_match as null was not enough: both aggregators accepted "anything but
+// false", so a row this build cannot check at all still counted towards the
+// headline. A v5 row with a stored hash and an intact chain link produced
+// integrity_status: VERIFIED — the one word a reader takes at face value — for
+// a row nothing had verified.
+
+/**
+ * A row from a build that knows a canonical version this one does not. Its
+ * stored hash is deliberately well-formed and its chain link correct: the point
+ * is that everything *checkable* checks out and the version still cannot be.
+ */
+function futureVersionEvent({ id, type, actorId, createdAt, prevHash, version = 5 }) {
+  return {
+    id, type, contract_id: CONTRACT, actor_id: actorId, dod_hash: null,
+    created_at: createdAt, prev_event_hash: prevHash, hash_version: version,
+    payload: {}, payload_hash: sha(stableStringify({})),
+    event_hash: 'a-hash-this-build-cannot-recompute', tsa_token: null,
+  }
+}
+
+describe('a canonical version this build cannot verify', () => {
+  it('does not roll up to VERIFIED, even with an intact chain', async () => {
+    const first = attestedEvent({
+      id: 'e1', type: 'contract.accepted', actorId: 'a', createdAt: '2026-11-01T00:00:00.000Z',
+      prevHash: 'GENESIS',
+    })
+    const second = futureVersionEvent({
+      id: 'e2', type: 'performance.asserted', actorId: 'a',
+      createdAt: '2026-11-02T00:00:00.000Z', prevHash: first.event_hash,
+    })
+    const doc = (await build([first, second])).trustflow_audit_trail
+
+    expect(doc.integrity_status).toBe('INDETERMINATE_UNSUPPORTED_VERSION')
+    expect(doc.integrity_status).not.toBe('VERIFIED')
+  })
+
+  it('names which events and which versions, rather than making a reader hunt', async () => {
+    const first = attestedEvent({
+      id: 'e1', type: 'contract.accepted', actorId: 'a', createdAt: '2026-11-01T00:00:00.000Z',
+      prevHash: 'GENESIS',
+    })
+    const second = futureVersionEvent({
+      id: 'e2', type: 'performance.asserted', actorId: 'a',
+      createdAt: '2026-11-02T00:00:00.000Z', prevHash: first.event_hash, version: 7,
+    })
+    const doc = (await build([first, second])).trustflow_audit_trail
+    const unsupported = doc.unsupported_canonical_versions
+
+    expect(unsupported.count).toBe(1)
+    expect(unsupported.event_ids).toEqual(['e2'])
+    expect(unsupported.versions).toEqual([7])
+    expect(unsupported.meaning).toMatch(/neither confirmed nor refuted/)
+  })
+
+  it('says per event that the version was not supported, and refuses to guess its payload coverage', async () => {
+    const only = futureVersionEvent({
+      id: 'e1', type: 'performance.asserted', actorId: 'a',
+      createdAt: '2026-11-01T00:00:00.000Z', prevHash: 'GENESIS',
+    })
+    const [ev] = (await build([only])).trustflow_audit_trail.events
+    expect(ev._export_verification.canonical_version_supported).toBe(false)
+    expect(ev._export_verification.hash_match).toBeNull()
+    expect(ev._export_verification.binds_whole_agreement).toBe(false)
+    // v5 >= 3 would have asserted v3 payload semantics for a shape this build
+    // has never seen.
+    expect(ev._export_verification.substance_match).toBeNull()
+  })
+
+  it('still reports a real mismatch as a mismatch, which outranks an unknown', async () => {
+    // A detected problem is a finding; an unknown version is the absence of
+    // one. The finding has to win, or a tampered row could hide behind an
+    // unsupported neighbour.
+    const first = attestedEvent({
+      id: 'e1', type: 'contract.accepted', actorId: 'a', createdAt: '2026-11-01T00:00:00.000Z',
+      prevHash: 'GENESIS',
+    })
+    const tampered = { ...first, id: 'e2', event_hash: 'definitely-wrong' }
+    const unknown = futureVersionEvent({
+      id: 'e3', type: 'performance.asserted', actorId: 'a',
+      createdAt: '2026-11-03T00:00:00.000Z', prevHash: 'definitely-wrong',
+    })
+    const doc = (await build([first, tampered, unknown])).trustflow_audit_trail
+    expect(doc.integrity_status).toBe('HASH_MISMATCH_DETECTED')
+  })
+
+  it('leaves a fully known, intact trail VERIFIED and says nothing was unsupported', async () => {
+    // The regression guard for all of the above: the ordinary case must not
+    // have become indeterminate.
+    const first = attestedEvent({
+      id: 'e1', type: 'contract.accepted', actorId: 'a', createdAt: '2026-11-01T00:00:00.000Z',
+      prevHash: 'GENESIS',
+    })
+    const second = attestedEvent({
+      id: 'e2', type: 'performance.asserted', actorId: 'a',
+      createdAt: '2026-11-02T00:00:00.000Z', prevHash: first.event_hash,
+    })
+    const doc = (await build([first, second])).trustflow_audit_trail
+    expect(doc.integrity_status).toBe('VERIFIED')
+    expect(doc.unsupported_canonical_versions).toBeNull()
+  })
+
+  it('treats a RECORDED ZERO as unknown, not as a legacy row', async () => {
+    // Codex's finding 3, through the real reader rather than the primitive.
+    // `if (row.hash_version)` sent 0 down the legacy path, where it verified
+    // as v1 or v2 — a version it never claimed.
+    const zero = {
+      ...futureVersionEvent({
+        id: 'e1', type: 'performance.asserted', actorId: 'a',
+        createdAt: '2026-11-01T00:00:00.000Z', prevHash: null,
+      }),
+      hash_version: 0,
+    }
+    const [ev] = (await build([zero])).trustflow_audit_trail.events
+    expect(ev._export_verification.canonical_version).toBe(0)
+    expect(ev._export_verification.canonical_version_supported).toBe(false)
+    expect(ev._export_verification.hash_match).toBeNull()
+  })
+
+  it('still infers v1 or v2 for a row with no recorded version at all', async () => {
+    // Absent must keep working: these are the pre-column rows.
+    const legacy = legacyEvent({
+      id: 'e1', type: 'work.submitted', actorId: 'a', createdAt: '2026-11-01T00:00:00.000Z',
+    })
+    const [ev] = (await build([legacy])).trustflow_audit_trail.events
+    expect(ev._export_verification.canonical_version).toBe(1)
+    expect(ev._export_verification.canonical_version_supported).toBe(true)
+    expect(ev._export_verification.hash_match).toBe(true)
+  })
+})

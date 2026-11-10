@@ -52,7 +52,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
 import { ACCEPTANCE_TYPE, buildEventRecord } from '../_shared/eventRecord.ts'
 import { bearerAssurance } from '../_shared/authAssurance.ts'
-import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
+import { GENESIS_HASH, SNAPSHOT_VERSION } from '../_shared/eventCanonical.ts'
 import { shownTermsDigest } from '../_shared/shownTerms.ts'
 import {
   GUEST_ACCESS_TOKEN_TTL_DAYS, eventWriteFault, isolationFaultLine,
@@ -285,6 +285,10 @@ Deno.serve(async (req: Request) => {
 
       const event = await buildEventRecord({
         type: ACCEPTANCE_TYPE,
+        // This act is what DEFINES the accepted version, so it is the one
+        // place the current version is the right answer. Every later act reads
+        // the version back off this event.
+        agreementSnapshotVersion: SNAPSHOT_VERSION,
         contract: agreementRow,
         // The guest has no auth.users row; their identity on this contract is
         // the address they accepted with, exactly as log-event resolves it.

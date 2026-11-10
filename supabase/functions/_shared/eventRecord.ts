@@ -15,8 +15,7 @@
 // must be the same kind of object, or a verifier has to know which produced it.
 
 import {
-  HASH_VERSION, eventCanonical, payloadHash, deriveDodHash, sha256Hex,
-  buildAgreementSnapshot, deriveAgreementHash,
+  HASH_VERSION, SNAPSHOT_VERSION, buildAgreementSnapshot, deriveAgreementHash, deriveDodHash, eventCanonical, isSupportedSnapshotVersion, payloadHash, sha256Hex,
 } from './eventCanonical.ts'
 import {
   type AuthAssurance, assuranceForRecord, legacyAuthMethod,
@@ -157,7 +156,7 @@ export interface EventRecord {
  */
 export async function buildEventRecord({
   type, contract, actorId, party, assurance, payload, prevEventHash,
-  idempotencyKey = null, shownTermsCheck = null,
+  idempotencyKey = null, shownTermsCheck = null, agreementSnapshotVersion,
 }: {
   type: string
   contract: Record<string, unknown>
@@ -180,6 +179,31 @@ export async function buildEventRecord({
    * presentation to bind.
    */
   shownTermsCheck?: ShownTermsCheck | null
+  /**
+   * The snapshot version this agreement was ACCEPTED under, for any act that
+   * follows an acceptance. **Required**, with no default.
+   *
+   * WHY NO DEFAULT. It used to call `deriveAgreementHash(contract)`, which
+   * silently meant "whatever version is current". That is correct only while
+   * exactly one version has ever existed. The day a v2 builder becomes current,
+   * a later assertion on a v1 agreement would derive a v2 hash and so reference
+   * terms in a shape nobody accepted — and the acceptance it was meant to
+   * follow would still be v1. A default would make that failure silent and
+   * dateless; a required parameter makes every caller say which version it
+   * means. Codex's finding 2.
+   *
+   * The acceptance itself passes the current version: it is the act that
+   * DEFINES the accepted version. Every later act passes the version it read
+   * off the acceptance, and refuses to write if it cannot establish it.
+   *
+   * NOTE WHAT THIS IS NOT. It does not copy the accepted hash forward. The
+   * hash is still derived from the CURRENT contract row, because that is what
+   * makes a post-acceptance edit visible: a later act carrying a different
+   * agreement_hash is how a reader learns the terms moved. Pinning the hash
+   * instead would destroy that, which is a change to what the record means and
+   * is written up as a proposed decision rather than made here.
+   */
+  agreementSnapshotVersion: number
 }): Promise<EventRecord> {
   const roleHere = roleInAgreement(party, contract.performed_by as string | null)
 
@@ -198,12 +222,29 @@ export async function buildEventRecord({
     ...(type === ACCEPTANCE_TYPE ? acceptanceFacts(contract, shownTermsCheck) : {}),
   }
 
+  // A required TypeScript parameter is still `undefined` at run time, and
+  // `deriveAgreementHash`'s own default would then quietly build the CURRENT
+  // version — which is the exact failure this parameter exists to prevent. So
+  // it is checked here, where the record is assembled, rather than trusted to
+  // the type.
+  if (!isSupportedSnapshotVersion(agreementSnapshotVersion)) {
+    throw new Error(
+      'buildEventRecord requires agreementSnapshotVersion: the snapshot version '
+      + 'this agreement was accepted under. Got '
+      + `${String(agreementSnapshotVersion)}.`,
+    )
+  }
+
   // The terms this event refers to, derived from the agreement rather than
   // taken from the caller, and the whole deal alongside them — dod_hash alone
   // left price and date unbound.
   const [termsHash, agreementHash, substanceHash] = await Promise.all([
     deriveDodHash(contract.dod),
-    deriveAgreementHash(contract),
+    // Under the version this agreement was accepted under — see
+    // `agreementSnapshotVersion`. `deriveAgreementHash` refuses a version it
+    // cannot build, so an unsupported accepted version fails the write rather
+    // than producing a hash against a shape this build guessed at.
+    deriveAgreementHash(contract, agreementSnapshotVersion),
     payloadHash(recordedPayload),
   ])
 
@@ -234,4 +275,62 @@ export async function buildEventRecord({
     hash_version: HASH_VERSION,
     idempotency_key: idempotencyKey,
   }
+}
+
+/**
+ * The snapshot version an agreement was ACCEPTED under, for an act that follows
+ * the acceptance.
+ *
+ * WHY THIS NEEDS A READ. The accepted version lives in the acceptance event's
+ * payload, under `_agreement.snapshot_version` — it is not on the contract row,
+ * because the row is mutable and the accepted terms are not. So a later act has
+ * to go and look. One indexed select per write, on a path that already makes
+ * several round trips.
+ *
+ * THREE OUTCOMES, AND THE THIRD IS THE POINT:
+ *
+ *   {version}            the acceptance says which version it bound.
+ *   {version: current}   there is NO acceptance yet. A draft can legitimately
+ *                        carry events before anyone accepts it, and nothing is
+ *                        pinned, so the current version is correct rather than
+ *                        a guess.
+ *   {error}              the read failed, or the acceptance records a version
+ *                        this build cannot build. **Refuse the write.** An act
+ *                        that cannot establish which terms it refers to must
+ *                        not be recorded referring to a guess — the whole
+ *                        append-only point is that nobody can fix it later.
+ *
+ * A read failure is deliberately not treated as "no acceptance": those look
+ * identical to a caller that only checks for rows, and one of them means the
+ * terms are pinned to something unknown.
+ */
+export async function acceptedSnapshotVersion(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  contractId: string,
+): Promise<{ version: number } | { error: string }> {
+  const { data, error } = await admin
+    .from('events')
+    .select('payload')
+    .eq('contract_id', contractId)
+    .eq('type', ACCEPTANCE_TYPE)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) return { error: 'accepted_version_unreadable' }
+  if (!data) return { version: SNAPSHOT_VERSION }
+
+  const recorded = (data.payload as Record<string, unknown> | null)?._agreement as
+    Record<string, unknown> | null | undefined
+  const version = recorded?.snapshot_version
+
+  // An acceptance with no recorded version predates nothing — every acceptance
+  // this system has ever written carries one, because buildAgreementSnapshot
+  // has always included it. Absent means the payload is not the shape this
+  // build understands, which is the same situation as an unsupported version.
+  if (!isSupportedSnapshotVersion(version)) {
+    return { error: 'accepted_version_unsupported' }
+  }
+  return { version: version as number }
 }

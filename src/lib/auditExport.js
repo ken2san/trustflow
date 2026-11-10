@@ -80,7 +80,13 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
 
     // From v3 the payload is bound into the hash. null for older rows — their
     // substance was never attested, which is not the same as failing a check.
-    const substanceMatch = hashVersion >= 3 && ev.payload_hash
+    //
+    // `versionSupported` first: `hashVersion >= 3` would assume the payload
+    // semantics of a version this build has never seen, and then report the
+    // result as a check. Caught by its own test, after the same fix had been
+    // made in the guest view and missed here — which is the argument for
+    // testing both readers rather than the shared primitive.
+    const substanceMatch = versionSupported && hashVersion >= 3 && ev.payload_hash
       ? (await payloadHash(ev.payload ?? {})) === ev.payload_hash
       : null
     const hashMatch = ev.event_hash && recomputedHash !== null
@@ -122,6 +128,18 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
     prevHash = ev.event_hash ?? prevHash
   }
 
+  // `!== false` is deliberate for the two cases where null means "there was
+  // never anything to check": a pre-chain row has no stored hash, and a pre-v3
+  // row never had its payload attested. Neither is a failure.
+  //
+  // It is NOT acceptable for a row this build cannot verify at all. Codex's
+  // finding 1: an unsupported version sets hash_match to null, null is not
+  // false, and the export therefore came out VERIFIED — the one word a reader
+  // takes at face value — for a row nothing had checked. So unsupported rows
+  // are counted separately and they dominate the aggregate.
+  const unsupportedEvents = verifiedEvents.filter(
+    ev => ev._export_verification.canonical_version_supported === false
+  )
   const allHashesMatch = verifiedEvents.every(
     ev => ev._export_verification.hash_match !== false
       && ev._export_verification.substance_match !== false
@@ -161,10 +179,24 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
       // consistent. It does NOT mean any TSA token was cryptographically
       // verified (see tsa_token_present) and it does NOT mean writes are
       // guaranteed atomic against concurrent inserts (see eventLog.js).
+      // A detected mismatch still outranks an unverifiable row: a broken hash
+      // is a finding, while an unknown version is an absence of one. But
+      // VERIFIED is reserved for a trail where every row was actually checked.
       integrity_status:
-        allHashesMatch && chainIntact ? 'VERIFIED'
-        : !allHashesMatch ? 'HASH_MISMATCH_DETECTED'
-        : 'CHAIN_LINK_BROKEN',
+        !allHashesMatch ? 'HASH_MISMATCH_DETECTED'
+        : !chainIntact ? 'CHAIN_LINK_BROKEN'
+        : unsupportedEvents.length > 0 ? 'INDETERMINATE_UNSUPPORTED_VERSION'
+        : 'VERIFIED',
+      // Named so a reader does not have to scan every event to find out why.
+      unsupported_canonical_versions: unsupportedEvents.length === 0 ? null : {
+        count: unsupportedEvents.length,
+        event_ids: unsupportedEvents.map(ev => ev.id ?? null),
+        versions: [...new Set(unsupportedEvents.map(
+          ev => ev._export_verification.canonical_version))],
+        meaning: 'This build cannot compute the canonical form for these '
+          + 'versions, so their hashes were neither confirmed nor refuted. '
+          + 'Verify them with a build that supports the version.',
+      },
       counterparty_consent: counterpartyConsent,
       meta,
       events:               verifiedEvents,

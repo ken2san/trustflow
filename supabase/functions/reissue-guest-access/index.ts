@@ -54,7 +54,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
-import { buildEventRecord } from '../_shared/eventRecord.ts'
+import {
+  acceptedSnapshotVersion, buildEventRecord,
+} from '../_shared/eventRecord.ts'
 import { assuranceFromClaims, claimsFromVerifiedJwt } from '../_shared/authAssurance.ts'
 import {
   GUEST_ACCESS_TOKEN_TTL_DAYS, createdAtFollows, eventWriteFault, isolationFaultLine,
@@ -164,6 +166,14 @@ Deno.serve(async (req: Request) => {
     // clock is not ahead of the chain tip.
     let clockRefusal: string | null = null
 
+    // The version this agreement was accepted under. Read once, outside the
+    // retry loop — contention moves the chain tip, not the accepted terms. A
+    // reissue always follows an acceptance, so in practice this is the
+    // acceptance's own version; it is read rather than assumed for the same
+    // reason log-event reads it. Codex's finding 2.
+    const accepted = await acceptedSnapshotVersion(admin, contract_id)
+    if ('error' in accepted) return json({ error: accepted.error }, 409)
+
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
       const { data: tip } = await admin
         .from('events')
@@ -189,6 +199,7 @@ Deno.serve(async (req: Request) => {
         assurance: ownerAssurance,
         payload: {},
         prevEventHash: prevHash,
+        agreementSnapshotVersion: accepted.version,
       })
 
       // Abandoned rather than written: a stamp that is not later than its
