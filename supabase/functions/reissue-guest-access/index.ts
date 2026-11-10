@@ -166,12 +166,21 @@ Deno.serve(async (req: Request) => {
     // clock is not ahead of the chain tip.
     let clockRefusal: string | null = null
 
-    // The version this agreement was accepted under. Read once, outside the
-    // retry loop — contention moves the chain tip, not the accepted terms. A
-    // reissue always follows an acceptance, so in practice this is the
-    // acceptance's own version; it is read rather than assumed for the same
-    // reason log-event reads it. Codex's finding 2.
-    const accepted = await acceptedSnapshotVersion(admin, contract_id)
+    // The version this agreement was accepted under.
+    //
+    // `mustBeAccepted: true` unconditionally, because a reissue replaces an
+    // ALREADY-ACCEPTED counterparty's credential — there is no such thing as
+    // reissuing access to a draft, and the RPC below checks the row state
+    // itself. So a missing acceptance event here is not "nothing is pinned
+    // yet", it is "the evidence this act refers to cannot be found", and the
+    // helper refuses. Codex's finding 3 on the re-review: the helper used to
+    // default in that case and this function appended against the assumption.
+    //
+    // Read once rather than per attempt, unlike log-event: this function only
+    // ever appends after an acceptance, so there is no draft-then-accepted
+    // transition for a retry to cross. The acceptance's version cannot change
+    // under it — an acceptance is written once and the chain is append-only.
+    const accepted = await acceptedSnapshotVersion(admin, contract_id, { mustBeAccepted: true })
     if ('error' in accepted) return json({ error: accepted.error }, 409)
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {

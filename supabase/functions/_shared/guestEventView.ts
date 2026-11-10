@@ -193,3 +193,71 @@ export function guestVerificationNotes(): Record<string, unknown> {
     ],
   }
 }
+
+/** One shaped event, as far as `chainSummary` needs to understand it. */
+export interface ShapedEvent {
+  id?: string | null
+  integrity: {
+    trust_model?: string
+    hash_valid?: boolean | null
+    chain_linked?: boolean | null
+    substance_valid?: boolean | null
+    canonical_version?: number | null
+    canonical_version_supported?: boolean | null
+  }
+}
+
+/**
+ * What the guest is told about the trail as a whole.
+ *
+ * EXTRACTED HERE BECAUSE IT WAS WRONG TWICE, in code no test could reach. It
+ * lived inline in `guest-contract-events`, where exercising it meant bundling a
+ * whole Edge Function, so both mistakes were found by review rather than by a
+ * failing test:
+ *
+ *   1. `hash_valid !== false` counted a row whose version this build cannot
+ *      verify — null is not false — towards `verified: true`.
+ *   2. The fix for that was put inside `attested.every(...)`, and `attested`
+ *      means `trust_model === 'server_attested'`, which means
+ *      `hash_version >= 2`. So an unsupported version BELOW 2 —
+ *      `hash_version: 0` — was never examined by it. With one good v4 row
+ *      present the aggregate said `verified: true` while the same response
+ *      listed that row as unsupported.
+ *
+ * Moving it into a module a unit test can call is the actual remedy; the
+ * second fix on its own would have left the next one equally unreachable.
+ *
+ * `verified` means: at least one row carried server-attested material, EVERY
+ * row's canonical version is one this build can compute, and no attested row
+ * failed its hash or its chain link. A guest reads that word as "this record
+ * holds up" — it must not come to mean "nothing I happened to look at
+ * contradicted it".
+ */
+export function chainSummary(
+  events: ShapedEvent[],
+  { truncated }: { truncated: boolean },
+): Record<string, unknown> {
+  const attested = events.filter(e => e.integrity.trust_model === 'server_attested')
+  const unsupported = events.filter(e => e.integrity.canonical_version_supported === false)
+
+  return {
+    event_count:     events.length,
+    server_attested: attested.length,
+    client_asserted: events.length - attested.length,
+    verified: attested.length > 0
+      && unsupported.length === 0
+      && attested.every(e => e.integrity.hash_valid !== false && e.integrity.chain_linked !== false),
+    // Separate from `verified: false`, which would read as a detected problem.
+    // This says the question could not be answered here.
+    unsupported_canonical_versions: unsupported.map(
+      e => ({ id: e.id ?? null, version: e.integrity.canonical_version ?? null }),
+    ),
+    truncated,
+    // Whether the detail fields are tamper-evident, stated rather than left for
+    // a reader to discover. True only when every returned event was written
+    // under a canonical that binds its payload; events from before that are
+    // covered for authorship and timing but not for substance.
+    payload_covered_by_hash: events.length > 0
+      && events.every(e => e.integrity.substance_valid !== null),
+  }
+}

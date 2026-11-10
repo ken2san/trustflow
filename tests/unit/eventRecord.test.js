@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ACCEPTANCE_TYPE, acceptanceFacts, acceptedSnapshotVersion, buildEventRecord, roleInAgreement } from '../../supabase/functions/_shared/eventRecord.ts'
+import { ACCEPTANCE_TYPE, PRE_ACCEPTANCE_STATES, acceptanceFacts, acceptedSnapshotVersion, buildEventRecord, roleInAgreement } from '../../supabase/functions/_shared/eventRecord.ts'
 import { SNAPSHOT_VERSION, canonicalVersionOf, deriveAgreementHash, eventCanonical, payloadHash, sha256Hex } from '../../supabase/functions/_shared/eventCanonical.ts'
 import {
   assuranceFromClaims, bearerAssurance,
@@ -535,43 +535,136 @@ describe('reading the accepted snapshot version back', () => {
     return chain
   }
 
-  it('returns the version the acceptance recorded', async () => {
-    const got = await acceptedSnapshotVersion(
-      admin({ data: { payload: { _agreement: { snapshot_version: 1 } } }, error: null }),
-      'contract-id',
-    )
-    expect(got).toEqual({ version: 1 })
+  const read = (result, mustBeAccepted) =>
+    acceptedSnapshotVersion(admin(result), 'contract-id', { mustBeAccepted })
+
+  it('returns the version the acceptance recorded, in either mode', async () => {
+    const found = { data: { payload: { _agreement: { snapshot_version: 1 } } }, error: null }
+    expect(await read(found, false)).toEqual({ version: 1 })
+    expect(await read(found, true)).toEqual({ version: 1 })
   })
 
-  it('falls back to the current version when nothing has been accepted yet', async () => {
+  it('falls back to the current version for a draft that has no acceptance', async () => {
     // A draft can carry events before anyone accepts it — api-e2e asserts an
     // owner may record against an unaccepted draft — and nothing is pinned
     // then, so the current version is the right answer rather than a guess.
-    expect(await acceptedSnapshotVersion(admin({ data: null, error: null }), 'c'))
+    expect(await read({ data: null, error: null }, false))
       .toEqual({ version: SNAPSHOT_VERSION })
   })
 
-  it('refuses when the read fails, rather than treating it as "no acceptance"', async () => {
-    // The two look identical to a caller that only checks for rows, and one of
-    // them means the terms are pinned to something this act cannot see.
-    expect(await acceptedSnapshotVersion(admin({ data: null, error: { message: 'boom' } }), 'c'))
-      .toEqual({ error: 'accepted_version_unreadable' })
+  it('REFUSES a missing acceptance where one must exist', async () => {
+    // Codex's finding 3 on the re-review. A reissue, or any act on a contract
+    // whose state says it was accepted, must not append against an assumption
+    // when the evidence it should refer to cannot be found.
+    expect(await read({ data: null, error: null }, true))
+      .toEqual({ error: 'accepted_version_missing' })
+  })
+
+  it('refuses when the read fails, in either mode', async () => {
+    // A failed read and a missing row look identical to a caller that only
+    // checks for rows, and one of them means the terms are pinned to something
+    // this act cannot see.
+    for (const mustBeAccepted of [false, true]) {
+      expect(await read({ data: null, error: { message: 'boom' } }, mustBeAccepted))
+        .toEqual({ error: 'accepted_version_unreadable' })
+    }
   })
 
   it('refuses an accepted version this build cannot build', async () => {
     for (const recorded of [2, 99, 0, null, undefined, '1']) {
       expect(
-        await acceptedSnapshotVersion(
-          admin({ data: { payload: { _agreement: { snapshot_version: recorded } } }, error: null }),
-          'c',
-        ),
+        await read({ data: { payload: { _agreement: { snapshot_version: recorded } } }, error: null }, false),
         `recorded ${String(recorded)}`,
       ).toEqual({ error: 'accepted_version_unsupported' })
     }
   })
 
   it('refuses an acceptance whose payload has no agreement at all', async () => {
-    expect(await acceptedSnapshotVersion(admin({ data: { payload: {} }, error: null }), 'c'))
+    expect(await read({ data: { payload: {} }, error: null }, false))
       .toEqual({ error: 'accepted_version_unsupported' })
+  })
+
+  it('treats every state but the two pre-acceptance ones as accepted', () => {
+    // Listed as the pre-acceptance set rather than the accepted set, so a
+    // state added later refuses rather than defaults. Refusing a write is
+    // recoverable; recording one against a guessed version is not.
+    expect([...PRE_ACCEPTANCE_STATES].sort()).toEqual(['AWAITING_ACCEPTANCE', 'DRAFTING'])
+    for (const state of ['TERMS_ACCEPTED', 'AWAITING_CONFIRMATION', 'PERFORMANCE_ACCEPTED',
+      'CANCELLED', 'SETTLED', 'SOMETHING_ADDED_LATER', '']) {
+      expect(PRE_ACCEPTANCE_STATES.has(state), state).toBe(false)
+    }
+  })
+})
+
+// ── The version decision across a concurrent acceptance ─────────────────────
+//
+// Codex's finding 2 on the re-review. A draft permits owner events, so a writer
+// could read "no acceptance", cache the current version, and then have an
+// acceptance commit before its own insert — appending AFTER that acceptance
+// while carrying the assumption it made before the acceptance existed. During a
+// mixed-version rollout the acceptance could bind a version this writer cannot
+// build, and the write would not refuse.
+//
+// log-event now reads the accepted version per ATTEMPT, beside the chain tip.
+// What makes re-reading sufficient rather than merely likelier to be right is
+// `events_chain_no_fork_idx`, unique on (contract_id, prev_event_hash): an
+// acceptance committing between the tip read and the insert must claim the same
+// predecessor this attempt read, so the insert loses with 23505 and the loop
+// comes back and reads both again.
+//
+// This models that loop. It cannot model Postgres, so what it asserts is the
+// thing that is this module's to get right: a re-read after the acceptance
+// lands yields the acceptance's version, and an unsupported one refuses —
+// rather than the first read's answer being reused.
+
+describe('a draft that is accepted mid-write', () => {
+  /** An admin whose acceptance table changes between reads. */
+  const sequencedAdmin = (results) => {
+    let call = 0
+    const chain = {
+      from: () => chain, select: () => chain, eq: () => chain,
+      order: () => chain, limit: () => chain,
+      maybeSingle: async () => results[Math.min(call++, results.length - 1)],
+    }
+    return { admin: chain, calls: () => call }
+  }
+
+  const NONE = { data: null, error: null }
+  const acceptedAt = v => ({ data: { payload: { _agreement: { snapshot_version: v } } }, error: null })
+
+  it('sees no acceptance first, then the acceptance on the retry', async () => {
+    const { admin, calls } = sequencedAdmin([NONE, acceptedAt(1)])
+
+    // Attempt 1: nothing accepted yet, so the current version is correct.
+    expect(await acceptedSnapshotVersion(admin, 'c', { mustBeAccepted: false }))
+      .toEqual({ version: SNAPSHOT_VERSION })
+
+    // The acceptance commits here, and the insert loses the fork index. The
+    // loop re-reads rather than reusing what it learned.
+    expect(await acceptedSnapshotVersion(admin, 'c', { mustBeAccepted: false }))
+      .toEqual({ version: 1 })
+    expect(calls()).toBe(2)
+  })
+
+  it('refuses on the retry when the acceptance bound a version it cannot build', async () => {
+    // The failure the caching allowed: appending against the current version
+    // after an acceptance pinned something else. A second read is what turns
+    // that into a refusal.
+    const { admin } = sequencedAdmin([NONE, acceptedAt(2)])
+
+    expect(await acceptedSnapshotVersion(admin, 'c', { mustBeAccepted: false }))
+      .toEqual({ version: SNAPSHOT_VERSION })
+    expect(await acceptedSnapshotVersion(admin, 'c', { mustBeAccepted: false }))
+      .toEqual({ error: 'accepted_version_unsupported' })
+  })
+
+  it('does not let a first read be reused once an acceptance exists', async () => {
+    // Stated as its own assertion because the defect was precisely a value
+    // surviving across the loop: every attempt must ask again.
+    const { admin, calls } = sequencedAdmin([acceptedAt(1)])
+    for (let i = 0; i < 3; i++) {
+      await acceptedSnapshotVersion(admin, 'c', { mustBeAccepted: true })
+    }
+    expect(calls()).toBe(3)
   })
 })

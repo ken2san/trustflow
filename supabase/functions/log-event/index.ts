@@ -64,7 +64,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
 import { GENESIS_HASH } from '../_shared/eventCanonical.ts'
 import {
-  ACCEPTANCE_TYPE, acceptedSnapshotVersion, buildEventRecord, roleInAgreement,
+  ACCEPTANCE_TYPE, PRE_ACCEPTANCE_STATES, acceptedSnapshotVersion, buildEventRecord, roleInAgreement,
 } from '../_shared/eventRecord.ts'
 import {
   createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
@@ -290,7 +290,11 @@ Deno.serve(async (req: Request) => {
 
     const { data: contract, error: contractError } = await admin
       .from('contracts')
-      .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, performed_by, '
+      // `state` is selected for one reason: to know whether an acceptance MUST
+      // exist. A contract past AWAITING_ACCEPTANCE has been accepted, so a
+      // missing acceptance event means the evidence this act should refer to
+      // cannot be found — see acceptedSnapshotVersion's mustBeAccepted.
+      .select('id, state, project_name, dod, amount_jpy, amount_minor, currency, deadline, performed_by, '
         + 'earner_display_name, earner_user_id, invited_hirer_email, hirer_email, '
         + 'guest_access_token, guest_access_token_expires_at')
       .eq('id', contract_id)
@@ -356,21 +360,11 @@ Deno.serve(async (req: Request) => {
     // contention failure is a different fault.
     let clockRefusal: string | null = null
 
-    // Which snapshot version this agreement was accepted under. Read ONCE,
-    // outside the retry loop: contention moves the chain tip, never the
-    // accepted terms.
-    //
-    // A later act must refer to the terms in the shape they were accepted in.
-    // Today there is one shape and this is always 1, so the read changes no
-    // output — it is here so that the day there are two, this path already
-    // asks instead of assuming whatever is newest. Codex's finding 2.
-    const accepted = await acceptedSnapshotVersion(admin, contract_id)
-    if ('error' in accepted) {
-      // Refused rather than written against a guess. An append-only record of
-      // an act whose terms could not be established is worse than no record:
-      // nobody can correct it afterwards.
-      return json({ error: accepted.error }, 409)
-    }
+    // Whether an acceptance MUST exist for this contract. A contract still
+    // awaiting acceptance may legitimately carry owner events with none; past
+    // that, the acceptance is the evidence a later act refers to and its
+    // absence is a refusal rather than a default.
+    const mustBeAccepted = !PRE_ACCEPTANCE_STATES.has(String(contract.state ?? ''))
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
       const { data: tip } = await admin
@@ -389,6 +383,33 @@ Deno.serve(async (req: Request) => {
         .maybeSingle()
 
       const prevHash = tip?.event_hash ?? GENESIS_HASH
+
+      // THE ACCEPTED VERSION IS READ PER ATTEMPT, beside the tip, and that
+      // placement is the fix rather than an optimisation left undone.
+      //
+      // It used to be read once before the loop. A draft permits owner events,
+      // so a writer could read "no acceptance", cache the current version, and
+      // then have an acceptance commit before its own insert — appending after
+      // that acceptance while still carrying the assumption it made before it
+      // existed. During a mixed-version rollout the acceptance could have bound
+      // a different supported version, or one this writer cannot build, and the
+      // write would not have refused. Codex's finding 2 on the re-review.
+      //
+      // WHAT MAKES RE-READING SUFFICIENT, rather than merely likelier to be
+      // right: `events_chain_no_fork_idx` is unique on
+      // `(contract_id, prev_event_hash)`. Any acceptance that commits between
+      // this read and this insert must claim the same predecessor this attempt
+      // read, so the insert loses the race with 23505 and the loop comes back
+      // here and reads both again. The version decision is therefore tied to
+      // the state the successful append actually happened against — the
+      // existing index does the serialising, and nothing new has to.
+      const accepted = await acceptedSnapshotVersion(admin, contract_id, { mustBeAccepted })
+      if ('error' in accepted) {
+        // Refused rather than written against a guess. An append-only record of
+        // an act whose terms could not be established is worse than no record:
+        // nobody can correct it afterwards.
+        return json({ error: accepted.error }, 409)
+      }
 
       // Everything that makes this row evidence — the terms pin, the agreement
       // snapshot and its hash, the actor's role, how they were authenticated —

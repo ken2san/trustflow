@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  CANONICAL_INPUTS, PAYLOAD_ALLOWLIST, filterPayload, canonicalInputsOf,
-  missingCanonicalInputs, recomputeFromCanonicalBlock, guestVerificationNotes,
+  CANONICAL_INPUTS, PAYLOAD_ALLOWLIST, canonicalInputsOf, chainSummary, filterPayload, guestVerificationNotes, missingCanonicalInputs, recomputeFromCanonicalBlock,
 } from '../../supabase/functions/_shared/guestEventView.ts'
 import { HASH_VERSION, SNAPSHOT_VERSION, eventCanonical } from '../../supabase/functions/_shared/eventCanonical.ts'
 import { buildEventRecord } from '../../supabase/functions/_shared/eventRecord.ts'
@@ -261,5 +260,108 @@ describe('an unsupported canonical version in the guest trail', () => {
     expect(await recomputeFromCanonicalBlock(noVersion)).toMatch(/^[0-9a-f]{64}$/)
     expect(await recomputeFromCanonicalBlock({ ...noVersion, prev_event_hash: 'x' }))
       .toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+// ── The real chain aggregate ────────────────────────────────────────────────
+//
+// Codex's finding 1 on the Task 28 re-review, and the reason `chainSummary`
+// now lives in a module rather than inline in the Edge Function: this exact
+// mistake was made twice in code no unit test could reach.
+
+describe('what the guest is told about the trail as a whole', () => {
+  const shaped = (id, integrity) => ({ id, integrity: {
+    trust_model: 'server_attested',
+    hash_valid: true,
+    chain_linked: true,
+    substance_valid: true,
+    canonical_version: 4,
+    canonical_version_supported: true,
+    ...integrity,
+  } })
+
+  const summary = events => chainSummary(events, { truncated: false })
+
+  it('verifies a trail whose every row checks out', () => {
+    const out = summary([shaped('e1', {}), shaped('e2', {})])
+    expect(out.verified).toBe(true)
+    expect(out.unsupported_canonical_versions).toEqual([])
+    expect(out.server_attested).toBe(2)
+  })
+
+  // THE CASE THE REVIEW NAMED. A `hash_version: 0` row is classified
+  // client_asserted — trust_model is `hashVersion >= 2` — so it is NOT in
+  // `attested`. With a good v4 row beside it, `attested.every(...)` never
+  // examined it and the aggregate said verified: true while simultaneously
+  // listing it as unsupported.
+  it('does NOT verify a trail containing an unsupported zero-version row', () => {
+    const out = summary([
+      shaped('good', {}),
+      shaped('zero', {
+        trust_model: 'client_asserted',
+        canonical_version: 0,
+        canonical_version_supported: false,
+        hash_valid: null,
+        chain_linked: null,
+        substance_valid: null,
+      }),
+    ])
+    expect(out.verified).toBe(false)
+    expect(out.unsupported_canonical_versions).toEqual([{ id: 'zero', version: 0 }])
+  })
+
+  it('does not verify a trail with an unsupported FUTURE version either', () => {
+    const out = summary([
+      shaped('good', {}),
+      shaped('future', { canonical_version: 5, canonical_version_supported: false, hash_valid: null }),
+    ])
+    expect(out.verified).toBe(false)
+    expect(out.unsupported_canonical_versions).toEqual([{ id: 'future', version: 5 }])
+  })
+
+  it('refuses to verify for any unsupported version, whatever the trust model', () => {
+    // The first fix put the check inside `attested.every`, which made the
+    // answer depend on a classification that has nothing to do with whether
+    // the version is known. It must not.
+    for (const trust_model of ['server_attested', 'client_asserted']) {
+      const out = summary([
+        shaped('good', {}),
+        shaped('bad', { trust_model, canonical_version_supported: false, hash_valid: null }),
+      ])
+      expect(out.verified, trust_model).toBe(false)
+    }
+  })
+
+  it('still reports a genuine failure as unverified', () => {
+    expect(summary([shaped('e1', { hash_valid: false })]).verified).toBe(false)
+    expect(summary([shaped('e1', { chain_linked: false })]).verified).toBe(false)
+  })
+
+  it('does not verify a trail with nothing attested in it', () => {
+    const out = summary([shaped('e1', { trust_model: 'client_asserted' })])
+    expect(out.verified).toBe(false)
+    expect(out.client_asserted).toBe(1)
+  })
+
+  it('keeps null meaning "nothing to check" for the legacy cases', () => {
+    // A pre-chain row has no stored hash and a pre-v3 row never had its
+    // payload attested. Neither is a failure, and neither may become one.
+    const out = summary([
+      shaped('old', { hash_valid: null, chain_linked: null, canonical_version: 1 }),
+      shaped('new', {}),
+    ])
+    expect(out.verified).toBe(true)
+  })
+
+  it('passes truncation through rather than inferring it', () => {
+    expect(chainSummary([shaped('e1', {})], { truncated: true }).truncated).toBe(true)
+    expect(chainSummary([shaped('e1', {})], { truncated: false }).truncated).toBe(false)
+  })
+
+  it('reports payload coverage only when every row has it', () => {
+    expect(summary([shaped('e1', {})]).payload_covered_by_hash).toBe(true)
+    expect(summary([shaped('e1', {}), shaped('e2', { substance_valid: null })])
+      .payload_covered_by_hash).toBe(false)
+    expect(summary([]).payload_covered_by_hash).toBe(false)
   })
 })

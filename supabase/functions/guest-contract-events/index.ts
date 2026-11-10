@@ -57,8 +57,7 @@ import {
   buildAgreementSnapshot,
 } from '../_shared/eventCanonical.ts'
 import {
-  canonicalInputsOf, filterPayload, guestVerificationNotes,
-  recomputeFromCanonicalBlock,
+  canonicalInputsOf, chainSummary, filterPayload, guestVerificationNotes, recomputeFromCanonicalBlock,
 } from '../_shared/guestEventView.ts'
 
 // CORS is per request now, from ../_shared/cors.ts: the allowed origin depends
@@ -298,8 +297,6 @@ Deno.serve(async (req: Request) => {
     const invitedRecipient = (acceptance?.payload as Record<string, unknown> | null)?._invited_recipient ?? null
     const claimedIdentity = (acceptance?.payload as Record<string, unknown> | null)?._claimed_identity ?? null
 
-    const attested = events.filter(e => e.integrity.trust_model === 'server_attested')
-
     return json({
       // What was ACCEPTED, recorded at the time. Null for agreements accepted
       // before the snapshot existed — absent, not reconstructed.
@@ -350,34 +347,7 @@ Deno.serve(async (req: Request) => {
       // what no amount of hashing in it will establish. Carried in the data
       // because a machine reader has no README.
       verification: guestVerificationNotes(),
-      chain: {
-        event_count:          events.length,
-        server_attested:      attested.length,
-        client_asserted:      events.length - attested.length,
-        // True only if every row that carries the material to be checked
-        // checks out, AND every row could actually be checked.
-        //
-        // `hash_valid !== false` alone was not enough: an unsupported version
-        // sets it to null, null is not false, and a row nothing had verified
-        // therefore counted towards `verified: true`. Codex's finding 1. A
-        // guest reading `verified` takes it as "this record holds up"; it must
-        // not mean "nothing contradicted it".
-        verified: attested.length > 0
-          && attested.every(e => e.integrity.canonical_version_supported !== false)
-          && attested.every(e => e.integrity.hash_valid !== false && e.integrity.chain_linked !== false),
-        // Separate from `verified: false`, which would read as a detected
-        // problem. This says the question could not be answered here.
-        unsupported_canonical_versions: events
-          .filter(e => e.integrity.canonical_version_supported === false)
-          .map(e => ({ id: e.id, version: e.integrity.canonical_version ?? null })),
-        truncated: (rows?.length ?? 0) >= MAX_EVENTS,
-        // Whether the detail fields are tamper-evident, stated rather than left
-        // for a reader to discover. True only when every returned event was
-        // written under a canonical that binds its payload; events from before
-        // that are covered for authorship and timing but not for substance.
-        payload_covered_by_hash: events.length > 0
-          && events.every(e => e.integrity.substance_valid !== null),
-      },
+      chain: chainSummary(events, { truncated: (rows?.length ?? 0) >= MAX_EVENTS }),
     }, 200)
 
   } catch (err) {

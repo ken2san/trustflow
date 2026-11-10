@@ -25,6 +25,21 @@ import {
 export const ACCEPTANCE_TYPE = 'dod.consent_recorded'
 
 /**
+ * The states in which no acceptance event exists yet, so an owner event may be
+ * recorded without one.
+ *
+ * Anything else means the contract HAS been accepted, and a missing acceptance
+ * event is then a refusal rather than a default — see `acceptedSnapshotVersion`.
+ * Listed as the pre-acceptance set rather than the accepted set on purpose: a
+ * new state added later is treated as accepted, which refuses, and refusing a
+ * write is recoverable while recording one against a guessed version is not.
+ */
+export const PRE_ACCEPTANCE_STATES: ReadonlySet<string> = new Set([
+  'DRAFTING',
+  'AWAITING_ACCEPTANCE',
+])
+
+/**
  * Which role a party holds in this particular agreement.
  *
  * `party` is which side of the account/guest divide the caller is on — the
@@ -290,24 +305,41 @@ export async function buildEventRecord({
  * THREE OUTCOMES, AND THE THIRD IS THE POINT:
  *
  *   {version}            the acceptance says which version it bound.
- *   {version: current}   there is NO acceptance yet. A draft can legitimately
- *                        carry events before anyone accepts it, and nothing is
- *                        pinned, so the current version is correct rather than
- *                        a guess.
- *   {error}              the read failed, or the acceptance records a version
- *                        this build cannot build. **Refuse the write.** An act
- *                        that cannot establish which terms it refers to must
- *                        not be recorded referring to a guess — the whole
+ *   {version: current}   there is NO acceptance event AND the caller says none
+ *                        is expected. A draft can legitimately carry events
+ *                        before anyone accepts it, so nothing is pinned and the
+ *                        current version is correct rather than a guess.
+ *   {error}              the read failed; or the acceptance records a version
+ *                        this build cannot build; or there is no acceptance
+ *                        event where one MUST exist. **Refuse the write.** An
+ *                        act that cannot establish which terms it refers to
+ *                        must not be recorded referring to a guess — the whole
  *                        append-only point is that nobody can fix it later.
  *
  * A read failure is deliberately not treated as "no acceptance": those look
  * identical to a caller that only checks for rows, and one of them means the
  * terms are pinned to something unknown.
+ *
+ * WHY THE CALLER HAS TO SAY. `mustBeAccepted` has no default, because the two
+ * situations are indistinguishable from here and the safe answer differs:
+ *
+ *   - an owner recording against an untouched draft: no acceptance exists, and
+ *     expecting one would refuse a legitimate write;
+ *   - a reissue, or any act on a contract whose state says it was accepted:
+ *     the acceptance MUST be there, and its absence means the evidence this act
+ *     should refer to cannot be found. Defaulting that to the current version
+ *     is a guess about the most important thing in the record.
+ *
+ * The second case was Codex's finding 3 on the Task 28 re-review: the helper
+ * returned the current version whenever the row was missing, so a reissue on an
+ * accepted contract whose acceptance event could not be found appended against
+ * an assumption.
  */
 export async function acceptedSnapshotVersion(
   // deno-lint-ignore no-explicit-any
   admin: any,
   contractId: string,
+  { mustBeAccepted }: { mustBeAccepted: boolean },
 ): Promise<{ version: number } | { error: string }> {
   const { data, error } = await admin
     .from('events')
@@ -319,7 +351,11 @@ export async function acceptedSnapshotVersion(
     .maybeSingle()
 
   if (error) return { error: 'accepted_version_unreadable' }
-  if (!data) return { version: SNAPSHOT_VERSION }
+  if (!data) {
+    return mustBeAccepted
+      ? { error: 'accepted_version_missing' }
+      : { version: SNAPSHOT_VERSION }
+  }
 
   const recorded = (data.payload as Record<string, unknown> | null)?._agreement as
     Record<string, unknown> | null | undefined
