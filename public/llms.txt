@@ -18,6 +18,68 @@ is an observation by this service.
   client that computes the digest differently cannot accept an agreement in any
   currency other than JPY.
 
+## Live HTTP API
+
+Production base URL: `https://fqgpzhwvvfsxswlnbbgg.supabase.co`. The paths
+below are relative to it. Use HTTPS and `Content-Type: application/json` for
+JSON requests. This is the production service: writes create real records.
+
+### Authentication
+
+Obtain the project's public Supabase anon key from the service operator; it is
+not a credential for an agreement. Send it as `apikey: <ANON_KEY>` on requests.
+Use **one** `Authorization: Bearer ...` header:
+
+- **Owner / owner agent:** use the access token of a verified, non-anonymous
+  account: `Authorization: Bearer <OWNER_ACCESS_TOKEN>`. An agent may be
+  handed that session's refresh token; exchange it with
+  `POST /auth/v1/token?grant_type=refresh_token`, `apikey: <ANON_KEY>` and JSON
+  `{"refresh_token":"<OWNER_REFRESH_TOKEN>"}`. Save a replacement refresh
+  token securely when returned. A refresh token carries the owner's account
+  authority, not a limited agent scope; the record identifies the account, not
+  the agent. Revoking the shared session affects the original session too,
+  and issued access tokens can remain usable until expiry. No per-agent scoped
+  delegation credential is implemented.
+- **Guest / guest agent:** for invitation and guest function calls use
+  `Authorization: Bearer <ANON_KEY>`. After accepting, also send
+  `x-guest-access-token: <GUEST_ACCESS_TOKEN>` to `log-event` and
+  `guest-contract-events`. This capability covers one agreement; it is not an
+  account. The invitation token and guest token are secrets: hand them over
+  privately and do not publish or log them.
+
+### Contract flow
+
+1. **Create:** `POST /rest/v1/contracts` as the owner, with
+   `Prefer: return=representation`. Send JSON with `earner_user_id` set to the owner's
+   user ID, `project_name`, `dod` (array of completion criteria),
+   `amount_minor` (integer), `currency`, `performed_by` (`creator` or
+   `counterparty`), and optionally `deadline` (`YYYY-MM-DD`),
+   `earner_display_name` and `invited_hirer_email`. With `Prefer` alone the
+   response is an array; its first row has `id` and `invite_token`. Pass the
+   invitation to the other party privately; TrustFlow does not deliver it.
+2. **Read and accept:** `POST /functions/v1/validate-invite-token` as the guest
+   with `{"invite_token":"<INVITE_TOKEN>"}` to read the terms. To accept, post
+   `invite_token`, `accept: true`, `hirer_email`, optional `counterparty_name`,
+   `shown_terms_digest` and `shown_terms_version: 2`. Compute the digest from
+   the terms read, as specified in [Agent protocol](/agent-protocol.md).
+   A digest is required for non-JPY agreements; use version 2 for all. The
+   accepting email is self-claimed, not verified. Save the returned
+   `guest_access_token` securely.
+3. **Claim delivery / confirm:** `POST /functions/v1/log-event` as the acting
+   party, with JSON `type`, `contract_id`, optional `payload` and optional
+   `idempotency_key`. The performer uses `performance.asserted`; the receiver
+   uses `performance.accepted` or `performance.rejected`. These are statements,
+   not proof of delivery. The server checks the actor's role and agreement state.
+4. **Record payment statements:** the receiver may use `payment.reported`;
+   the performer may use `payment.acknowledged` or `payment.disputed` on the
+   same `log-event` endpoint. TrustFlow does not process or verify payment.
+5. **Read evidence:** a guest uses `POST /functions/v1/guest-contract-events`
+   with the guest header; no contract ID is needed. It returns a shaped record
+   of up to 500 oldest events; `chain.truncated` flags that the cap was reached
+   and there is no guest pagination. An owner can use `GET /rest/v1/events`
+   with `contract_id=eq.<CONTRACT_ID>` and its account session; access is
+   subject to row-level security.
+
 ## The shape of a transaction
 
 1. The creating party records an agreement and receives a one-time invitation
@@ -32,8 +94,9 @@ is an observation by this service.
 4. Whoever performs asserts delivery; whoever receives accepts or rejects it.
 5. Whoever receives the work reports the payment; whoever performed
    acknowledges it. Both are statements about a rail TrustFlow cannot see.
-6. Either side can read the whole trail and recompute the hash chain without
-   trusting this service.
+6. Each side can read its available evidence and check the hash chain. The
+   guest view is capped at 500 events; a cap indication cannot prove whether
+   additional events exist.
 
 ## What a client needs to know before writing one
 
