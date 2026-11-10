@@ -129,6 +129,7 @@ import CommandPalette from './components/ui/CommandPalette.jsx';
 import CaptchaChallenge from './components/ui/CaptchaChallenge.jsx';
 import { captchaConfigured } from './lib/captcha.js';
 import { dodItemsFrom, dodProblem as dodProblemOf } from './lib/dodInput.js';
+import { amountProblem as amountProblemOf } from './lib/amountInput.js';
 
 // --- Page Views ---
 
@@ -141,22 +142,6 @@ import { performsHere } from './lib/contractStatus.js';
 
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
-
-/**
- * What to say when an amount cannot be recorded.
- *
- * One line each, in the terms of the thing the person typed rather than the
- * code the parser returned: `amount_too_precise` is the interesting one,
- * because for JPY it means "this currency has no decimals" and for CAD it
- * means "two at most", and those are different sentences.
- */
-const AMOUNT_PROBLEMS = {
-  amount_malformed: 'Digits, with an optional decimal point. No currency symbols or commas.',
-  amount_too_precise: 'More decimal places than this currency has.',
-  amount_not_positive: 'An amount has to be more than zero.',
-  amount_too_large: 'Larger than this can record.',
-  currency_unsupported: 'That currency is not one of the ones this records.',
-};
 
 // Today as an <input type="date"> writes it: a calendar date in the viewer's
 // own timezone. toISOString() would be a day early for anyone ahead of UTC —
@@ -241,6 +226,7 @@ const App = () => {
   const [showBYOCForm, setShowBYOCForm] = useState(false);
   const [byocForm, setByocForm] = useState({ name: '', description: '', amount: '', dod: '' });
   const [dodTouched, setDodTouched] = useState(false);
+  const [amountTouched, setAmountTouched] = useState(false);
   const [inviteLink, setInviteLink] = useState(null);
   const [inviteLinkCopied, setInviteLinkCopied] = useState(false);
   // Earner verification (A-1): the contract is only persisted once the Earner
@@ -929,22 +915,23 @@ const App = () => {
   // JPY contract is refused while the person is still looking at the field —
   // the alternative is a 400 from PostgREST naming a constraint.
   const amountCurrency = byocForm.currency ?? DEFAULT_CURRENCY;
-  const amountTyped = (byocForm.amount ?? '').trim();
-  const amountParse = amountTyped ? minorUnitsFrom(amountTyped, amountCurrency) : null;
-  const amountProblem = amountParse && !amountParse.ok
-    ? AMOUNT_PROBLEMS[amountParse.reason] ?? 'That is not an amount this can record.'
-    : null;
+  const amountParse = minorUnitsFrom((byocForm.amount ?? '').trim(), amountCurrency);
+  const amountProblem = amountProblemOf(byocForm.amount, amountCurrency);
 
-  // "What counts as complete", checked by the same parse the submit uses. It is
-  // required, so unlike the amount an empty field IS the problem. It used to
-  // reach the database only after the CAPTCHA and the emailed code, and come
-  // back as `contracts_dod_shape_check`. The message waits until the field has
-  // been touched, or until it is the only thing holding Send Invite back, so a
-  // fresh form does not open with a warning but a blocked button always says why.
+  // "What counts as complete", checked by the same parse the submit uses. It
+  // used to reach the database only after the CAPTCHA and the emailed code, and
+  // come back as `contracts_dod_shape_check`.
+  //
+  // Both required fields share one rule for when to speak: a value that is
+  // wrong says so at once, but an empty field waits until it has been touched,
+  // or until it is the only thing holding Send Invite back. A fresh form does
+  // not open with warnings, and a blocked button always says why.
   const dodProblem = dodProblemOf(dodItemsFrom(byocForm.dod));
   const otherRequiredFilled = ['description', 'earnerName', 'earnerEmail', 'clientEmail']
     .every(field => (byocForm[field] ?? '').trim());
   const showDodProblem = Boolean(dodProblem) && (dodTouched || otherRequiredFilled);
+  const showAmountProblem = Boolean(amountProblem)
+    && (Boolean((byocForm.amount ?? '').trim()) || amountTouched || otherRequiredFilled);
 
   // The palette used to be where the legacy surface stayed reachable after it
   // left the primary nav — Marketplace, Command Center, Wallet, Trust Passport
@@ -1073,14 +1060,16 @@ const App = () => {
                     used — the default only applies to a first-ever draft. */}
                 <div>
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Amount</label>
-                  <div className={`flex items-stretch w-full bg-slate-800 border rounded-2xl overflow-hidden transition-all focus-within:border-indigo-500/50 ${amountProblem ? 'border-amber-500/60' : 'border-white/10'}`}>
+                  <div className={`flex items-stretch w-full bg-slate-800 border rounded-2xl overflow-hidden transition-all focus-within:border-indigo-500/50 ${showAmountProblem ? 'border-amber-500/60' : 'border-white/10'}`}>
                     <input
                       type="text"
                       inputMode="decimal"
                       value={byocForm.amount}
                       onChange={e => { setByocForm(f => ({ ...f, amount: e.target.value })); setInviteLink(null); }}
                       placeholder={CURRENCY_MINOR_DIGITS[amountCurrency] === 0 ? 'e.g., 300000' : 'e.g., 1250.00'}
+                      onBlur={() => setAmountTouched(true)}
                       aria-label="Amount"
+                      aria-invalid={showAmountProblem}
                       className="flex-1 min-w-0 bg-transparent px-5 py-4 text-white outline-none"
                     />
                     <select
@@ -1100,7 +1089,7 @@ const App = () => {
                       ))}
                     </select>
                   </div>
-                  {amountProblem && <p className="text-[11px] text-amber-400 mt-2">{amountProblem}</p>}
+                  {showAmountProblem && <p className="text-[11px] text-amber-400 mt-2">{amountProblem}</p>}
                 </div>
                 {/* min only constrains the picker; a date can still be typed
                     straight into the field, so the value is checked as well and
@@ -1202,10 +1191,10 @@ const App = () => {
                   || !(byocForm.earnerEmail ?? '').trim()
                   || !(byocForm.clientEmail ?? '').trim()
                   || deadlineIsPast
-                  // An unparseable amount is blocked here as well as flagged:
-                  // the alternative is sending 0 and recording an agreement
-                  // for no money, which the row-level check then refuses with
-                  // a constraint name nobody can act on.
+                  // An empty or unparseable amount is blocked here as well as
+                  // flagged: the alternative is sending 0, which the row-level
+                  // check refuses with a constraint name nobody can act on,
+                  // after the person has already spent an emailed code.
                   || Boolean(amountProblem)
                   || Boolean(dodProblem)
                 }
