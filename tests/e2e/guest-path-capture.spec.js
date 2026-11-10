@@ -170,6 +170,21 @@ async function shoot(page, name, { full = false } = {}) {
   });
 }
 
+// Phone width gets three times the total budget; every `expect` timeout stays
+// as it is, so a stuck render still fails at the step where it sticks. Each
+// screenshot at Pixel 7's 2.625x scale re-rasterises NeuralBackground's two
+// `blur-[120px]` layers in software, which headless Chromium does without a
+// GPU. Measured 2026-11-10 (.ada/claude-report-49.md): the long test takes
+// 12.0 s alone (desktop 4.8 s) and 42.9-47.5 s with 7 copies in parallel,
+// the full suite's default worker count here, so 30 s failed intermittently
+// under full-suite load. Turning the blur off brought it back to 15-16 s.
+// Capturing at CSS scale or with the blur removed would also fix it, but the
+// image a reviewer judges would then not be the image a person sees.
+test.beforeEach(() => {
+  test.slow(test.info().project.name === 'chromium-mobile-ui',
+    'software-rendered 120px blurs at phone device scale; see comment above');
+});
+
 test('capture: what the counterparty is shown, start to record', async ({ page }) => {
   // Animations finish before each shot or the image shows a half-faded card;
   // `animations: 'disabled'` is per-screenshot in Playwright, so the explicit
