@@ -128,6 +128,7 @@ import ToastContainer from './components/ui/ToastContainer';
 import CommandPalette from './components/ui/CommandPalette.jsx';
 import CaptchaChallenge from './components/ui/CaptchaChallenge.jsx';
 import { captchaConfigured } from './lib/captcha.js';
+import { dodItemsFrom, dodProblem as dodProblemOf } from './lib/dodInput.js';
 
 // --- Page Views ---
 
@@ -239,6 +240,7 @@ const App = () => {
   });
   const [showBYOCForm, setShowBYOCForm] = useState(false);
   const [byocForm, setByocForm] = useState({ name: '', description: '', amount: '', dod: '' });
+  const [dodTouched, setDodTouched] = useState(false);
   const [inviteLink, setInviteLink] = useState(null);
   const [inviteLinkCopied, setInviteLinkCopied] = useState(false);
   // Earner verification (A-1): the contract is only persisted once the Earner
@@ -817,9 +819,7 @@ const App = () => {
     const parsed = minorUnitsFrom((byocForm.amount ?? '').trim(),
                                   byocForm.currency ?? DEFAULT_CURRENCY);
     const amountMinor = parsed.ok ? parsed.minor : null;
-    const dodItems = byocForm.dod
-      ? byocForm.dod.split('\n').map(line => line.trim()).filter(Boolean)
-      : [];
+    const dodItems = dodItemsFrom(byocForm.dod);
     const canonical = buildDodCanonical({
       dodText: dodItems.join('\n'),
       hirerId: (byocForm.clientEmail || '').trim(),
@@ -934,6 +934,17 @@ const App = () => {
   const amountProblem = amountParse && !amountParse.ok
     ? AMOUNT_PROBLEMS[amountParse.reason] ?? 'That is not an amount this can record.'
     : null;
+
+  // "What counts as complete", checked by the same parse the submit uses. It is
+  // required, so unlike the amount an empty field IS the problem. It used to
+  // reach the database only after the CAPTCHA and the emailed code, and come
+  // back as `contracts_dod_shape_check`. The message waits until the field has
+  // been touched, or until it is the only thing holding Send Invite back, so a
+  // fresh form does not open with a warning but a blocked button always says why.
+  const dodProblem = dodProblemOf(dodItemsFrom(byocForm.dod));
+  const otherRequiredFilled = ['description', 'earnerName', 'earnerEmail', 'clientEmail']
+    .every(field => (byocForm[field] ?? '').trim());
+  const showDodProblem = Boolean(dodProblem) && (dodTouched || otherRequiredFilled);
 
   // The palette used to be where the legacy surface stayed reachable after it
   // left the primary nav — Marketplace, Command Center, Wallet, Trust Passport
@@ -1098,7 +1109,7 @@ const App = () => {
                     is not something to find out about afterwards. */}
                 <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Deadline</label><input type="date" min={earliestDeadline} value={byocForm.deadline ?? ''} onChange={e => { setByocForm(f => ({ ...f, deadline: e.target.value })); setInviteLink(null); }} className={`w-full bg-slate-800 border rounded-2xl px-5 py-4 text-white outline-none transition-all ${deadlineIsPast ? 'border-amber-500/60 focus:border-amber-500' : 'border-white/10 focus:border-indigo-500/50'}`} />{deadlineIsPast && <p className="text-[11px] text-amber-400 mt-2">That date has already passed. Pick today or later.</p>}</div>
               </div>
-              <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">What counts as complete <span className="normal-case font-normal text-slate-600">(one item per line)</span></label><textarea value={byocForm.dod} onChange={e => { setByocForm(f => ({ ...f, dod: e.target.value })); setInviteLink(null); }} placeholder={"Definitive Figma Library\nDark Mode Tokens\nAtomic Design Compliance"} className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all resize-none min-h-[90px] font-mono text-sm" /></div>
+              <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">What counts as complete <span className="normal-case font-normal text-slate-600">(one item per line)</span></label><textarea value={byocForm.dod} onChange={e => { setByocForm(f => ({ ...f, dod: e.target.value })); setInviteLink(null); }} onBlur={() => setDodTouched(true)} aria-label="What counts as complete" aria-invalid={showDodProblem} placeholder={"Definitive Figma Library\nDark Mode Tokens\nAtomic Design Compliance"} className={`w-full bg-slate-800 border rounded-2xl px-5 py-4 text-white outline-none transition-all resize-none min-h-[90px] font-mono text-sm ${showDodProblem ? 'border-amber-500/60 focus:border-amber-500' : 'border-white/10 focus:border-indigo-500/50'}`} />{showDodProblem && <p className="text-[11px] text-amber-400 mt-2">{dodProblem}</p>}</div>
               {otpStage === 'code' && (
                 <div className="bg-slate-800/60 border border-indigo-500/30 rounded-2xl px-5 py-4 space-y-3">
                   <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Confirm your email</p>
@@ -1196,6 +1207,7 @@ const App = () => {
                   // for no money, which the row-level check then refuses with
                   // a constraint name nobody can act on.
                   || Boolean(amountProblem)
+                  || Boolean(dodProblem)
                 }
                 className="flex-1 py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-black transition-all text-sm"
               >
