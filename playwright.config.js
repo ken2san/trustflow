@@ -58,6 +58,10 @@ export default defineConfig({
         // assertion it carries only means something at a width where a layout
         // can actually run out of room.
         '**/owner-screens-capture.spec.js',
+        // The New contract form stacked Amount and Deadline because the
+        // desktop modal cut Amount off; phone width is the other half of that
+        // check. Every call is stubbed, so it writes nothing at either width.
+        '**/new-contract-form.spec.js',
       ],
       // A denylist, not an allowlist. Codex's first version listed every
       // included test title in one regex, which fails silently in the worst
