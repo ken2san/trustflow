@@ -52,13 +52,21 @@ Production and E2E each hold exactly these, all `verify_jwt: true`:
 `log-event`, `validate-invite-token`, `guest-contract-events`,
 `reissue-guest-access`.
 
-Both projects run the **same artifacts, byte for byte**, as of the Task 17
-rollout. Production versions and digests then: `log-event` v14
-(`931793338b5a4234…`), `validate-invite-token` v15 (`4724b50d9229cf18…`),
-`guest-contract-events` v12 (`84884fa66c4a38c3…`), `reissue-guest-access` v5
-(`65e12b06b05361c1…`) — identical to E2E's. Compare **measured `ezbr_sha256`**,
-never `updated_at` or version numbers, which differ between projects for
-ordinary reasons.
+Both projects run the **same artifacts, byte for byte**, as of the Task 36
+rollout (2026-11-10, built from `4b571bf`). Production versions and digests:
+`log-event` v15 (`8e834b9214e30c1d…`), `validate-invite-token` v16
+(`6ae1e8dd42362aa4…`), `guest-contract-events` v13 (`b2bcab62be6a4266…`),
+`reissue-guest-access` v6 (`4c063dd2d16609121…`), identical to E2E's. The
+previous production artifacts (Task 17, from `be4287f`) are the rollback target:
+`931793338b5a4234…`, `4724b50d9229cf18…`, `84884fa66c4a38c3…`,
+`65e12b06b05361c1…`. Compare **measured `ezbr_sha256`**, never `updated_at` or
+version numbers, which differ between projects for ordinary reasons.
+
+**Deploy with Docker running.** Without it, `supabase functions deploy` silently
+falls back to server-side bundling, which embeds a per-project path in the
+bundle (`file:///tmp/user_fn_<ref>_…`). The digests then cannot match across
+projects, and the comparison above proves nothing. Check that the entrypoint
+path reads `file:///Users/…` after deploying.
 
 **Five slugs are retired and must stay 404**: `create-payment-intent`,
 `capture-payment`, `cancel-payment`, `send-acceptance-email`,
@@ -76,7 +84,7 @@ never follows.** A push is already a production action.
 
 ### Database
 
-44 migrations. `check-migrations.mjs` runs offline in CI. The CLI link is
+45 migrations. `check-migrations.mjs` runs offline in CI. The CLI link is
 deliberately on E2E, so **every migration command names its target explicitly**
 (`supabase db push --db-url <...>`; `db push` has no `--project-ref`).
 

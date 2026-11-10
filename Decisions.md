@@ -115,12 +115,28 @@ Source: `.ada/claude-report-28.md`.
 agreement-snapshot version a contract's acceptance bound, so a writer finds it
 on the row it already fetches.
 
-**Migration written, NOT APPLIED anywhere.**
-`supabase/migrations/20261109210000_contracts_accepted_snapshot_version.sql`
-exists and is reviewed; applying it waits for the owner's go-ahead at deploy
-time, and the Edge Functions do **not** read the column yet — they read the
-acceptance event, so the deployed code keeps working against the current
-schema either way.
+**Applied on E2E and production, 2026-11-10.**
+`supabase/migrations/20261109210000_contracts_accepted_snapshot_version.sql`,
+each application approved by the owner separately:
+
+- **E2E** (Task 32), with `supabase db push`: 1,478 rows set to 1, which is
+  exactly the number of acceptances.
+- **Production** (Task 34): 129 rows set to 1, 1,192 left NULL. 731 of the NULLs
+  are accepted contracts with no usable version: 263 have no acceptance event,
+  and 468 have acceptances written before `_agreement` existed (`60b30b3`). All
+  were QA data from September (Task 33).
+- **How production was applied:** through `execute_sql`, which is outside the
+  HANDOFF rule ("`supabase db push` only"). The history row was written with the
+  file's own version and with statements md5-identical to E2E's `db push` row,
+  so the ledger matches. **The rule stands, with no exception.** The next
+  production migration goes through `db push`.
+
+The Edge Functions do **not** read the column yet; they read the acceptance
+event. **New acceptances do not write it either:** `accept_invitation` leaves it
+NULL, so from 2026-11-10 the column covers only the rows the backfill reached.
+NULL means "ask the evidence", so this is incomplete rather than wrong. Making
+acceptance write it is the follow-up that has to land before anything reads the
+column (Task 38, F1).
 
 **What it is not.** Not a rehash: no event is rewritten and no stored hash
 recomputed. Not an agreed term: it is absent from the agreement snapshot, so it
