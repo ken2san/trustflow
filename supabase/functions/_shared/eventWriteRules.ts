@@ -150,13 +150,22 @@ function secretEquals(stored: string, presented: string): boolean {
  *
  * The equality is **fixed-work**, which is a weaker claim than constant-time
  * and is the one the implementation can actually support — see `secretEquals`.
- * The reason for it is hygiene rather than a demonstrated attack: an attacker
- * would have to already know the `contract_id`, and then recover 122 bits of
- * v4 UUID through the Supabase gateway and a Deno isolate, over the internet,
- * with every request also doing a database read. Nobody is doing that. It is
- * changed because a credential comparison with an obvious early exit stays
- * flagged in every review until it is fixed, and the fix costs no behaviour.
- * Reviewer finding M3; the claim was narrowed after Codex's finding 3.
+ * The reason for it is hygiene rather than a demonstrated attack. Extracting a
+ * token this way would mean already knowing the `contract_id`, then recovering
+ * 122 bits of v4 UUID through the Supabase gateway and a Deno isolate, over the
+ * internet, with every request also doing a database read — a lot of signal to
+ * pull out of a lot of noise.
+ *
+ * An earlier version of this said "nobody is doing that", which **is not
+ * something this project can know**: nothing here monitors for it, there is no
+ * alerting on repeated refusals, and an attempt would look like ordinary failed
+ * requests. Codex's re-review flagged the claim. What can be said is that no
+ * such attempt has been observed, that nobody has looked, and that the
+ * difficulty above is an argument about cost rather than a measurement.
+ *
+ * It is changed because a credential comparison with an obvious early exit
+ * stays flagged in every review until it is fixed, and the fix costs no
+ * behaviour. Reviewer finding M3; narrowed after Codex's findings 3 and 4.
  */
 export function guestCredentialStillValid(
   contract: {

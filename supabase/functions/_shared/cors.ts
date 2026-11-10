@@ -77,10 +77,22 @@ export const ALLOW_HEADERS =
  * that exact root alias. No pattern over `vercel.app` can establish that a
  * hostname belongs to this project, so this module stops trying.
  *
- * Every entry below was read back from the Vercel API for project
- * `prj_T6yXoI5wDvJKNfzlmgWAyF4tErAm` on 2026-11-09 — `list_aliases` returned
- * exactly these five, all owned by this project, and `list_project_domains`
- * confirmed there is no custom domain.
+ * WHAT WAS VERIFIED, AND WHAT WAS NOT. The five `vercel.app` entries below
+ * were read back from the Vercel API for project
+ * `prj_T6yXoI5wDvJKNfzlmgWAyF4tErAm` on 2026-11-09: `list_aliases` returned
+ * exactly those five as aliases of this project, and `list_project_domains`
+ * confirmed there is no custom domain. That is a readback at one moment, not a
+ * standing guarantee — an alias can be moved or released later, and nothing
+ * here rechecks.
+ *
+ * The two loopback entries were verified against nothing of the sort. They are
+ * `playwright.config.js`'s `baseURL` and the dev server, and what makes them
+ * safe is that they resolve only on the machine doing the asking, not any claim
+ * about this project.
+ *
+ * And `TF_ALLOWED_ORIGINS` (below) is **not verified at all** — see its own
+ * note. Codex's re-review found this paragraph claiming "every entry was
+ * verified to belong to this project", which was true of five of them.
  */
 const ALLOWED_ORIGINS = new Set([
   // Production.
@@ -108,17 +120,28 @@ const ALLOWED_ORIGINS = new Set([
  * origins when one is actually needed.
  *
  * **This is a deliberate trade, not an oversight.** A developer opening a
- * per-commit preview against the live backend now has to either use the branch
- * alias above, run the dev server, or add that one origin. What they get in
- * exchange is a list where every entry was verified to belong to this project.
+ * per-commit preview against the live backend has to either use the branch
+ * alias above, run the dev server, or add that one origin.
  *
- * Read per call rather than once at module load, so the unit tests can
- * exercise the opt-in — a module-load read would make this branch untestable
- * from Node, and an untested security branch is the one that is wrong.
+ * **NOTHING HERE VALIDATES OWNERSHIP OF WHAT IS SET.** Whatever this variable
+ * names is allowed, including an origin belonging to someone else: the check is
+ * exact string membership, not a claim about who controls the hostname. That
+ * makes the variable's value part of the security configuration, to be reviewed
+ * when it is set and removed when the preview it was for is gone. The hardcoded
+ * list above is the part with a verification behind it; this is the part with an
+ * operator behind it.
+ *
+ * Read per call rather than once at module load, so the unit tests can exercise
+ * the opt-in without module isolation. A module-load read would still be
+ * testable with `vi.resetModules()` and the environment set first — the earlier
+ * version of this note said it would be untestable, which Codex corrected. The
+ * honest reason is that per-call needs no test harness machinery at all, and an
+ * untested security branch is the one that is wrong.
  *
  * Read through `globalThis` because this module is imported by Deno Edge
- * Functions and by the Node test runner. A bare `Deno.env` would throw at
- * import time under vitest, which is how the first version of this broke.
+ * Functions and by the Node test runner. A bare `Deno.env` reference would
+ * throw at import time under vitest, which is how the first version of this
+ * broke.
  */
 function extraOrigins(): Set<string> {
   const g = globalThis as {
