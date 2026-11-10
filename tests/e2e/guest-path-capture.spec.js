@@ -195,6 +195,12 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   //    this product does. Those claims are the thing most worth reading blind.
   await expect(page.getByText(ACCEPTED.project_name).first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Who does the work')).toBeVisible();
+  const details = page.locator('details').filter({ hasText: 'Details: what you get by joining' });
+  await expect(details).not.toHaveAttribute('open');
+  await details.locator('summary').click();
+  await expect(details.getByText(/Accepting writes down these exact terms/)).toBeVisible();
+  await details.locator('summary').click();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await shoot(page, '01-invitation');
 
   // 2. Identity and consent — the only point at which the guest types anything

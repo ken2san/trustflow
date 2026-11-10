@@ -417,8 +417,8 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       </div>
 
       {/* What you gain */}
-      <div className="space-y-4">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">What you get by joining</p>
+      <details className="space-y-4">
+        <summary className="cursor-pointer text-sm font-bold text-slate-300">Details: what you get by joining</summary>
         {GAINS.map(({ icon: Icon, title, body }) => (
           <div key={title} className="flex gap-4 p-5 bg-white/[0.03] border border-white/5 rounded-[24px]">
             <div className="shrink-0 w-10 h-10 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl flex items-center justify-center">
@@ -430,7 +430,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             </div>
           </div>
         ))}
-      </div>
+      </details>
 
       {/* CTAs */}
       <div className="flex flex-col gap-3 max-w-md mx-auto w-full pb-8">
