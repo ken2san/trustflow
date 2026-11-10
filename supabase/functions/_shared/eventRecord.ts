@@ -381,10 +381,13 @@ export async function acceptedSnapshotVersion(
     Record<string, unknown> | null | undefined
   const version = recorded?.snapshot_version
 
-  // An acceptance with no recorded version predates nothing — every acceptance
-  // this system has ever written carries one, because buildAgreementSnapshot
-  // has always included it. Absent means the payload is not the shape this
-  // build understands, which is the same situation as an unsupported version.
+  // An acceptance with no recorded version is refused on purpose, not by
+  // accident. Acceptances written before 60b30b3 ("bind the whole agreed deal
+  // to an acceptance") carry no `_agreement` at all: they bound the criteria
+  // only, never an agreement snapshot, so there is no version for a later act
+  // to refer to. Production held 468 of them on 2026-11-10 (Task 33); E2E,
+  // created after that commit, holds none. Guessing 1 for them would claim a binding that
+  // never happened, so absent is treated exactly like an unsupported version.
   if (!isSupportedSnapshotVersion(version)) {
     return { error: 'accepted_version_unsupported' }
   }
