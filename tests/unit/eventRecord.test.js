@@ -594,9 +594,12 @@ describe('reading the accepted snapshot version back', () => {
   // The two can differ in ONE direction only, and it is the safe one: the
   // column is stricter. Where it says NULL the consumer falls back to this
   // reader, so the answer is still this reader's. The reverse, a column number
-  // this reader does not also produce, is impossible for an integer below 2^31,
-  // which is exact in a double. The migration's self-test pins the SQL half;
-  // these pin this half. If either side changes, one of the two fails.
+  // other than the one this reader parses, is impossible for an integer below
+  // 2^31, which is exact in a double. The number is the same; whether it is a
+  // SUPPORTED version is a separate check, which a consumer of the column must
+  // make as this reader does (2 is kept there, refused here). The migration's
+  // self-test pins the SQL half; these pin this half. If either side changes,
+  // one of the two fails.
   const fromText = text => ({ data: { payload: JSON.parse(text) }, error: null })
 
   it('reads 1.0 and 1e0 as 1, as the column does', async () => {
