@@ -32,6 +32,22 @@
 -- the same answer as p_event on every normal contract and the right one on the
 -- others. The self-test below pins that case.
 --
+-- STRICTER THAN THE READER, NEVER LOOSER (Codex's P2, decided 2026-11-10)
+-- This rule checks the exact numeric the payload stores; acceptedSnapshotVersion
+-- checks the value after JSON.parse has rounded it to a double. They differ in
+-- one direction only. A near-integer such as 1.00000000000000001 is NULL here
+-- and 1 there, and NULL means "ask the evidence", so a consumer still gets the
+-- reader's answer. The reverse cannot happen: this rule yields n only when the
+-- stored numeric IS the integer n, and every integer in int range is exact in a
+-- double. The rule is kept exact on purpose. The column is a copy of what the
+-- acceptance says, and recording 1 for a payload that says 1.00000000000000001
+-- would have the copy assert more than the evidence. No writer produces such a
+-- payload; the self-test and tests/unit/eventRecord.test.js pin both halves.
+--
+-- A CONSUMER of the column must still check a number against the supported
+-- versions (it keeps an unsupported one, such as 2, as recorded) and treat NULL
+-- as "ask the evidence", exactly as the column comment from 20261109210000 says.
+--
 -- WHAT THIS IS NOT
 -- No event is rewritten and no hash recomputed. The column is not an agreed
 -- term, is not in the agreement snapshot and is hashed into nothing. It is a
@@ -405,6 +421,42 @@ begin
       v_got := public.accepted_snapshot_version_of(v_contract);
       if v_got is distinct from expected[i] then
         raise exception 'SELF-TEST FAILED: rule case % gave %, expected %',
+          i, coalesce(v_got::text, 'NULL'), coalesce(expected[i]::text, 'NULL')
+          using errcode = 'TF900';
+      end if;
+    end loop;
+  end;
+
+  -- ── Precision: stricter than the reader, never looser ──
+  -- Codex's P2. The reader (acceptedSnapshotVersion) sees the version after
+  -- JSON.parse has rounded it to a double; this rule sees the exact numeric.
+  -- Exact spellings of 1 are 1 here as there. A near-integer that the reader
+  -- rounds to 1 is NULL here, which is the safe direction: a consumer that
+  -- finds NULL asks the reader and gets the reader's answer. The half of this
+  -- that lives in JavaScript is pinned in tests/unit/eventRecord.test.js.
+  declare
+    cases jsonb[] := array[
+      '{"_agreement": {"snapshot_version": 1.0}}'::jsonb,
+      '{"_agreement": {"snapshot_version": 1e0}}'::jsonb,
+      '{"_agreement": {"snapshot_version": 1.00000000000000001}}'::jsonb,
+      '{"_agreement": {"snapshot_version": 0.99999999999999999}}'::jsonb,
+      '{"_agreement": {"snapshot_version": 2147483647}}'::jsonb,
+      '{"_agreement": {"snapshot_version": 2147483648}}'::jsonb
+    ];
+    expected integer[] := array[1, 1, null, null, 2147483647, null];
+    i int;
+  begin
+    for i in 1 .. array_length(cases, 1) loop
+      insert into public.contracts (project_name, dod, amount_minor, currency, state)
+      values ('self-test precision case ' || i, '["self-test"]'::jsonb, 1, 'JPY', 'TERMS_ACCEPTED')
+      returning id into v_contract;
+      insert into public.events (type, contract_id, actor_id, created_at, event_hash, payload)
+      values ('dod.consent_recorded', v_contract::text, 'migration-self-test',
+              v_at, 'self-test-precision-' || i, cases[i]);
+
+      v_got := public.accepted_snapshot_version_of(v_contract);
+      if v_got is distinct from expected[i] then
+        raise exception 'SELF-TEST FAILED: precision case % gave %, expected %',
           i, coalesce(v_got::text, 'NULL'), coalesce(expected[i]::text, 'NULL')
           using errcode = 'TF900';
       end if;

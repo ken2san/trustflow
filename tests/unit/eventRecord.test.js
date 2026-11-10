@@ -584,6 +584,52 @@ describe('reading the accepted snapshot version back', () => {
       .toEqual({ error: 'accepted_version_unsupported' })
   })
 
+  // ── Where this reader and contracts.accepted_snapshot_version can differ ──
+  //
+  // Codex's P2 on 20261110150000. This reader sees the version AFTER
+  // JSON.parse, which rounds to a double; the column's SQL rule sees the exact
+  // numeric jsonb stored. The payloads below are the text PostgREST would hand
+  // supabase-js, parsed the same way.
+  //
+  // The two can differ in ONE direction only, and it is the safe one: the
+  // column is stricter. Where it says NULL the consumer falls back to this
+  // reader, so the answer is still this reader's. The reverse, a column number
+  // this reader does not also produce, is impossible for an integer below 2^31,
+  // which is exact in a double. The migration's self-test pins the SQL half;
+  // these pin this half. If either side changes, one of the two fails.
+  const fromText = text => ({ data: { payload: JSON.parse(text) }, error: null })
+
+  it('reads 1.0 and 1e0 as 1, as the column does', async () => {
+    for (const text of ['{"_agreement":{"snapshot_version":1.0}}',
+      '{"_agreement":{"snapshot_version":1e0}}']) {
+      expect(await read(fromText(text), true), text).toEqual({ version: 1 })
+    }
+  })
+
+  it('reads a near-integer as 1 where the column records NULL: the safe asymmetry', async () => {
+    // The column holds NULL for both of these, because neither is exactly an
+    // integer. This reader accepts them, because JSON.parse already rounded
+    // them to 1. A consumer that finds NULL asks this reader and gets 1, so the
+    // outcome is the same. No writer produces such a payload: the only one is
+    // buildEventRecord, and it writes the integer literal SNAPSHOT_VERSION.
+    for (const text of ['{"_agreement":{"snapshot_version":1.00000000000000001}}',
+      '{"_agreement":{"snapshot_version":0.99999999999999999}}']) {
+      expect(await read(fromText(text), true), text).toEqual({ version: 1 })
+    }
+  })
+
+  it('refuses beyond the column range as well, so a number there is never a version here', async () => {
+    // 2147483648 is NULL in the column (outside int range) and unsupported
+    // here. 2147483647 fits the column, which keeps it as recorded, and is
+    // unsupported here too: a consumer must check a column number against the
+    // supported set, exactly as this reader does.
+    for (const text of ['{"_agreement":{"snapshot_version":2147483648}}',
+      '{"_agreement":{"snapshot_version":2147483647}}']) {
+      expect(await read(fromText(text), true), text)
+        .toEqual({ error: 'accepted_version_unsupported' })
+    }
+  })
+
   it('treats every state but the two pre-acceptance ones as accepted', () => {
     // Listed as the pre-acceptance set rather than the accepted set, so a
     // state added later refuses rather than defaults. Refusing a write is

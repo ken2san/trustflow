@@ -143,6 +143,24 @@ the event being written, so the column agrees with the reader on contracts that
 already held an acceptance, and it re-runs the backfill for rows accepted in
 between.
 
+**The column is stricter than the reader, never looser (owner's decision,
+2026-11-10, on Codex's P2).** The SQL rule checks the exact numeric stored;
+`acceptedSnapshotVersion` checks the value after `JSON.parse` has rounded it to
+a double. A near-integer such as `1.00000000000000001` is NULL in the column and
+1 in the reader, and that is accepted, because NULL sends a consumer to the
+reader. The reverse cannot occur: the column yields `n` only when the stored
+number is exactly the integer `n`, which a double represents exactly. The rule
+is kept exact because the column copies the evidence and must not assert more
+than it says. No writer produces such a payload. The migration's self-test and
+`tests/unit/eventRecord.test.js` pin the two halves.
+
+**Rule for anything that reads the column:** check a number against the
+supported snapshot versions (the column keeps an unsupported one, such as 2, as
+recorded), and treat NULL as "ask the acceptance event", never as "version 1".
+The column comment says the same. When a reader is built, it reads the column
+in one helper in `_shared/eventRecord.ts`, next to `acceptedSnapshotVersion` and
+falling back to it, so the rule is enforced in one place.
+
 **What it is not.** Not a rehash: no event is rewritten and no stored hash
 recomputed. Not an agreed term: it is absent from the agreement snapshot, so it
 is hashed into nothing and changes no digest. Not a backfill of anything
