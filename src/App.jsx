@@ -1043,7 +1043,10 @@ const App = () => {
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Your email</label><input type="email" value={byocForm.earnerEmail ?? ''} onChange={e => { setByocForm(f => ({ ...f, earnerEmail: e.target.value })); setInviteLink(null); }} placeholder="We send you a code to confirm it" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Client email</label><input type="email" value={byocForm.clientEmail ?? ''} onChange={e => { setByocForm(f => ({ ...f, clientEmail: e.target.value })); setInviteLink(null); }} placeholder="Where this invite is addressed" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
               <div><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Project name</label><input type="text" value={byocForm.description} onChange={e => { setByocForm(f => ({ ...f, description: e.target.value })); setInviteLink(null); }} placeholder="e.g., Mobile app redesign — 3 screens" className="w-full bg-slate-800 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-indigo-500/50 transition-all" /></div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* One column at every width. The modal is max-w-md, so two
+                  columns left the amount text about 67px beside the currency
+                  picker, and "1000" no longer fit. */}
+              <div className="grid grid-cols-1 gap-4">
                 {/* Amount and currency are ONE control: a single bordered box
                     holding the number and the code, rather than two fields
                     that can disagree about what they describe. The currency
