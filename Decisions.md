@@ -15,6 +15,129 @@ _Last updated: 2026-11-06_
 
 ## Current scope
 
+### [2026-11-09] — What a date-only deadline means, and what may be judged from it
+
+**Decision, by the owner.** A `deadline` is a **calendar date with no recorded
+zone and no recorded cutoff**. `YYYY-MM-DD` is exactly what both parties
+accepted and exactly what is hashed into the agreement.
+
+TrustFlow does **not** interpret it as UTC midnight, as the viewer's local
+end-of-day, or as the counterparty's end-of-day. No zone or cutoff was ever
+presented to either party, so none is part of the agreement. A day-only promise
+is a legitimate thing to agree, and it stays possible.
+
+**Nothing is judged automatically from it.** No lateness, no expiry, no payment
+consequence. Any such consequence requires a deadline whose meaning was itself
+presented and accepted as a term.
+
+**Existing rows cannot be timezone-backfilled.** The intended instant was never
+observed; inferring one from the owner's browser, the server's zone or the
+counterparty's address would be inventing a term nobody agreed to.
+
+Where a specific cutoff genuinely matters today, write it into the agreement
+text, which is already hashed and accepted. That is more honest than a field
+nobody was shown.
+
+**What this does not settle.** A richer representation — date-only versus
+instant, with an agreed IANA zone or local cutoff where those are part of the
+promise — stays reserved, not built. It would need a new snapshot and
+shown-terms version, and the version-evolution guards exist so that adding one
+cannot disturb the agreements already accepted. Source: `.ada/claude-report-26.md`.
+
+The creation-time validation floor (`DEADLINE_TIMEZONE_SLACK_DAYS`, one day) is
+unaffected and is not a statement about meaning: it exists so a user west of
+Greenwich is not told that today is already past.
+
+---
+
+### [2026-11-09] — What the agreed amount denotes, and what a payment assertion proves
+
+**Decision, by the owner.** The agreed `amount` is **the single number the two
+parties accepted**, in the stated currency's minor unit. The record says
+nothing else about it.
+
+It is **not** stated to be tax-inclusive or tax-exclusive, **not** gross or net
+of fees, and it allocates nothing between instalments or between the parties.
+**Silence is silence**: an omitted tax or fee treatment must never be read as
+"tax-free", "tax included", or "the performer receives this much net".
+
+**A payment assertion does not prove the full amount was paid.**
+`payment.reported`, `payment.acknowledged` and `payment.disputed` are a party's
+claim about a transfer, carrying a free-text note. They state no amount. The
+agreement hash on such an event binds the agreed price; it is not evidence that
+the price was transferred, in whole or in part. No interface may describe one
+as "paid in full".
+
+Where a tax or fee treatment matters, write it into the agreement text, which is
+hashed and accepted. A field nobody was shown is not an agreed term.
+
+**What this does not settle.** A structured total basis with optional
+components, and an obligation reference plus a stated amount on payment
+assertions, stay reserved for whenever partial payment is introduced. This
+entry adds no tax engine, no jurisdiction or country collection, no FX and no
+settlement rail — consistent with the currency-only decision. Source:
+`.ada/claude-report-26.md`.
+
+---
+
+### [2026-11-09] — A later act re-derives the agreement hash; it does not reuse the accepted one
+
+**Decision, by the owner.** Every act after acceptance derives its
+`agreement_hash` from the **current contract row**, under the snapshot version
+the agreement was accepted with. It does **not** copy the hash recorded at
+acceptance.
+
+**Why, and this is the point of the entry.** If the owner edits the agreement
+after acceptance, a later act then carries a **different** `agreement_hash`
+from the acceptance — and that mismatch is how a reader learns the terms moved.
+Both verifiers already rest on it: the receipt verifier and the guest trail each
+report whether every act was bound to the same agreement. Pinning the accepted
+hash onto later acts would make every act agree **by construction** and destroy
+that signal.
+
+So the two properties are kept apart deliberately:
+
+- **which shape** a later act's terms are read in — the accepted snapshot
+  version, which is read rather than assumed;
+- **which values** they hold — the current row, so an edit shows up.
+
+**Consequence to state plainly:** a later act's `agreement_hash` is therefore
+*not* a promise that it refers to the accepted terms. It is a fingerprint of
+the terms as they stood when that act was recorded, and comparing it with the
+acceptance's is what tells a reader whether anything changed in between.
+Source: `.ada/claude-report-28.md`.
+
+---
+
+### [2026-11-09] — The accepted snapshot version is stored on `contracts`
+
+**Decision, by the owner.** `contracts.accepted_snapshot_version` records which
+agreement-snapshot version a contract's acceptance bound, so a writer finds it
+on the row it already fetches.
+
+**Migration written, NOT APPLIED anywhere.**
+`supabase/migrations/20261109210000_contracts_accepted_snapshot_version.sql`
+exists and is reviewed; applying it waits for the owner's go-ahead at deploy
+time, and the Edge Functions do **not** read the column yet — they read the
+acceptance event, so the deployed code keeps working against the current
+schema either way.
+
+**What it is not.** Not a rehash: no event is rewritten and no stored hash
+recomputed. Not an agreed term: it is absent from the agreement snapshot, so it
+is hashed into nothing and changes no digest. Not a backfill of anything
+unobserved: the value is copied out of the acceptance event that already
+exists, and a contract with no acceptance event keeps a NULL — which the
+functions treat as a refusal where an acceptance must exist, rather than
+guessing 1.
+
+**What it buys.** The extra read per write goes away, and so does the
+interleaving it created: a draft accepted mid-write currently forces the
+version to be re-read on every retry, because the first read's answer can be
+stale. A value arriving in the same row snapshot as the state it belongs to has
+no such window.
+
+---
+
 ### [2026-11-06] — The money promise is recorded; settlement operations are out of current scope
 
 **Decision, by the owner, stated so it stops being re-derived.** TrustFlow
@@ -946,21 +1069,29 @@ the decision below.**
 
 ### [2026-03-14] — Timestamp integrity: Supabase Edge Function + RFC 3161 TSA
 
-**Status (2026-09-26): superseded by removal, not by a replacement.**
-`timestamp-event` was deleted from Supabase — it was a public, unauthenticated
-endpoint that nothing in `src/` called — and `src/lib/tsa.js` is now imported by
-nothing. **There is no external timestamping today**, and no decision has been
-taken to restore it. The reasoning below still governs *how* it would have to be
-done if it returns (server-side; never browser → TSA). The consequence that
-matters now: with no external notary, the operator is inside the trust boundary.
+**Status (2026-11-09): superseded by removal, and both halves are now gone from
+the repository.** `timestamp-event` was deleted from Supabase on 2026-09-26 — a
+public, unauthenticated endpoint that nothing in `src/` called — and its client,
+`src/lib/tsa.js`, was removed in Task 17 once nothing imported it. The
+function's own source went in Task 20. **Neither path exists any more**, and
+`scripts/smoke-production.mjs` asserts the slug stays 404 on every release.
+
+**There is no external timestamping today**, and no decision has been taken to
+restore it. The reasoning below still governs *how* it would have to be done if
+it returns (server-side; never browser → TSA), and the paths it names are
+historical. The consequence that matters now: with no external notary, the
+operator is inside the trust boundary. `events.tsa_token` remains a nullable
+column and any historical value in it is preserved; the exported
+`tsa_token_present` is a boolean, so a row with no token exports `false`, which
+means "no token is recorded" and not that one was never obtained.
 
 **Decision**: Contract lifecycle events timestamped via the `timestamp-event` Supabase Edge Function, which calls an RFC 3161-compliant TSA (FreeTSA.org) server-side. Clients must never call the TSA directly.
 
 **Context**: Core protocol requirement — the event log must be tamper-evident and verifiable by third parties without trusting TrustFlow servers. Direct browser → TSA calls are blocked by CORS in production environments. The Edge Function acts as a transparent proxy: it receives `{ hashHex }` from the client, forwards the DER-encoded TimeStampReq to FreeTSA, and returns the base64 token.
 
-**Implementation (2026-05-28)**:
-- `supabase/functions/timestamp-event/index.ts` — proxy function deployed to Supabase (Mumbai)
-- `src/lib/tsa.js` — `requestTimestamp()` now calls Edge Function first (`isSupabaseEnabled`); falls back to direct freetsa.org call in dev mode (Node/Vite dev server, where CORS is not enforced)
+**Implementation (2026-05-28, both files since deleted — see Status above)**:
+- `supabase/functions/timestamp-event/index.ts` — proxy function deployed to Supabase (Mumbai). Un-deployed 2026-09-26, source deleted in Task 20.
+- `src/lib/tsa.js` — `requestTimestamp()` called the Edge Function first, falling back to a direct freetsa.org call in dev. Removed in Task 17.
 
 **Alternatives considered**:
 
@@ -969,7 +1100,7 @@ matters now: with no external notary, the operator is inside the trust boundary.
 - Direct browser → freetsa.org — rejected; CORS-blocked in production browsers
 - On-chain timestamping — deferred to Phase 4+ (cost and complexity unjustified at prototype stage)
 
-**Consequences**: All contract events must go through the Edge Function. `src/lib/tsa.js` handles client-side TSA interaction and selects the correct path automatically.
+**Consequences (historical)**: while it existed, all contract events went through the Edge Function and `src/lib/tsa.js` selected the path. Neither is present now, and no event in this system carries a token.
 
 ---
 
