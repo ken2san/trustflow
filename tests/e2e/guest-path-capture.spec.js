@@ -289,7 +289,11 @@ test('capture: the terms changed while the guest was reading', async ({ page }) 
   await page.getByRole('button', { name: /I Agree/ }).click();
 
   await expect(page.getByText(/terms changed/i)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Nothing was accepted.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show me the current terms' })).toBeVisible();
   await shoot(page, '07-terms-changed');
+  await page.getByText('Details', { exact: true }).click();
+  await expect(page.getByText('Whoever sent this invitation edited the agreement after this page loaded, so the terms on screen are no longer the ones on offer. Open the link again to see the current terms before you decide.')).toBeVisible();
 });
 
 test('capture: the invitation a guest cannot use', async ({ page }) => {
@@ -305,5 +309,9 @@ test('capture: the invitation a guest cannot use', async ({ page }) => {
   await page.goto(`/?token=${INVITE_TOKEN}`);
 
   await expect(page.locator('body')).toContainText(/invit|link|expired|not found/i, { timeout: 15_000 });
+  await expect(page.getByText('Ask whoever sent it to you for a new one.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
   await shoot(page, '06-dead-link');
+  await page.getByText('Details', { exact: true }).click();
+  await expect(page.getByText('This link did not work. It may have been mistyped or cut short when it was copied, already used, or withdrawn by the sender.')).toBeVisible();
 });

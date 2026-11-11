@@ -109,9 +109,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
       ? 'An invitation can only be accepted once. If that was you, open this site on the browser you accepted in — if it still holds your access, the agreement is listed there. If it does not, or you are on another device, ask whoever invited you to re-send your access link. If you have not accepted anything, the person who sent this will want to know.'
       : cannotCheck
       ? 'Nothing was accepted, and nothing is wrong with the agreement. This page was loaded from an older version of TrustFlow than the one now running, so it could not confirm that the terms on screen are still the terms on offer. Reload the page and read them again.'
-      : termsChanged
-      ? 'Nothing was accepted. Whoever sent this invitation edited the agreement after this page loaded, so the terms on screen are no longer the ones on offer. Open the link again to see the current terms before you decide.'
-      : 'This link did not work. It may have been mistyped or cut short when it was copied, already used, or withdrawn by the sender. Ask whoever sent it to you for a new one.';
+      : null;
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 max-w-md mx-auto text-center animate-fade-in-up">
         <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/20 rounded-[20px] flex items-center justify-center">
@@ -119,7 +117,25 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
         </div>
         <div className="space-y-2">
           <h2 className="text-2xl font-black tracking-tighter text-white">{title}</h2>
-          <p className="text-slate-400 text-sm leading-relaxed">{body}</p>
+          {termsChanged ? (
+            <>
+              <p className="text-slate-400 text-sm leading-relaxed">Nothing was accepted.</p>
+              <details className="text-slate-400 text-sm leading-relaxed">
+                <summary className="cursor-pointer">Details</summary>
+                <p>Whoever sent this invitation edited the agreement after this page loaded, so the terms on screen are no longer the ones on offer. Open the link again to see the current terms before you decide.</p>
+              </details>
+            </>
+          ) : body ? (
+            <p className="text-slate-400 text-sm leading-relaxed">{body}</p>
+          ) : (
+            <>
+              <p className="text-slate-400 text-sm leading-relaxed">Ask whoever sent it to you for a new one.</p>
+              <details className="text-slate-400 text-sm leading-relaxed">
+                <summary className="cursor-pointer">Details</summary>
+                <p>This link did not work. It may have been mistyped or cut short when it was copied, already used, or withdrawn by the sender.</p>
+              </details>
+            </>
+          )}
         </div>
         {/* "Back to Marketplace" pointed at a surface removed on 2026-11-05,
             and promised a stranger a store of other people that never
