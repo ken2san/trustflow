@@ -198,6 +198,8 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   const reviewButton = page.getByRole('button', { name: 'Review Agreement' });
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await expect(reviewButton).toBeInViewport({ ratio: 1 });
+  await expect(page.getByText(/Not paid through TrustFlow\./)).toBeInViewport({ ratio: 1 });
+  await expect(page.getByText('No payment or commitment at this stage — you review the full terms before anything is locked.')).toBeInViewport({ ratio: 1 });
   const details = page.locator('details').filter({ hasText: 'Details: what you get by joining' });
   await expect(details).not.toHaveAttribute('open');
   await details.locator('summary').click();
@@ -223,6 +225,7 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   await page.getByRole('textbox', { name: /email/i }).or(page.locator('input[type="email"]'))
     .first().fill(CLAIMED);
   await page.getByRole('checkbox').check();
+  await expect(page.getByText(/I have reviewed the terms above/)).toBeVisible();
   await expect(page.getByRole('button', { name: /I Agree/ })).toBeEnabled();
   await shoot(page, '03-about-to-agree');
 
@@ -233,6 +236,8 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   await expect(page.getByRole('button', { name: 'View the full verification detail' }))
     .toBeVisible({ timeout: 15_000 });
   await shoot(page, '04-accepted');
+  await page.getByText('Details', { exact: true }).click();
+  await expect(page.getByText(/Either of you can then record that a payment was sent or received/)).toBeVisible();
 
   // 5. The record of agreement itself, full height.
   await page.getByRole('button', { name: 'View the full verification detail' }).click();

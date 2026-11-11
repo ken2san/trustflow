@@ -1520,10 +1520,14 @@ const App = () => {
             <p className="text-xs text-slate-400 leading-relaxed border border-white/5 bg-white/[0.02] rounded-2xl px-5 py-4">
               TrustFlow does not process the payment for this agreement, and <span className="text-white font-bold">sends{' '}
               {selectedItem?.client} no notification that you accepted — reach them the
-              way they reached you.</span> Either of you can then record that a payment was sent or
-              received, which TrustFlow stores as your statement rather than as a
-              fact it checked.
+              way they reached you.</span>
             </p>
+            <details className="text-xs text-slate-400 leading-relaxed">
+              <summary className="cursor-pointer">Details</summary>
+              <p>Either of you can then record that a payment was sent or
+              received, which TrustFlow stores as your statement rather than as a
+              fact it checked.</p>
+            </details>
             <button
               onClick={() => openAgreementAsGuest(String(selectedItem?.id ?? ''))}
               className="px-6 py-3 rounded-2xl bg-white text-[#020617] font-black text-sm hover:bg-indigo-400 hover:text-white transition-all"

@@ -295,14 +295,15 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
             </p>
           </div>
 
-          <label className="flex items-start gap-3 p-4 bg-white/[0.03] border border-white/5 rounded-2xl cursor-pointer select-none">
+          <div className="p-3 space-y-3 border border-indigo-400/30 bg-indigo-500/[0.05] rounded-2xl">
+          <label className="flex items-start gap-3 p-4 bg-white/[0.03] border border-white/10 rounded-2xl cursor-pointer select-none">
             <input
               type="checkbox"
               checked={consentChecked}
               onChange={e => setConsentChecked(e.target.checked)}
               className="mt-0.5 w-4 h-4 rounded accent-indigo-500 shrink-0"
             />
-            <span className="text-xs text-slate-400 leading-relaxed">
+            <span className="text-sm text-slate-200 leading-relaxed">
               I have reviewed the terms above — the work, what counts as done, the amount and the deadline — and I agree to them. I understand that my acceptance will be timestamped and recorded as a binding agreement.
             </span>
           </label>
@@ -333,6 +334,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               ? <><Loader2 className="w-5 h-5 animate-spin" /> Recording your acceptance…</>
               : <>I Agree — Join This Contract<ArrowRight className="w-5 h-5" /></>}
           </button>
+          </div>
           <button
             onClick={() => setStage('review')}
             className="w-full py-3 text-slate-400 hover:text-slate-400 transition-colors font-bold text-sm"
@@ -354,7 +356,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
 
   return (
     <>
-    <div className="space-y-10 animate-fade-in-up max-w-2xl mx-auto pb-28">
+    <div className="space-y-10 animate-fade-in-up max-w-2xl mx-auto pb-56">
 
       {/* Header */}
       <div className="text-center space-y-3">
@@ -389,21 +391,6 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           <div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Contract Value</p>
             <p className="text-3xl font-black italic text-white">{amountLabel}</p>
-            {/* Scoped to this agreement on purpose, and still scoped on
-                purpose even though the original reason has expired. That
-                reason was that "TrustFlow never holds money" could not be
-                claimed here because the Stripe functions existed in the
-                repository and their deployment was not knowable from this
-                screen (Codex design review, 2026-11-05). Both halves are now
-                settled: the functions were un-deployed on 2026-11-06, smoke
-                asserts they stay 404 on every release, and their source was
-                deleted in Task 20. The sentence below stays scoped anyway —
-                what this screen can show a counterparty is what happens to
-                THIS agreement, not a claim about the whole product. */}
-            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-              Not paid through TrustFlow. {guestPerforms ? <>{inviter} pays you</> : <>You pay {inviter}</>} directly,
-              by whatever means you two arrange.
-            </p>
           </div>
           <div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Deadline</p>
@@ -458,12 +445,18 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           <X className="w-4 h-4" />
           Not interested
         </button>
-        <p className="text-center text-xs text-slate-400">
-          No payment or commitment at this stage — you review the full terms before anything is locked.
-        </p>
       </div>
     </div>
     <div className="fixed inset-x-0 bottom-0 z-20 bg-[#020617] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {/* Scoped to this agreement: this screen describes this agreement,
+          rather than making a claim about the whole product. */}
+      <p className="text-center text-xs text-slate-400 leading-relaxed max-w-md mx-auto mb-2">
+        Not paid through TrustFlow. {guestPerforms ? <>{inviter} pays you</> : <>You pay {inviter}</>} directly,
+        by whatever means you two arrange.
+      </p>
+      <p className="text-center text-xs text-slate-400 mb-2">
+        No payment or commitment at this stage — you review the full terms before anything is locked.
+      </p>
       <button
         onClick={() => setStage('identify')}
         className="w-full max-w-md mx-auto py-5 bg-white text-[#020617] rounded-[24px] font-black text-lg flex items-center justify-center gap-3 hover:bg-indigo-400 hover:text-white transition-all shadow-2xl"
