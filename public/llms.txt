@@ -26,12 +26,23 @@ JSON requests. This is the production service: writes create real records.
 
 ### Authentication
 
-Obtain the project's public Supabase anon key from the service operator; it is
-not a credential for an agreement. Send it as `apikey: <ANON_KEY>` on requests.
+The Supabase anon key is a public project identifier used by the API gateway;
+it is not an agreement credential and does not bypass authorization. Obtain it
+from the service operator or the public web app's compiled JavaScript (the
+build-time input is `VITE_SUPABASE_ANON_KEY`; that name need not appear in the
+bundle). Send it as `apikey: <ANON_KEY>`.
 Use **one** `Authorization: Bearer ...` header:
 
 - **Owner / owner agent:** use the access token of a verified, non-anonymous
-  account: `Authorization: Bearer <OWNER_ACCESS_TOKEN>`. An agent may be
+  account: `Authorization: Bearer <OWNER_ACCESS_TOKEN>`. If the owner has a
+  password for this Supabase account, sign in with
+  `POST /auth/v1/token?grant_type=password`, headers `apikey: <ANON_KEY>` and
+  `Content-Type: application/json`, and body
+  `{"email":"<OWNER_EMAIL>","password":"<OWNER_PASSWORD>"}`. A successful
+  response contains `access_token` and `user.id` (the owner user ID). Password
+  sign-in depends on account and project configuration; if CAPTCHA is enabled,
+  an interactive challenge may be required. Do not assume this grant is
+  available or bypass a challenge. An agent may instead be
   handed that session's refresh token; exchange it with
   `POST /auth/v1/token?grant_type=refresh_token`, `apikey: <ANON_KEY>` and JSON
   `{"refresh_token":"<OWNER_REFRESH_TOKEN>"}`. Save a replacement refresh
@@ -79,6 +90,44 @@ Use **one** `Authorization: Bearer ...` header:
    and there is no guest pagination. An owner can use `GET /rest/v1/events`
    with `contract_id=eq.<CONTRACT_ID>` and its account session; access is
    subject to row-level security.
+
+### Owner-side evidence verification
+
+Read every page of `GET /rest/v1/events?contract_id=eq.<CONTRACT_ID>&select=id,type,contract_id,actor_id,payload,dod_hash,created_at,event_hash,prev_event_hash,hash_version,payload_hash,agreement_hash&order=created_at.asc,id.asc`
+with the owner headers. Do not call a partial or empty result a verified chain.
+For each row, use its `hash_version`; if absent or null, use 2 when
+`prev_event_hash` is present and 1 otherwise. Versions 1–4 are understood;
+unknown versions are unverified. Version 1 has no predecessor binding, so a
+linked chain cannot be established across those rows.
+
+For each row construct compact ECMAScript `JSON.stringify` output with keys in
+this exact order: `id`, `type`, `contract_id`, `actor_id`, `dod_hash`,
+`created_at`; normalize `created_at` as a UTC ISO timestamp with milliseconds
+and `Z`, and use null for a missing `dod_hash`. Version 2 adds `prev_hash`
+(the row's `prev_event_hash`, or `GENESIS` when null); version 3 adds
+`payload_hash` (null if absent); version 4 adds `agreement_hash` (null if
+absent). SHA-256 the UTF-8 bytes and compare lowercase hex with `event_hash`.
+For linked rows compare `prev_event_hash` to the preceding `event_hash` in the
+ordered result; the first link uses `GENESIS` (a null first link is treated as
+that sentinel). A gap, mismatch or unsupported version is not verified.
+
+For v3 and v4 also compare `payload_hash` to SHA-256 of the UTF-8 compact
+stable JSON of `payload ?? {}`: recursively sort object keys by JavaScript
+UTF-16 order, keep array order, and use ECMAScript JSON primitive serialization
+as in [Agent protocol](/agent-protocol.md). For v4, compare `agreement_hash`
+against the SHA-256 of the stable JSON of the accepted agreement snapshot in
+the earliest `dod.consent_recorded` payload's `_agreement`. Snapshot v1 uses `snapshot_version: 1`,
+`project_name`, `dod`, `amount`, `currency`, `deadline`, `performed_by`,
+`offered_by`; `amount` is `amount_minor ?? amount_jpy ?? null`, `dod` defaults
+to `[]`, `performed_by` to `creator`, `offered_by` to `earner_display_name`,
+and other absent values to null. If `_agreement` or its snapshot version is
+absent or unsupported, do not guess. Compare each non-null `dod_hash` with
+SHA-256 of stable JSON of the accepted snapshot's `dod` (or `[]` if null).
+Comparing today's contract row requires
+rebuilding that version's snapshot from the row and comparing it with the
+accepted snapshot. The owner has raw rows for these checks;
+the guest view provides shaped canonical inputs, not necessarily the full
+payload. These checks establish consistency, not truth or independent time.
 
 ## The shape of a transaction
 
