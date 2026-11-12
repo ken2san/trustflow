@@ -91,43 +91,9 @@ Use **one** `Authorization: Bearer ...` header:
    with `contract_id=eq.<CONTRACT_ID>` and its account session; access is
    subject to row-level security.
 
-### Owner-side evidence verification
+### Verifying evidence
 
-Read every page of `GET /rest/v1/events?contract_id=eq.<CONTRACT_ID>&select=id,type,contract_id,actor_id,payload,dod_hash,created_at,event_hash,prev_event_hash,hash_version,payload_hash,agreement_hash&order=created_at.asc,id.asc`
-with the owner headers. Do not call a partial or empty result a verified chain.
-For each row, use its `hash_version`; if absent or null, use 2 when
-`prev_event_hash` is present and 1 otherwise. Versions 1–4 are understood;
-unknown versions are unverified. Version 1 has no predecessor binding, so a
-linked chain cannot be established across those rows.
-
-For each row construct compact ECMAScript `JSON.stringify` output with keys in
-this exact order: `id`, `type`, `contract_id`, `actor_id`, `dod_hash`,
-`created_at`; normalize `created_at` as a UTC ISO timestamp with milliseconds
-and `Z`, and use null for a missing `dod_hash`. Version 2 adds `prev_hash`
-(the row's `prev_event_hash`, or `GENESIS` when null); version 3 adds
-`payload_hash` (null if absent); version 4 adds `agreement_hash` (null if
-absent). SHA-256 the UTF-8 bytes and compare lowercase hex with `event_hash`.
-For linked rows compare `prev_event_hash` to the preceding `event_hash` in the
-ordered result; the first link uses `GENESIS` (a null first link is treated as
-that sentinel). A gap, mismatch or unsupported version is not verified.
-
-For v3 and v4 also compare `payload_hash` to SHA-256 of the UTF-8 compact
-stable JSON of `payload ?? {}`: recursively sort object keys by JavaScript
-UTF-16 order, keep array order, and use ECMAScript JSON primitive serialization
-as in [Agent protocol](/agent-protocol.md). For v4, compare `agreement_hash`
-against the SHA-256 of the stable JSON of the accepted agreement snapshot in
-the earliest `dod.consent_recorded` payload's `_agreement`. Snapshot v1 uses `snapshot_version: 1`,
-`project_name`, `dod`, `amount`, `currency`, `deadline`, `performed_by`,
-`offered_by`; `amount` is `amount_minor ?? amount_jpy ?? null`, `dod` defaults
-to `[]`, `performed_by` to `creator`, `offered_by` to `earner_display_name`,
-and other absent values to null. If `_agreement` or its snapshot version is
-absent or unsupported, do not guess. Compare each non-null `dod_hash` with
-SHA-256 of stable JSON of the accepted snapshot's `dod` (or `[]` if null).
-Comparing today's contract row requires
-rebuilding that version's snapshot from the row and comparing it with the
-accepted snapshot. The owner has raw rows for these checks;
-the guest view provides shaped canonical inputs, not necessarily the full
-payload. These checks establish consistency, not truth or independent time.
+See [the verification specification and vectors](/agent-protocol.md#3-verifying-evidence) for owner and guest checks, pagination and limits.
 
 ## The shape of a transaction
 
@@ -158,9 +124,8 @@ payload. These checks establish consistency, not truth or independent time.
 - Server-derived fields cannot be supplied by a caller: the actor, the
   timestamp, the hash, its predecessor and the terms pin are all set by the
   server, and offering one is refused rather than ignored.
-- Writes accept an idempotency key, scoped to one operation — contract, key,
-  type and actor together. A retry returns the original; the same key for a
-  different operation is refused.
+- Event writes accept an idempotency key scoped to an operation; contract creation
+  has no such guarantee. See the protocol for safe retry and reconciliation.
 
 ## Optional
 

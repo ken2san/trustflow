@@ -390,3 +390,22 @@ describe('the agreement snapshot is frozen per version', () => {
       .toBe(await deriveAgreementHash({ ...CONTRACT, amount_minor: 125050, currency: 'JPY' }))
   })
 })
+
+describe('public synthetic evidence vectors', () => {
+  it('pins the published preimages and hashes to the implementation', async () => {
+    const { readFileSync } = await import('node:fs')
+    const doc = readFileSync(new URL('../../public/agent-protocol.md', import.meta.url), 'utf8')
+    const payload = { note: 'Done' }
+    const contract = { project_name: 'Example', dod: ['Translate'], amount_minor: 1250, currency: 'CAD', deadline: null, performed_by: 'creator', earner_display_name: 'Example' }
+    const ph = await payloadHash(payload)
+    const ah = await deriveAgreementHash(contract)
+    const dh = await deriveDodHash(contract.dod)
+    const event = { id: '11111111-1111-4111-8111-111111111111', type: 'performance.asserted', contract_id: '22222222-2222-4222-8222-222222222222', actor_id: 'example', dod_hash: dh, created_at: '2026-01-02T03:04:05.12+00:00', prev_event_hash: 'GENESIS', payload_hash: ph, agreement_hash: ah }
+    const canonical = eventCanonical(event, 4)
+    for (const preimage of [stableStringify(payload), stableStringify(buildAgreementSnapshot(contract)), stableStringify(contract.dod), canonical]) {
+      const digest = await sha256Hex(preimage)
+      expect(doc).toContain('`' + preimage + '`')
+      expect(doc).toContain('`' + digest + '`')
+    }
+  })
+})

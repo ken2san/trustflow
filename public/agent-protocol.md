@@ -251,3 +251,111 @@ What follows from that, and is worth stating because it is easy to get wrong:
 - **Re-issuing access is a different act.** `reissue-guest-access` replaces an
   already-accepted counterparty's credential and records `access.reissued`. It
   does not re-invite anyone.
+
+---
+
+## 3. Verifying evidence
+
+The HTTP entry point and credentials are in [llms.txt](/llms.txt). Ask the
+operator for the project's public anon key and use `<ANON_KEY>`; it is not an
+agreement credential. Never publish an owner session or invitation token. For
+an owner session use the returned `expires_in` or expiry, not a fixed lifetime;
+refresh before expiry and save a rotated refresh token securely. If the session
+is expired or revoked, the owner must sign in again through an authorized flow;
+CAPTCHA and account settings may require human participation. Guest capability
+expiry is separate from the account session.
+
+### Amounts and requests
+
+Amounts are positive integers in minor units, maximum 2147483647. The supported
+currency exponents are JPY: 0; CAD, HKD, USD, EUR and GBP: 2. JPY 1250 means
+¥1,250; CAD or USD 1250 means 12.50 major units. Parse a decimal string digit
+by digit, pad the fractional part to the exponent, and reject nonzero excess
+fractional digits rather than rounding; trailing zeros beyond the exponent are
+allowed. Do not use floating point to derive the stored amount. `amount_jpy` is
+legacy: it mirrors JPY and is null for non-JPY; use `amount_minor`.
+
+A successful invitation read returns a JSON object with `contract_id`,
+`project_name`, `dod`, `amount_jpy`, `amount_minor`, `currency`, `deadline`,
+`earner_display_name`, `invited_hirer_email`, and `performed_by`. It does not
+issue a guest token. `POST /functions/v1/guest-contract-events` requires the
+guest header described in llms.txt; no contract ID or body is read, so `{}` is
+sufficient. `POST /functions/v1/log-event` returns 201 with
+`{"event":{...},"deduplicated":false}` on a new write, 200 with
+`{"event":{...},"deduplicated":true}` for a matching replay, and 409
+`idempotency_key_in_use` for a key used by a different actor or type on that
+contract. The optional JSON `idempotency_key` is a string, not necessarily a
+UUID; use a new nonempty opaque key per operation, not a secret. Empty strings
+are not safe idempotency keys. Other 409 errors can also occur.
+
+`POST /rest/v1/contracts` has no documented create idempotency key: after an
+ambiguous response stop, read back and reconcile before any retry. Matching
+terms alone do not prove a row is the same operation. `delivered_at` is a
+legacy, unmaintained column from an old auto-capture design; null does not
+prove no delivery. Use the timestamps of `performance.asserted` and
+`performance.accepted` for the respective statements.
+
+### Canonical hashes
+
+Read every owner event page, ordered by `created_at.asc,id.asc` with the same
+contract filter. PostgREST supports `Range-Unit: items` and `Range: 0-99`, then
+subsequent ranges; request `Prefer: count=exact` and examine `Content-Range`.
+Respect any server cap, advance by the actual rows received and stop only once
+all rows are accounted for. Concurrent appends can change the result during
+pagination: reconcile by rereading; pages alone are not a snapshot or proof of
+completeness. Owner raw rows have no `verified` or `truncated` verdict.
+
+For each row use `hash_version`; when null/absent infer 2 if `prev_event_hash`
+is present, otherwise 1. Versions 1–4 are supported. Construct the compact
+ECMAScript `JSON.stringify` object with keys in this exact order: `id`, `type`,
+`contract_id`, `actor_id`, `dod_hash`, `created_at`. Use null for missing
+`dod_hash`; normalize a valid timestamp with `new Date(value).toISOString()`.
+For example `2026-01-02T03:04:05.12+00:00` becomes
+`2026-01-02T03:04:05.120Z`. Invalid dates remain the input string; timestamp
+precision is that of ECMAScript Date, not arbitrary precision. Version 2 adds
+`prev_hash` from `prev_event_hash` or `GENESIS` when null. Version 3 adds
+`payload_hash` (null if absent); version 4 adds `agreement_hash` (null if
+absent). SHA-256 the UTF-8 bytes and compare lowercase hex to `event_hash`.
+Compare every predecessor to the preceding event hash; the first is `GENESIS`.
+A v1 event does not bind a predecessor. Unsupported, missing, broken or partial
+inputs are not a verified complete chain.
+
+For v3/v4, separately recompute `payload_hash` over stable compact JSON of
+`payload ?? {}`: recursively sort object keys by JavaScript UTF-16 order,
+preserve array order, and use ECMAScript JSON primitive serialization as in
+section 1. For v4 compare `agreement_hash` to stable JSON SHA-256 of the
+accepted snapshot from the earliest `dod.consent_recorded` payload's
+`_agreement`; do not guess an absent or unsupported snapshot version. Snapshot
+v1 keys are `snapshot_version`, `project_name`, `dod`, `amount`, `currency`,
+`deadline`, `performed_by`, `offered_by`; when building from a contract row,
+`amount = amount_minor ?? amount_jpy ?? null`, `dod` defaults to `[]`,
+`performed_by` to `creator`, `offered_by` to `earner_display_name`, other
+missing values to null. Compare each non-null `dod_hash` to stable JSON SHA-256
+of accepted `dod ?? []`. If comparing today's row, build its snapshot under the
+accepted version and compare it to the accepted snapshot; they can differ.
+
+A guest receives shaped `events` with `canonical` inputs and integrity results,
+`accepted_agreement`, `chain` and `verification`. Independently recompute the
+canonical event hash and predecessor links using the same rules above and
+compare supported v4 agreement hashes to the accepted snapshot. The guest
+receives only an allowlisted payload projection, so cannot generally recompute
+`payload_hash` from the shown text. `chain.truncated` means the 500-row cap was
+reached, including exactly 500; no guest pagination exists. A checked prefix is
+not a complete history. Unknown versions or absent inputs are unverified, not
+failed or passed. The `verification.canonical_definition` value is an internal
+source path, not a public URL; this section is the public specification.
+Neither view proves identity, delivery, payment, an independent timestamp, or
+that the server showed both parties the same history.
+
+### Synthetic v4 reference vector
+
+All strings below are exact UTF-8 preimages without a newline. These values are
+fictional. Payload preimage: `{"note":"Done"}`; payload SHA-256:
+`f18ebe1e0d7a693111ab8cfd8b4194740565c7abffaa8b26b1fe6fd21e565488`.
+Agreement snapshot preimage:
+`{"amount":1250,"currency":"CAD","deadline":null,"dod":["Translate"],"offered_by":"Example","performed_by":"creator","project_name":"Example","snapshot_version":1}`
+Agreement SHA-256: `2e29fa574bd127507bdd992241d409062c4c1d254664934ad1326c9366b71f66`.
+DoD preimage: `["Translate"]`; SHA-256: `1914672d421d9572fcfcda820a143c09908678597e48318cacdb9ea64b9a31cb`.
+Event v4 preimage:
+`{"id":"11111111-1111-4111-8111-111111111111","type":"performance.asserted","contract_id":"22222222-2222-4222-8222-222222222222","actor_id":"example","dod_hash":"1914672d421d9572fcfcda820a143c09908678597e48318cacdb9ea64b9a31cb","created_at":"2026-01-02T03:04:05.120Z","prev_hash":"GENESIS","payload_hash":"f18ebe1e0d7a693111ab8cfd8b4194740565c7abffaa8b26b1fe6fd21e565488","agreement_hash":"2e29fa574bd127507bdd992241d409062c4c1d254664934ad1326c9366b71f66"}`
+Event SHA-256: `64f2596df8167c2aaee5bebc196e41e7d2beff164bd919c967fcdcd12771f776`.
