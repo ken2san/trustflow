@@ -248,7 +248,7 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   // is where the invited address and the claimed one appear side by side.
   await expect(page.getByText(INVITED).first()).toBeVisible();
   await expect(page.getByText(CLAIMED).first()).toBeVisible();
-  await expect(page.getByText('Address given when accepting')).toBeVisible();
+  await expect(page.getByText('Address given when accepting this invitation')).toBeVisible();
   await shoot(page, '05-record');
   // This one does run past the fold, and the part below it — the footnote
   // about what a hash does and does not cover — is the honest half.

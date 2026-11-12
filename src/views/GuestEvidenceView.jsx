@@ -251,7 +251,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             )}
             {identity.claimed_identity && (
               <div className="flex gap-2">
-                <dt className="text-slate-400">Address given when accepting</dt>
+                <dt className="text-slate-400">Address given when accepting this invitation</dt>
                 <dd className="text-slate-200">{identity.claimed_identity}</dd>
               </div>
             )}
@@ -278,7 +278,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
         ) : (
           contract.hirer_email && (
             <p className="text-sm text-slate-300">
-              Address given when accepting {contract.hirer_email}
+              Address given when accepting this invitation: {contract.hirer_email}
             </p>
           )
         )}

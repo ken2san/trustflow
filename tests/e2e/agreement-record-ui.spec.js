@@ -175,7 +175,7 @@ test('the record does not claim the accepting identity was established', async (
   await expect(page.getByText('Accepted as')).toHaveCount(0);
   await expect(page.getByText('Invitation addressed to')).toBeVisible();
   await expect(page.getByText('invited@example.test')).toBeVisible();
-  await expect(page.getByText('Address given when accepting')).toBeVisible();
+  await expect(page.getByText('Address given when accepting this invitation')).toBeVisible();
   await expect(page.getByText('someone.else@example.test')).toBeVisible();
 });
 
