@@ -212,6 +212,7 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   //    that ends up inside the hashed record.
   await page.getByRole('button', { name: 'Review Agreement' }).click();
   await expect(page.getByPlaceholder('Your name or handle')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Your name or handle' })).toBeVisible();
   await shoot(page, '02-identify');
 
   // 3. The same screen with the form filled and consent given: what a person
@@ -247,6 +248,7 @@ test('capture: what the counterparty is shown, start to record', async ({ page }
   // is where the invited address and the claimed one appear side by side.
   await expect(page.getByText(INVITED).first()).toBeVisible();
   await expect(page.getByText(CLAIMED).first()).toBeVisible();
+  await expect(page.getByText('Address given when accepting')).toBeVisible();
   await shoot(page, '05-record');
   // This one does run past the fold, and the part below it — the footnote
   // about what a hash does and does not cover — is the honest half.

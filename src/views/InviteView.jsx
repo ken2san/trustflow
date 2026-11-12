@@ -218,7 +218,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
           <div className="w-14 h-14 bg-indigo-500/10 border border-indigo-500/20 rounded-[20px] flex items-center justify-center mx-auto">
             <User className="w-7 h-7 text-indigo-400" />
           </div>
-          <h2 className="text-3xl font-black tracking-tighter text-white">How should we address you?</h2>
+          <h2 className="text-3xl font-black tracking-tighter text-white">What name should we use?</h2>
           <p className="text-slate-400 text-sm leading-relaxed max-w-xs mx-auto">
             Your replies and actions on this contract will be recorded under this name.
             No account required yet.
@@ -226,7 +226,9 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
         </div>
 
         <div className="space-y-3">
+          <label className="block text-sm text-slate-300" htmlFor="guest-display-name">Your name or handle</label>
           <input
+            id="guest-display-name"
             type="text"
             value={displayName}
             onChange={e => setDisplayName(e.target.value)}
@@ -277,7 +279,7 @@ const InviteView = ({ inviteData, tokenError, onAccept, onDecline }) => {
               <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">By</dt><dd>{deadlineLabel}</dd></div>
               <div className="flex gap-2"><dt className="text-slate-400 w-20 shrink-0">Who works</dt><dd>{guestPerforms ? 'You' : inviter}</dd></div>
             </dl>
-            <p className="text-[11px] text-slate-400">A summary of the previous screen, not a replacement for it.</p>
+            <p className="text-[11px] text-slate-400">Summary only; review the previous screen too.</p>
           </div>
 
           {/* Deliberately NOT inside the box above, and not inside the consent

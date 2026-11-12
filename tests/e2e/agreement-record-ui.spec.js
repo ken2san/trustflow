@@ -173,9 +173,9 @@ test('the record does not claim the accepting identity was established', async (
 
   // "Accepted as x@example.com" read as a verified identity. Nothing checks it.
   await expect(page.getByText('Accepted as')).toHaveCount(0);
-  await expect(page.getByText('Invitation sent to')).toBeVisible();
+  await expect(page.getByText('Invitation addressed to')).toBeVisible();
   await expect(page.getByText('invited@example.test')).toBeVisible();
-  await expect(page.getByText('Accepted using that invitation, giving')).toBeVisible();
+  await expect(page.getByText('Address given when accepting')).toBeVisible();
   await expect(page.getByText('someone.else@example.test')).toBeVisible();
 });
 

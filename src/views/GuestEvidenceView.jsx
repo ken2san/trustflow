@@ -245,13 +245,13 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
           <dl className="text-sm text-slate-300 space-y-0.5 pt-1">
             {identity.invited_recipient && (
               <div className="flex gap-2">
-                <dt className="text-slate-400">Invitation sent to</dt>
+                <dt className="text-slate-400">Invitation addressed to</dt>
                 <dd className="text-slate-200">{identity.invited_recipient}</dd>
               </div>
             )}
             {identity.claimed_identity && (
               <div className="flex gap-2">
-                <dt className="text-slate-400">Accepted using that invitation, giving</dt>
+                <dt className="text-slate-400">Address given when accepting</dt>
                 <dd className="text-slate-200">{identity.claimed_identity}</dd>
               </div>
             )}
@@ -265,19 +265,20 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
                 does not pretend to. */}
             {identity.invited_recipient && identity.claimed_identity
               && identity.invited_recipient !== identity.claimed_identity && (
-              <p className="text-xs text-slate-400 pt-2 leading-relaxed">
-                These differ. That is not by itself a problem — an invitation
-                can be passed to a colleague, or someone can accept with a
-                different address of their own. TrustFlow checked neither
+              <div className="text-xs text-slate-400 pt-2 leading-relaxed">
+                <p>These differ. TrustFlow checked neither
                 address and cannot say which happened, so it records both as
-                given and leaves the question to the people involved.
-              </p>
+                given and leaves the question to the people involved.</p>
+                <details><summary className="cursor-pointer">Details</summary><p>That is not by itself a problem — an invitation
+                can be passed to a colleague, or someone can accept with a
+                different address of their own.</p></details>
+              </div>
             )}
           </dl>
         ) : (
           contract.hirer_email && (
             <p className="text-sm text-slate-300">
-              Accepted using the invitation, giving {contract.hirer_email}
+              Address given when accepting {contract.hirer_email}
             </p>
           )
         )}
@@ -335,7 +336,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             truncated: guest-contract-events returns at most MAX_EVENTS and
             says so, and a check over a prefix is not a check over all. */}
         {chain.server_attested === 0 ? (
-          <p className="text-slate-400">No server-attested events to verify yet.</p>
+          <p className="text-slate-400">No server-attested events to check yet.</p>
         ) : chain.verified ? (
           <p className="text-emerald-400">
             TrustFlow recomputed {chain.truncated ? 'the events shown here' : 'every server-attested event'} and
@@ -359,9 +360,9 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
         </ol>
       )}
 
-      <p className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
-        Each event's hash covers its type, timing, actor and the agreement it belongs to, and links
-        to the event before it.{' '}
+      <div className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
+        <details><summary className="cursor-pointer">Details</summary><p>Each event's hash covers its type, timing, actor and the agreement it belongs to, and links
+        to the event before it.</p></details>
         {/* Stated from what the server reported, not assumed: a record containing
             entries written before payloads were attested cannot claim otherwise. */}
         {chain.payload_covered_by_hash
@@ -370,7 +371,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
              each entry, so those are recorded but not tamper-evident.</>}
         {' '}TrustFlow records what each party stated; it does not establish that a statement is true.
         {chain.truncated && ' Only the earliest events are shown.'}
-      </p>
+      </div>
 
       {/* The invitation promises the counterparty "your own copy of the
           record". It was true — the download sits on the agreement screen —
@@ -390,7 +391,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
           {/* slate-400, not slate-500: at 12px the dimmer one measures 4.23:1
               against this background and the accessibility gate rejected it —
               on a screen whose last finding was exactly this. */}
-          <p className="text-xs text-slate-400">
+          <details className="text-xs text-slate-400"><summary className="cursor-pointer">Details</summary><p>
             A copy of what is shown here, as a file you keep. Reading it needs
             nothing from TrustFlow — and neither does checking it: each act
             carries every input its hash was taken over, so you can recompute
@@ -400,7 +401,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             the whole payload and you are shown part of it — nor who the people
             are, nor whether the work or the payment described actually
             happened, nor that both sides were shown the same history.
-          </p>
+          </p></details>
         </div>
       )}
 
