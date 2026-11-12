@@ -226,6 +226,9 @@ describe('the agreement snapshot', () => {
 })
 
 describe('canonicalTimestamp', () => {
+  it('truncates fractional digits beyond milliseconds', () => {
+    expect(canonicalTimestamp('2026-01-02T03:04:05.1239+00:00')).toBe('2026-01-02T03:04:05.123Z')
+  })
   // Regression: events are hashed over toISOString() but PostgREST returns the
   // same instant with a +00:00 offset, which made every stored event verify as
   // tampered with.

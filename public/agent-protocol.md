@@ -288,6 +288,13 @@ contract. The optional JSON `idempotency_key` is a string, not necessarily a
 UUID; use a new nonempty opaque key per operation, not a secret. Empty strings
 are not safe idempotency keys. Other 409 errors can also occur.
 
+A successful acceptance (`accept: true`) returns HTTP 200 and a JSON object
+with `contract_id`, `project_name`, `dod`, `amount_jpy`, `amount_minor`,
+`currency`, `deadline`, `earner_display_name`, `guest_access_token`, and
+`acceptance_event_id`. The guest token is a secret; it is issued here, not by
+the preview. The acceptance response does not include `invited_hirer_email`
+or `performed_by`; those are returned by the invitation read.
+
 `POST /rest/v1/contracts` has no documented create idempotency key: after an
 ambiguous response stop, read back and reconcile before any retry. Matching
 terms alone do not prove a row is the same operation. `delivered_at` is a
@@ -312,7 +319,9 @@ ECMAScript `JSON.stringify` object with keys in this exact order: `id`, `type`,
 `dod_hash`; normalize a valid timestamp with `new Date(value).toISOString()`.
 For example `2026-01-02T03:04:05.12+00:00` becomes
 `2026-01-02T03:04:05.120Z`. Invalid dates remain the input string; timestamp
-precision is that of ECMAScript Date, not arbitrary precision. Version 2 adds
+precision is that of ECMAScript Date, not arbitrary precision. For example,
+`2026-01-02T03:04:05.1239+00:00` becomes `2026-01-02T03:04:05.123Z`: digits
+beyond milliseconds are discarded, not rounded. Version 2 adds
 `prev_hash` from `prev_event_hash` or `GENESIS` when null. Version 3 adds
 `payload_hash` (null if absent); version 4 adds `agreement_hash` (null if
 absent). SHA-256 the UTF-8 bytes and compare lowercase hex to `event_hash`.
@@ -323,7 +332,10 @@ inputs are not a verified complete chain.
 For v3/v4, separately recompute `payload_hash` over stable compact JSON of
 `payload ?? {}`: recursively sort object keys by JavaScript UTF-16 order,
 preserve array order, and use ECMAScript JSON primitive serialization as in
-section 1. For v4 compare `agreement_hash` to stable JSON SHA-256 of the
+section 1. Hash the **stored event row's full `payload`**, not the object sent
+in the write request: the server adds fields such as `_actor_role` and
+`_authentication` before storing and hashing it. An owner should read that
+full payload from the raw event row. For v4 compare `agreement_hash` to stable JSON SHA-256 of the
 accepted snapshot from the earliest `dod.consent_recorded` payload's
 `_agreement`; do not guess an absent or unsupported snapshot version. Snapshot
 v1 keys are `snapshot_version`, `project_name`, `dod`, `amount`, `currency`,
@@ -338,6 +350,9 @@ A guest receives shaped `events` with `canonical` inputs and integrity results,
 `accepted_agreement`, `chain` and `verification`. Independently recompute the
 canonical event hash and predecessor links using the same rules above and
 compare supported v4 agreement hashes to the accepted snapshot. The guest
+canonical block calls the input `prev_event_hash`, just like the raw row; the
+v2–v4 serialized hash preimage calls that value `prev_hash`.
+The guest
 receives only an allowlisted payload projection, so cannot generally recompute
 `payload_hash` from the shown text. `chain.truncated` means the 500-row cap was
 reached, including exactly 500; no guest pagination exists. A checked prefix is
