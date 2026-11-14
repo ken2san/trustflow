@@ -1,6 +1,6 @@
 # HANDOFF
 
-Last updated: **2026-11-09**, at commit `408a809`.
+Last updated: **2026-11-14**, based on commit `a9795f8`.
 
 **This file says where the project is**, not what each session did — that is
 what `git log` and `.ada/claude-report-*.md` are for. It was a session log of
@@ -84,7 +84,7 @@ never follows.** A push is already a production action.
 
 ### Database
 
-45 migrations. `check-migrations.mjs` runs offline in CI. The CLI link is
+46 local migration files. `check-migrations.mjs` runs offline in CI. The CLI link is
 deliberately on E2E, so **every migration command names its target explicitly**
 (`supabase db push --db-url <...>`; `db push` has no `--project-ref`).
 
@@ -100,15 +100,8 @@ from the implementation unnoticed.
 
 ## Local, committed, unpushed
 
-Two commits ahead of `origin/main`:
-
-| | |
-| --- | --- |
-| `690cab6` | `test(e2e)` — the mixed-surface suite (report 19) |
-| `408a809` | `chore(functions)` — deleting the retired source (report 20) |
-
-`408a809` is under Codex review. Nothing in either touches a deployed surface:
-no Edge Function, no schema, and the web bundle hash is unchanged.
+At the Task 74 check, `main` and the locally recorded `origin/main` were in sync
+at `a9795f8`; this handoff refresh follows that commit.
 
 ---
 
@@ -295,7 +288,7 @@ so this note is the correction.
 
 ## How this project tests without a second human
 
-- `npm test` — 558 unit tests, 25 files. Fast, no credentials.
+- `npm test` — latest recorded `make check`: 650 unit tests, 28 files. Fast, no credentials.
 - `npm run test:api` — one transaction over HTTP, both parties, no browser, no
   service role. 31 checks.
 - `npm run sim:two-agents` — the same as **two OS processes**, two credentials,
@@ -377,3 +370,6 @@ Kept as constraints, not stories.
 - `tests/e2e/liveEnv.js` — credentials, and the refusal to run without them.
 - `.ada/claude-report-*.md` — the detailed record of each piece of work, and
   where measurements live.
+
+- Task 73 plan: `.ada/codex-report-73.md`.
+- Task 74 refreshed this handoff and corrected the retired invite-format comment; deployment status was checked from documents only.

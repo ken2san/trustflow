@@ -173,9 +173,7 @@ const App = () => {
   const [initialParams] = useState(() => new URLSearchParams(window.location.search));
   const [mode, setMode] = useState('earner');
   // Detect invite link params on mount; set initial view accordingly.
-  // Supports two URL formats:
-  //   ?token=<signed>   — new format (HMAC-signed, 72h expiry)
-  //   ?invite=1&...     — legacy format (backward compat)
+  // The current invitation format is ?token=<opaque server-issued token>.
   // The invite URL carries an opaque server-issued token and nothing else.
   // Every contractual value shown to the Hirer is fetched from the contract
   // row (see the invite fetch effect below). Two older formats are gone on
