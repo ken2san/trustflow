@@ -132,13 +132,13 @@ each application approved by the owner separately:
   production migration goes through `db push`.
 
 The Edge Functions do **not** read the column yet; they read the acceptance
-event. **New acceptances do not write it either:** `accept_invitation` leaves it
-NULL, so from 2026-11-10 the column covers only the rows the backfill reached.
-NULL means "ask the evidence", so this is incomplete rather than wrong. Making
-acceptance write it is the follow-up that has to land before anything reads the
-column (Task 38, F1). **Written as `20261110150000_accept_writes_snapshot_version.sql`,
-NOT APPLIED anywhere yet** (Codex reviews first, then E2E, then production on
-the owner's word). It reads the **earliest** acceptance after the insert, not
+event. NULL means "ask the evidence". The follow-up
+`20261110150000_accept_writes_snapshot_version.sql` was applied to production
+on 2026-11-10 after the owner's approval, following E2E. Task 45's recorded
+read-only post-check reported 46 migrations, 130 rows set, and zero mismatches.
+The related `a263e61` commit updates the E2E link documentation; the apply and
+post-check evidence is in `.ada/claude-report-45.md`, not in that commit. The
+writer reads the **earliest** acceptance after the insert, not
 the event being written, so the column agrees with the reader on contracts that
 already held an acceptance, and it re-runs the backfill for rows accepted in
 between.

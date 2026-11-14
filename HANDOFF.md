@@ -373,3 +373,4 @@ Kept as constraints, not stories.
 
 - Task 73 plan: `.ada/codex-report-73.md`.
 - Task 74 refreshed this handoff and corrected the retired invite-format comment; deployment status was checked from documents only.
+- Task 75 corrected the writer migration's production status in `Decisions.md` from the Task 45 record; no live check was made.
