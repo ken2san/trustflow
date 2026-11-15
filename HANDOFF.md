@@ -176,6 +176,7 @@ nowhere):
 - Claude Task 66 (opinion): use `postgres` (non-superuser + BYPASSRLS, like hosted), but the race guard will refuse trustflow-localdb because `inet_server_addr()` is the bridge IP `172.17.0.2`; guest E2E needs PostgREST+GoTrue+edge-runtime. Report: `.ada/claude-report-66.md`.
 - Claude Task 67: applied migrations as `postgres` over 127.0.0.1 inside trustflow-localdb; 13/47 OK, `20260923000001` failed (`function auth.jwt() does not exist` — GoTrue's, not in the bare image). Self-test and race not run. Report: `.ada/claude-report-67.md`.
 - Claude Task 68: recreated trustflow-localdb (127.0.0.1:54322 IPv4 only), ran GoTrue v2.197.0 `auth migrate` once (75 OK, no ports, removed); project migrations 18/47 OK, `20260924123733_reconcile_migration_history` failed (`supabase_migrations.schema_migrations` does not exist — the CLI's history table). Self-test/race not run. Report: `.ada/claude-report-68.md`.
+- Claude Task 69: fresh trustflow-localdb (127.0.0.1:54322 IPv4 only) + GoTrue migrate; CLI-shaped `supabase_migrations.schema_migrations` (DDL from the CLI binary), **47/47 migrations applied as `postgres`, self-test passed**; marker needed `supabase_admin` (PG17 refuses `postgres`: permission denied to set parameter); **race script PASS** (all cases ok) run inside the container. Container left running. Report: `.ada/claude-report-69.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
