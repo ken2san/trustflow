@@ -146,6 +146,17 @@ nowhere):
   the runner's re-verification disabled locally all five cases FAIL (not
   committed). Integration refusals now assert the exact guard stderr line.
   Report: `.ada/claude-report-62.md`.
+- Codex Task 80 re-reviewed 1ae56d9: PASS
+- Claude Task 63 (local Supabase stack): nothing installed — Docker Desktop
+  29.9.3 (`/Applications/Docker.app`, CLI symlink `/usr/local/bin/docker`,
+  context `desktop-linux`) and Supabase CLI 2.105.0 (Homebrew,
+  `/opt/homebrew/bin/supabase`) were already present. `supabase start` ran
+  with CLI defaults (repo has no `supabase/config.toml`), which also applies
+  `supabase/migrations/` to the local DB. **Not loopback-only:** Docker
+  published 54321-54324 and 54327 on `0.0.0.0`/`[::]` (Studio has no auth, DB
+  has default credentials), so the stack was stopped again (`supabase stop`,
+  volumes kept). Needs a decision on how to bind to 127.0.0.1 before restart.
+  Report: `.ada/claude-report-63.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
