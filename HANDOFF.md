@@ -1,6 +1,6 @@
 # HANDOFF
 
-Last updated: **2026-11-14**, based on commit `a9795f8`.
+Last updated: **2026-11-14**, based on commit `b17914a` plus the Task 58 commit.
 
 **This file says where the project is**, not what each session did — that is
 what `git log` and `.ada/claude-report-*.md` are for. It was a session log of
@@ -84,7 +84,7 @@ never follows.** A push is already a production action.
 
 ### Database
 
-46 local migration files. `check-migrations.mjs` runs offline in CI. The CLI link is
+47 local migration files. `check-migrations.mjs` runs offline in CI. The CLI link is
 deliberately on E2E, so **every migration command names its target explicitly**
 (`supabase db push --db-url <...>`; `db push` has no `--project-ref`).
 
@@ -100,18 +100,40 @@ from the implementation unnoticed.
 
 ## Local, committed, unpushed
 
-At the Task 74 check, `main` and the locally recorded `origin/main` were in sync
-at `a9795f8`; this handoff refresh follows that commit.
+**Task 58 — guest append under the credential lock. Local commit only: not
+pushed, not deployed, migration applied nowhere** (not local, not E2E, not
+production).
+
+- New migration `20261114120000_guest_append_under_credential_lock.sql`: a
+  service-role-only `append_guest_event` RPC that locks the contract row,
+  re-checks the presented guest token and its expiry (`clock_timestamp()`,
+  after the lock) under it, answers an idempotent replay only after that, and
+  inserts in the same transaction. Purely additive.
+- `log-event` sends guest writes through it; the owner path is unchanged. New
+  guest refusals: 403 `guest_credential_expired`, 503
+  `guest_append_unavailable` (function missing from the DB).
+- `public/agent-protocol.md` and the reissue copy in `AgreementView.jsx` state
+  the boundary: after a reissue commits, the old token cannot create an event.
+- `scripts/race-guest-reissue-vs-append.sh` (`npm run test:race:guest`): both
+  race orders, replay, expiry, rollback, on a loopback DB only. **Never run** —
+  no local disposable DB existed.
+
+**Release order:** apply the migration, then deploy `log-event`. Old function +
+new DB is unchanged behaviour; new function + old DB fails guest writes closed.
+Details: `.ada/claude-report-58.md`.
 
 ---
 
 ## Active constraints
 
-- **Re-issuing guest access is not instant revocation**, and nothing
-  user-facing may imply it is. Overwriting `guest_access_token` is the only
-  credential withdrawal this system has, and `log-event` re-reads the credential
-  one round trip before the insert — a guest request already in flight can still
-  land.
+- **Re-issuing guest access does not recall reads, and until Task 58 ships it
+  does not stop an in-flight write either.** Overwriting `guest_access_token`
+  is the only credential withdrawal this system has. Deployed `log-event` still
+  re-reads the credential one round trip before the insert, so a guest request
+  in flight can land after a reissue. Once `20261114120000` is applied and
+  `log-event` is redeployed, the boundary is the reissue's commit: after it, the
+  old token cannot create an event. Neither version un-delivers a response,
+  and nothing user-facing may imply otherwise.
 - **Deploy one named function at a time, at a named project.** Never the bare
   `supabase functions deploy`.
 - **A shared module change means the functions that bundle it deploy together.**

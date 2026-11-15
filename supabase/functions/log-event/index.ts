@@ -167,6 +167,19 @@ const ROLE_REQUIRED: Record<string, 'performer' | 'receiver'> = {
   'payment.disputed':     'performer',
 }
 
+// append_guest_event's refusals. The two credential reasons are deliberately
+// not the `not_a_party` the same failure answers at the top of the handler: a
+// credential that was good when the request arrived and is not good under the
+// lock is a revocation (or an expiry) taking effect, and a log that cannot
+// tell that from "never a party" cannot show it happening.
+const GUEST_APPEND_REFUSALS: Record<string, { error: string; status: number }> = {
+  not_found:                { error: 'contract_deleted',         status: 409 },
+  guest_credential_revoked: { error: 'guest_credential_revoked', status: 403 },
+  guest_credential_expired: { error: 'guest_credential_expired', status: 403 },
+  not_a_party:              { error: 'not_a_party',              status: 403 },
+  idempotency_key_in_use:   { error: 'idempotency_key_in_use',   status: 409 },
+}
+
 const MAX_PAYLOAD_BYTES = 16 * 1024
 const MAX_CHAIN_RETRIES = 5
 
@@ -336,7 +349,13 @@ Deno.serve(async (req: Request) => {
     // branch below, where the row was still returned without asking whose it
     // was — one rule, three copies, and the drift went the only direction
     // drift ever goes.
-    if (idempotency_key) {
+    //
+    // Owner path only. A guest's replay is answered by append_guest_event,
+    // under the contract lock and after the credential is re-checked there:
+    // answering it here would hand a retry the earlier event on the strength
+    // of a check made before the lock, which a reissue can already have
+    // overtaken (20261114120000).
+    if (idempotency_key && actor.role !== 'guest_hirer') {
       const { data: existing } = await admin
         .from('events')
         .select('*')
@@ -451,51 +470,59 @@ Deno.serve(async (req: Request) => {
       }
       clockRefusal = null
 
-      // The credential is re-read here, immediately before the write.
+      // A GUEST'S WRITE IS RE-AUTHORISED INSIDE ITS OWN TRANSACTION.
       //
-      // WHAT THIS CLOSES
       // A guest's authority was tested once, against the contract row read at
-      // the top of the handler, and then the request went on: resolve the
-      // actor, look up the idempotency key, read the chain tip, hash the
-      // event — and up to five of those rounds on a contested tip. A token
-      // the owner revoked anywhere in that window still wrote, because
-      // nothing looked again. Revocation by overwrite is the only credential
-      // withdrawal this system has (see reissue-guest-access), so a
-      // revocation that a request in flight can outlive is not one.
+      // the top of the handler, and the insert used to follow in a separate
+      // round trip — so a reissue that committed in between was outlived by
+      // a write using the token it replaced. append_guest_event takes the
+      // contract lock reissue_guest_access takes, re-checks the presented
+      // token and its expiry under it, answers an idempotent replay only
+      // after that, and inserts in the same transaction. After a reissue
+      // commits, the old token cannot create an event. See 20261114120000
+      // for the lock order and the clock.
       //
-      // Narrowing, not closing: between this read and the insert there is
-      // still a window, and shutting it entirely needs the check inside the
-      // insert's own transaction — which is what enforce_performance_order
-      // does for ordering, and which the event row cannot do here because it
-      // does not carry the token that was presented. Named in the report;
-      // not decided alone.
+      // The token goes to the database as a parameter and nowhere else: it
+      // is not part of `event`, and no refusal below echoes it.
+      let insertError: { code?: string, message?: string, hint?: string | null }
       if (actor.role === 'guest_hirer') {
-        const { data: credential } = await admin
-          .from('contracts')
-          .select('guest_access_token, guest_access_token_expires_at')
-          .eq('id', contract_id)
-          .maybeSingle()
-        if (!guestCredentialStillValid(credential, presentedGuestToken)) {
-          // Deliberately its own reason rather than the `not_a_party` the
-          // same failure answers at the top of the handler. A credential that
-          // was good when the request arrived and is not good now is a
-          // different event from one that was never good, and a log that
-          // cannot tell them apart cannot show a revocation taking effect.
-          return json({ error: 'guest_credential_revoked' }, 403)
-        }
-      }
-
-      const { data: inserted, error: insertError } = await admin
-        .from('events')
-        .insert({
-          ...event,
-          server_recorded_at: new Date().toISOString(),
-          tsa_token: null,
+        const { data: result, error: rpcError } = await admin.rpc('append_guest_event', {
+          p_contract_id:     contract_id,
+          p_guest_token:     presentedGuestToken,
+          p_prev_event_hash: prevHash,
+          p_event:           event,
         })
-        .select()
-        .single()
-
-      if (!insertError) return json({ event: inserted, deduplicated: false }, 201)
+        if (!rpcError) {
+          const status = result?.status as string | undefined
+          if (status === 'appended') return json({ event: result.event, deduplicated: false }, 201)
+          if (status === 'replayed') return json({ event: result.event, deduplicated: true }, 200)
+          // Another event took the tip between the read above and the lock.
+          if (status === 'chain_conflict') continue
+          const refused = GUEST_APPEND_REFUSALS[status ?? '']
+          if (refused) return json({ error: refused.error }, refused.status)
+          return json({ error: 'insert_failed' }, 500)
+        }
+        // A database that predates the function. Refused rather than written
+        // the old way: a fallback would keep the race this function closes,
+        // silently, for as long as the deploy order stayed wrong.
+        if (rpcError.code === 'PGRST202') {
+          console.error('[log-event] append_guest_event is missing: apply 20261114120000 before this function')
+          return json({ error: 'guest_append_unavailable' }, 503)
+        }
+        insertError = rpcError
+      } else {
+        const { data: inserted, error } = await admin
+          .from('events')
+          .insert({
+            ...event,
+            server_recorded_at: new Date().toISOString(),
+            tsa_token: null,
+          })
+          .select()
+          .single()
+        if (!error) return json({ event: inserted, deduplicated: false }, 201)
+        insertError = error
+      }
 
       // The agreement is not in a state where this event can follow. Raised
       // by `enforce_performance_order`, inside the insert's own transaction
@@ -556,7 +583,11 @@ Deno.serve(async (req: Request) => {
         // Matched on type and actor as well as the key, so a different
         // operation that happens to reuse a key is still refused rather than
         // handed someone else's event.
-        if (idempotency_key) {
+        //
+        // Not for a guest: append_guest_event already looked for the twin
+        // under the lock, after the credential, so a TF001 there is genuine,
+        // and looking again here would be a replay outside that check.
+        if (idempotency_key && actor.role !== 'guest_hirer') {
           const { data: twin } = await admin
             .from('events')
             .select('*')
@@ -577,7 +608,9 @@ Deno.serve(async (req: Request) => {
       // 23505 on the fork index means another event claimed this tip first.
       // Re-read the tip and try again.
       if (fault === 'tip_taken') {
-        if (insertError.message?.includes('events_idempotency_idx')) {
+        // A guest retries instead, so the next attempt answers the key through
+        // append_guest_event, under the lock and after the credential.
+        if (actor.role !== 'guest_hirer' && insertError.message?.includes('events_idempotency_idx')) {
           // The same disclosure as the lookup above, reached the other way.
           // This branch runs when a row under the key was committed between
           // that lookup and this insert, so the row it finds is exactly as

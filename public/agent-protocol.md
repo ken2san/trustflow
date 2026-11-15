@@ -250,7 +250,12 @@ What follows from that, and is worth stating because it is easy to get wrong:
   service links them; the link is text in the terms.
 - **Re-issuing access is a different act.** `reissue-guest-access` replaces an
   already-accepted counterparty's credential and records `access.reissued`. It
-  does not re-invite anyone.
+  does not re-invite anyone. **The boundary is the reissue's commit:** once it
+  has committed, the old guest token cannot create an event. A guest write
+  that was already being recorded when the owner re-issued can still land
+  first, and if it does it appears in the record before `access.reissued`.
+  Re-issuing does not recall anything already read or a read already in
+  progress.
 
 ---
 
@@ -286,7 +291,13 @@ sufficient. `POST /functions/v1/log-event` returns 201 with
 `idempotency_key_in_use` for a key used by a different actor or type on that
 contract. The optional JSON `idempotency_key` is a string, not necessarily a
 UUID; use a new nonempty opaque key per operation, not a secret. Empty strings
-are not safe idempotency keys. Other 409 errors can also occur.
+are not safe idempotency keys. Other 409 errors can also occur. A guest write
+answers 403 `guest_credential_revoked` when the token was replaced, and 403
+`guest_credential_expired` when it expired, between the request's arrival and
+its recording; a guest replay is checked against the current token first, so a
+replaced token cannot read back what it wrote. Either way, ask the owner to
+re-issue access. 503 `guest_append_unavailable` is a server deployment fault,
+not a refusal of the request.
 
 A successful acceptance (`accept: true`) returns HTTP 200 and a JSON object
 with `contract_id`, `project_name`, `dod`, `amount_jpy`, `amount_minor`,

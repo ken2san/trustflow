@@ -275,23 +275,21 @@ export default function AgreementView({
                 {/* Said plainly because all three parts surprise people: their
                     old link stops working, this one is the credential itself —
                     so anyone who gets hold of it is them as far as the record
-                    is concerned — and the cut-off is not instant.
+                    is concerned — and what the cut-off covers.
 
-                    The last sentence is not a detail. The old text said the
-                    previous link "no longer works", full stop, and an owner
-                    pressing this because a link leaked would read that as
-                    "whatever they are doing right now has been stopped". It
-                    has not: a request already in flight is authorised against
-                    a credential re-read one round trip before its write, so it
-                    can still land. The window is narrow and it is not zero,
-                    and the product may not claim a protection it does not
-                    have. Codex made saying so the condition for keeping the
-                    narrowing at all (2026-11-07). */}
+                    The last sentence is not a detail. An owner pressing this
+                    because a link leaked would read "no longer works" as
+                    "whatever they are doing right now has been stopped". The
+                    boundary is this re-issue's commit: from then on the old
+                    link cannot add to the record (append_guest_event re-checks
+                    it under the same lock, 20261114120000). A write that took
+                    that lock first lands first, and what they already saw
+                    stays seen. The product may not claim more than that. */}
                 <p className="text-[11px] text-slate-500">
-                  Their previous link stops working from here on. Anyone holding this one can
-                  act as the counterparty, so send it the way you sent the invitation. A
-                  request they had already sent can still finish in the moment after this —
-                  it cuts off what comes next rather than undoing what is in flight.
+                  From now on their previous link cannot add anything to the record. Anyone
+                  holding this one can act as the counterparty, so send it the way you sent
+                  the invitation. Something they had already submitted may still be recorded
+                  just before this re-issue, and anything they already viewed stays viewed.
                 </p>
                 <button
                   onClick={() => { navigator.clipboard.writeText(reissuedUrl); setReissueCopied(true); setTimeout(() => setReissueCopied(false), 2000); }}
