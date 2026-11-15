@@ -157,6 +157,25 @@ nowhere):
   has default credentials), so the stack was stopped again (`supabase stop`,
   volumes kept). Needs a decision on how to bind to 127.0.0.1 before restart.
   Report: `.ada/claude-report-63.md`.
+- Claude Task 64: `supabase stop --no-backup`, created Docker network
+  `trustflow-local` (`host_binding_ipv4=127.0.0.1`, IPv6 off), then
+  `supabase start --network-id trustflow-local`. **Still bound to `0.0.0.0` and
+  `[::]`** on 54321-54324 and 54327 (the CLI prints "All services bind to
+  0.0.0.0"; its explicit host IP overrides the network default). Stopped at once.
+  The stack is stopped, the network is left in place, and the volumes hold all
+  47 migrations (re-applied on start). Report: `.ada/claude-report-64.md`.
+- Claude Task 65: removed the `trustflow-local` network and the three
+  `supabase_*_project-trustflow` volumes. Now running a standalone container
+  `trustflow-localdb` (`public.ecr.aws/supabase/postgres:17.6.1.166`, the tag
+  the CLI used), published only as `127.0.0.1:54322->5432`. Binding verified:
+  IPv4 `127.0.0.1:54322` only, no IPv6 listener. `pg_isready` passes. No volume
+  (data lives in the container layer). Superuser `supabase_admin`, password in
+  `~/.config/trustflow-localdb/postgres.env` (mode 600, never printed). Empty:
+  no migrations applied. Kenji checks tunnels/VPN before any use. Report:
+  `.ada/claude-report-65.md`.
+- Claude Task 66 (opinion): use `postgres` (non-superuser + BYPASSRLS, like hosted), but the race guard will refuse trustflow-localdb because `inet_server_addr()` is the bridge IP `172.17.0.2`; guest E2E needs PostgREST+GoTrue+edge-runtime. Report: `.ada/claude-report-66.md`.
+- Claude Task 67: applied migrations as `postgres` over 127.0.0.1 inside trustflow-localdb; 13/47 OK, `20260923000001` failed (`function auth.jwt() does not exist` — GoTrue's, not in the bare image). Self-test and race not run. Report: `.ada/claude-report-67.md`.
+- Claude Task 68: recreated trustflow-localdb (127.0.0.1:54322 IPv4 only), ran GoTrue v2.197.0 `auth migrate` once (75 OK, no ports, removed); project migrations 18/47 OK, `20260924123733_reconcile_migration_history` failed (`supabase_migrations.schema_migrations` does not exist — the CLI's history table). Self-test/race not run. Report: `.ada/claude-report-68.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
