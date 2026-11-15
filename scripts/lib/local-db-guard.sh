@@ -36,6 +36,12 @@
 # The decisions are pure functions (no connection), so every rejection path is
 # exercised by `guard_self_check` without touching any database; it also runs
 # the real script against a stub psql to show what reaches libpq.
+#
+# WHAT IT CANNOT PROVE: loopback is not a disposable backend. A local port
+# forward or tunnel to a hosted server listening on its own loopback reports a
+# loopback address too, and the marker and project-ref checks are not an
+# identity proof. Before write mode the operator must confirm the local
+# listener is a throwaway database, not a forward to anything else.
 
 GUARD_REFS='fqgpzhwvvfsxswlnbbgg yqjtawffpesplqyurlpj'
 
@@ -137,9 +143,11 @@ judge_server() {
 }
 
 # guard_self_check SCRIPT — every rejection path, no connection made. The
-# last part runs SCRIPT itself with a stub `psql` first on PATH that records
-# what it was handed and fails, so it shows what would reach libpq and that a
-# refusal comes before any connection attempt.
+# last part runs SCRIPT itself with PATH holding only a stub `psql` that
+# records what it was handed and fails, so it shows what would reach libpq and
+# that a refusal comes before any connection attempt. Every step checks its
+# own result: callers may run this on the left of && or ||, where bash turns
+# errexit off, so nothing here may rely on set -e (Codex Task 78).
 guard_self_check() {
   local script="$1" fails=0 url
   local bad=(
@@ -239,29 +247,161 @@ guard_self_check() {
   if judge_server '127.0.0.1' 'yes' 'postgres' > /dev/null; then echo "  ok   accepted a marked loopback server"
   else echo "  FAIL refused a marked loopback server"; fails=$((fails + 1)); fi
 
-  guard_script_check "$script" || fails=$((fails + $?))
-  [ "$fails" -eq 0 ]
+  # Stub setup must fail closed: a broken stub stops the run, never lets the
+  # script look further for a psql.
+  local work bin out
+  for bin in '' 'relative/bin'; do
+    if guard_stub_bin "$bin" > /dev/null; then
+      echo "  FAIL setup accepted stub dir '$bin'"; fails=$((fails + 1))
+    else
+      echo "  ok   setup refused stub dir '$bin'"
+    fi
+  done
+  if out="$(TMPDIR=/nonexistent/guard-self-check guard_script_check "$script")"; then
+    echo "  FAIL script check passed with no temp dir"; fails=$((fails + 1))
+  elif [[ "$out" == *"FAIL setup"* && "$out" != *"script:"* ]]; then
+    echo "  ok   no temp dir: refused before any script run"
+  else
+    echo "  FAIL no temp dir: $out"; fails=$((fails + 1))
+  fi
+  if ! work="$(mktemp -d)" || [ ! -d "$work" ]; then
+    echo "  FAIL setup: mktemp -d for the setup-failure checks"; return 1
+  fi
+  if ! mkdir "$work/ro" || ! chmod 500 "$work/ro"; then
+    echo "  FAIL setup: read-only dir for the setup-failure checks"; rm -rf "$work"; return 1
+  fi
+  if guard_stub_bin "$work/ro" > /dev/null; then
+    echo "  FAIL setup accepted an unwritable stub dir"; fails=$((fails + 1))
+  else
+    echo "  ok   setup refused an unwritable stub dir"
+  fi
+  chmod 700 "$work/ro"
+  local broken
+  for broken in 'chmod 600 "$bin/psql"' 'rm "$bin/psql"' \
+                'printf "exec /usr/bin/false\n" > "$bin/psql"' \
+                'rm "$bin/psql"; ln -s /usr/bin/false "$bin/psql"' \
+                'printf "" > "$bin/postgres"'; do
+    bin="$work/case"
+    rm -rf "$bin"
+    if ! mkdir "$bin" || ! guard_stub_bin "$bin" > /dev/null; then
+      echo "  FAIL setup: good stub for case: $broken"; fails=$((fails + 1)); continue
+    fi
+    eval "$broken"
+    if guard_stub_verify "$bin" > /dev/null; then
+      echo "  FAIL stub verify passed after: $broken"; fails=$((fails + 1))
+    else
+      echo "  ok   stub verify refused after: $broken"
+    fi
+    rm -f "$work/psql.log"
+    guard_run_script "$work" "$script" LOCAL_DB_URL='postgresql://raceuser@127.0.0.1:54329/race_db' > /dev/null
+    if [ "$GUARD_RUN" = not-run ] && [ ! -e "$work/psql.log" ]; then
+      echo "  ok   script not run after: $broken"
+    else
+      echo "  FAIL script ran ($GUARD_RUN) after: $broken"; fails=$((fails + 1))
+    fi
+  done
+  rm -rf "$work"
+
+  if ! guard_script_check "$script"; then fails=$((fails + 1)); fi
+  if [ "$fails" -ne 0 ]; then
+    echo "guard self-check: $fails failure(s)"
+    return 1
+  fi
+  return 0
 }
 
-# guard_script_check SCRIPT — SCRIPT run end to end in a clean environment
-# (env -i), with a stub psql that logs its conninfo and PGPASSWORD and exits 1.
-# Nothing can connect: the only psql on the path is the stub. Returns the
-# number of failures.
-guard_script_check() {
-  local script="$1" fails=0 stub log c url want pass var
-  stub="$(mktemp -d)"
-  log="$stub/psql.log"
-  printf '%s\n' '#!/bin/sh' \
-    'printf "%s\n" "$1" "PGPASSWORD=${PGPASSWORD-}" >> "$GUARD_STUB_LOG"' \
-    'exit 1' > "$stub/psql"
-  chmod +x "$stub/psql"
+# The stub: logs its conninfo and PGPASSWORD, then fails like a refused
+# connection. It never connects anywhere.
+GUARD_STUB='#!/bin/sh
+printf "%s\n" "$1" "PGPASSWORD=${PGPASSWORD-}" >> "$GUARD_STUB_LOG"
+exit 1'
+# What the script runs before its first psql call; linked next to the stub.
+GUARD_STUB_TOOLS='dirname env grep tr'
 
-  # run_script VAR=VALUE… — leaves the stub's log in $log; true if SCRIPT exited 0.
-  run_script() {
-    : > "$log"
-    env -i PATH="$stub:/usr/bin:/bin" GUARD_STUB_LOG="$log" "$@" \
-      "$BASH" "$script" > "$stub/out" 2>&1
-  }
+# guard_stub_bin DIR — fills DIR (absolute, existing, writable) with the stub
+# psql and links to GUARD_STUB_TOOLS, then verifies it. Returns 1 at the first
+# step that fails.
+guard_stub_bin() {
+  local bin="$1" t p
+  case "$bin" in
+    /*) ;;
+    *) echo "  FAIL setup: stub dir '$bin' is not an absolute path"; return 1 ;;
+  esac
+  if [ ! -d "$bin" ] || [ ! -w "$bin" ]; then
+    echo "  FAIL setup: stub dir '$bin' is missing or not writable"; return 1
+  fi
+  if ! printf '%s\n' "$GUARD_STUB" > "$bin/psql" 2> /dev/null; then
+    echo "  FAIL setup: could not write $bin/psql"; return 1
+  fi
+  if ! chmod 700 "$bin/psql"; then
+    echo "  FAIL setup: could not chmod $bin/psql"; return 1
+  fi
+  for t in $GUARD_STUB_TOOLS; do
+    if ! p="$(command -v "$t")"; then echo "  FAIL setup: $t not found"; return 1; fi
+    case "$p" in
+      /*) ;;
+      *) echo "  FAIL setup: $t is '$p', not an executable path"; return 1 ;;
+    esac
+    if ! ln -s "$p" "$bin/$t"; then echo "  FAIL setup: could not link $t"; return 1; fi
+  done
+  guard_stub_verify "$bin"
+}
+
+# guard_stub_verify DIR — with PATH=DIR, psql resolves to DIR/psql, which is
+# an executable regular file holding exactly GUARD_STUB, and DIR holds nothing
+# but the stub and the tool links. PATH is DIR alone, so no other directory
+# can supply a real psql if the stub is ever missing.
+guard_stub_verify() {
+  local bin="$1" found names want
+  if [ ! -f "$bin/psql" ] || [ -L "$bin/psql" ] || [ ! -x "$bin/psql" ]; then
+    echo "  FAIL setup: $bin/psql is not an executable regular file"; return 1
+  fi
+  if [ "$(cat "$bin/psql")" != "$GUARD_STUB" ]; then
+    echo "  FAIL setup: $bin/psql is not the stub"; return 1
+  fi
+  found="$(env -i PATH="$bin" "$BASH" -c 'command -v psql' || true)"
+  if [ "$found" != "$bin/psql" ]; then
+    echo "  FAIL setup: psql resolves to '$found', not $bin/psql"; return 1
+  fi
+  names="$(ls -A "$bin" | sort | tr '\n' ' ')"
+  want="$(printf '%s\n' psql $GUARD_STUB_TOOLS | sort | tr '\n' ' ')"
+  if [ "$names" != "$want" ]; then
+    echo "  FAIL setup: $bin holds '$names', want '$want'"; return 1
+  fi
+  return 0
+}
+
+# guard_run_script WORK SCRIPT VAR=VALUE… — runs SCRIPT under env -i with
+# PATH=WORK/bin only, the stub's log in WORK/psql.log and its output in
+# WORK/out. Sets GUARD_RUN to not-run (stub failed verification, nothing
+# started), ran-ok or ran-failed.
+guard_run_script() {
+  local work="$1" script="$2"; shift 2
+  GUARD_RUN=not-run
+  guard_stub_verify "$work/bin" || return 0
+  if ! : > "$work/psql.log"; then echo "  FAIL setup: could not reset the stub log"; return 0; fi
+  if env -i PATH="$work/bin" GUARD_STUB_LOG="$work/psql.log" "$@" \
+       "$BASH" "$script" > "$work/out" 2>&1; then
+    GUARD_RUN=ran-ok
+  else
+    GUARD_RUN=ran-failed
+  fi
+  return 0
+}
+
+# guard_script_check SCRIPT — SCRIPT run end to end against the stub. Returns
+# 0 only if setup succeeded and every case passed; a setup failure runs no case.
+guard_script_check() {
+  local script="$1" fails=0 work c url want pass var
+  # An explicit template: macOS mktemp -d quietly falls back to /tmp when
+  # TMPDIR is missing, which would hide the failure the self-check injects.
+  if ! work="$(mktemp -d "${TMPDIR:-/tmp}/race-guard.XXXXXX" 2> /dev/null)" \
+     || [ -z "$work" ] || [ ! -d "$work" ]; then
+    echo "  FAIL setup: mktemp -d failed"; return 1
+  fi
+  if ! mkdir "$work/bin" || ! guard_stub_bin "$work/bin"; then
+    rm -rf "$work"; return 1
+  fi
 
   # A valid URL: exactly the parsed parts reach psql, quoted; the stub's
   # failure then stops the run at the server check, before any write.
@@ -269,12 +409,13 @@ guard_script_check() {
     "postgresql://raceuser:race.pass@127.0.0.1:54329/race_db|host='127.0.0.1' port='54329' dbname='race_db' user='raceuser' application_name='race-guest'|PGPASSWORD=race.pass" \
     "postgres://raceuser@[::1]:5432/race_db|host='::1' port='5432' dbname='race_db' user='raceuser' application_name='race-guest'|PGPASSWORD="; do
     IFS='|' read -r url want pass <<< "$c"
-    if run_script LOCAL_DB_URL="$url"; then
-      echo "  FAIL script: ran to the end against the stub: $url"; fails=$((fails + 1))
-    elif [ "$(cat "$log")" = "$want"$'\n'"$pass" ] && grep -q 'refusing this server' "$stub/out"; then
+    guard_run_script "$work" "$script" LOCAL_DB_URL="$url"
+    if [ "$GUARD_RUN" != ran-failed ]; then
+      echo "  FAIL script: $GUARD_RUN against the stub: $url"; fails=$((fails + 1))
+    elif [ "$(cat "$work/psql.log")" = "$want"$'\n'"$pass" ] && grep -q 'refusing this server' "$work/out"; then
       echo "  ok   script: psql got only the parsed parts, then refused the server: $url"
     else
-      echo "  FAIL script: psql got '$(tr '\n' '|' < "$log")' for $url"; fails=$((fails + 1))
+      echo "  FAIL script: psql got '$(tr '\n' '|' < "$work/psql.log")' for $url"; fails=$((fails + 1))
     fi
   done
 
@@ -282,9 +423,10 @@ guard_script_check() {
   local ok_url='postgresql://raceuser:race.pass@127.0.0.1:54329/race_db'
   refused() { # refused <label> VAR=VALUE…
     local label="$1"; shift
-    if run_script "$@"; then
-      echo "  FAIL script: accepted $label"; fails=$((fails + 1))
-    elif [ -s "$log" ]; then
+    guard_run_script "$work" "$script" "$@"
+    if [ "$GUARD_RUN" != ran-failed ]; then
+      echo "  FAIL script: $GUARD_RUN for $label"; fails=$((fails + 1))
+    elif [ -s "$work/psql.log" ]; then
       echo "  FAIL script: psql was called before refusing $label"; fails=$((fails + 1))
     else
       echo "  ok   script: refused $label before psql"
@@ -300,6 +442,6 @@ guard_script_check() {
     refused "$url" LOCAL_DB_URL="$url"
   done
 
-  rm -rf "$stub"
-  return "$fails"
+  rm -rf "$work"
+  [ "$fails" -eq 0 ]
 }

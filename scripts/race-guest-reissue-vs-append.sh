@@ -26,6 +26,9 @@
 # WHERE IT MAY RUN
 # Only a loopback database with every migration applied and the opt-in marker
 # set — see scripts/lib/local-db-guard.sh for the guard and why it is strict.
+# Loopback is NOT proof of a disposable backend: a tunnel or port forward to a
+# hosted server also looks local. Before write mode, confirm by hand that the
+# local listener is a throwaway database and forwards nowhere.
 # It writes permanent, undeletable events. It never touches E2E or production
 # and is not part of any suite.
 set -euo pipefail
@@ -34,8 +37,11 @@ source "$(dirname "$0")/lib/local-db-guard.sh"
 die() { echo "FAIL: $*" >&2; exit 1; }
 
 if [ "${1:-}" = "--self-check" ]; then
-  guard_self_check "$0" && { echo "guard self-check PASS"; exit 0; }
-  die "guard self-check"
+  # A plain call, so errexit stays on inside it (on the left of && or || bash
+  # turns it off). It also checks every step itself; a failure returns 1 and
+  # set -e ends the run here, before PASS.
+  guard_self_check "$0"
+  echo "guard self-check PASS"; exit 0
 fi
 
 why="$(refuse_redirecting_env)" || die "$why"

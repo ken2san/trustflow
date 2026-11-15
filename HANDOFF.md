@@ -130,6 +130,15 @@ nowhere):
   script against a stub `psql` (no DB). Files:
   `scripts/race-guest-reissue-vs-append.sh`, `scripts/lib/local-db-guard.sh`.
   Report: `.ada/claude-report-60.md`. Still never run against a database.
+- Codex Task 78 re-reviewed dd0c96c: FAIL
+- Claude Task 61 fixed its P1: `--self-check` is called plainly (not left of
+  `&&`), every stub setup step is checked, the script runs with `PATH` holding
+  only the verified stub `psql` plus four tool links (no fallback dirs), and
+  setup failures (no temp dir, bad/unwritable dir, stub missing, non-executable,
+  altered, symlinked, extra entry) are covered without a DB. Same two files.
+  Report: `.ada/claude-report-61.md`. **Loopback is not proof of a disposable
+  backend** (a tunnel looks local): before write mode, the operator must confirm
+  by hand that the local listener is a throwaway DB that forwards nowhere.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
