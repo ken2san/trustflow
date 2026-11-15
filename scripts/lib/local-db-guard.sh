@@ -276,15 +276,25 @@ guard_self_check() {
     echo "  ok   setup refused an unwritable stub dir"
   fi
   chmod 700 "$work/ro"
-  local broken
+  # Each mutation is made to $work/bin — the directory guard_run_script
+  # verifies and puts on PATH — after a positive control has shown the runner
+  # does start the script with that same stub intact (Codex Task 79: the
+  # mutated dir was not the one the runner checked, so these passed vacuously).
+  local broken url_ok='postgresql://raceuser@127.0.0.1:54329/race_db'
   for broken in 'chmod 600 "$bin/psql"' 'rm "$bin/psql"' \
                 'printf "exec /usr/bin/false\n" > "$bin/psql"' \
                 'rm "$bin/psql"; ln -s /usr/bin/false "$bin/psql"' \
                 'printf "" > "$bin/postgres"'; do
-    bin="$work/case"
-    rm -rf "$bin"
+    bin="$work/bin"
+    rm -rf "$bin" "$work/psql.log"
     if ! mkdir "$bin" || ! guard_stub_bin "$bin" > /dev/null; then
       echo "  FAIL setup: good stub for case: $broken"; fails=$((fails + 1)); continue
+    fi
+    guard_run_script "$work" "$script" LOCAL_DB_URL="$url_ok" > /dev/null
+    if [ "$GUARD_RUN" = ran-failed ] && [ -s "$work/psql.log" ]; then
+      echo "  ok   control: intact stub, the runner started the script and psql was called"
+    else
+      echo "  FAIL control: intact stub gave $GUARD_RUN, case skipped: $broken"; fails=$((fails + 1)); continue
     fi
     eval "$broken"
     if guard_stub_verify "$bin" > /dev/null; then
@@ -293,7 +303,7 @@ guard_self_check() {
       echo "  ok   stub verify refused after: $broken"
     fi
     rm -f "$work/psql.log"
-    guard_run_script "$work" "$script" LOCAL_DB_URL='postgresql://raceuser@127.0.0.1:54329/race_db' > /dev/null
+    guard_run_script "$work" "$script" LOCAL_DB_URL="$url_ok" > /dev/null
     if [ "$GUARD_RUN" = not-run ] && [ ! -e "$work/psql.log" ]; then
       echo "  ok   script not run after: $broken"
     else
@@ -419,27 +429,35 @@ guard_script_check() {
     fi
   done
 
-  # Refusals: the stub must never have been called.
+  # Refusals: the stub must never have been called, and the script must have
+  # stopped for the expected guard reason, not some unrelated early failure.
   local ok_url='postgresql://raceuser:race.pass@127.0.0.1:54329/race_db'
-  refused() { # refused <label> VAR=VALUE…
-    local label="$1"; shift
+  local env_why='FAIL: unset these first, they can change where libpq connects:'
+  local url_why='FAIL: LOCAL_DB_URL: not postgres[ql]://user[:password]@127.0.0.1|[::1]:port/dbname'
+  refused() { # refused <label> <expected stderr line> VAR=VALUE…
+    local label="$1" why="$2"; shift 2
     guard_run_script "$work" "$script" "$@"
     if [ "$GUARD_RUN" != ran-failed ]; then
       echo "  FAIL script: $GUARD_RUN for $label"; fails=$((fails + 1))
     elif [ -s "$work/psql.log" ]; then
       echo "  FAIL script: psql was called before refusing $label"; fails=$((fails + 1))
+    elif ! grep -qxF -- "$why" "$work/out"; then
+      echo "  FAIL script: $label refused for another reason: $(tr '\n' '|' < "$work/out")"
+      fails=$((fails + 1))
     else
-      echo "  ok   script: refused $label before psql"
+      echo "  ok   script: refused $label before psql: $why"
     fi
   }
-  refused "no LOCAL_DB_URL"
+  refused "no LOCAL_DB_URL" "$url_why with no query, list or encoding"
   for var in DB_USER DB_PASS DB_HOST DB_PORT DB_NAME; do
-    refused "inherited $var" LOCAL_DB_URL="$ok_url" "$var=db.yqjtawffpesplqyurlpj.supabase.co"
+    refused "inherited $var" "$env_why $var " \
+      LOCAL_DB_URL="$ok_url" "$var=db.yqjtawffpesplqyurlpj.supabase.co"
   done
-  refused "inherited empty DB_PASS" LOCAL_DB_URL="$ok_url" DB_PASS=
-  refused "inherited PGHOST" LOCAL_DB_URL="$ok_url" PGHOST=db.yqjtawffpesplqyurlpj.supabase.co
+  refused "inherited empty DB_PASS" "$env_why DB_PASS " LOCAL_DB_URL="$ok_url" DB_PASS=
+  refused "inherited PGHOST" "$env_why PGHOST " \
+    LOCAL_DB_URL="$ok_url" PGHOST=db.yqjtawffpesplqyurlpj.supabase.co
   for url in "${inject[@]}"; do # guard_self_check's list
-    refused "$url" LOCAL_DB_URL="$url"
+    refused "$url" "$url_why with no query, list or encoding" LOCAL_DB_URL="$url"
   done
 
   rm -rf "$work"

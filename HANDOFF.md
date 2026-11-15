@@ -139,6 +139,13 @@ nowhere):
   Report: `.ada/claude-report-61.md`. **Loopback is not proof of a disposable
   backend** (a tunnel looks local): before write mode, the operator must confirm
   by hand that the local listener is a throwaway DB that forwards nowhere.
+- Codex Task 79 re-reviewed 0ef12b9: FAIL
+- Claude Task 62 fixed its P1 in `scripts/lib/local-db-guard.sh` only: the
+  broken-stub cases now mutate `$work/bin` (the dir the runner verifies), each
+  after an intact-stub control shows the runner does start the script; with
+  the runner's re-verification disabled locally all five cases FAIL (not
+  committed). Integration refusals now assert the exact guard stderr line.
+  Report: `.ada/claude-report-62.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
