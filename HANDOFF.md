@@ -104,6 +104,8 @@ from the implementation unnoticed.
 pushed, not deployed, migration applied nowhere** (not local, not E2E, not
 production).
 
+- Codex Task 76 reviewed b467194: FAIL
+
 - New migration `20261114120000_guest_append_under_credential_lock.sql`: a
   service-role-only `append_guest_event` RPC that locks the contract row,
   re-checks the presented guest token and its expiry (`clock_timestamp()`,
@@ -118,9 +120,30 @@ production).
   race orders, replay, expiry, rollback, on a loopback DB only. **Never run** —
   no local disposable DB existed.
 
+**Task 59 — fixes for Codex Task 76** (migration edited in place; still applied
+nowhere):
+
+- The migration now also adds `replay_guest_event` (keyed guest retry, answered
+  under the lock after token/expiry and before `log-event`'s tip, version and
+  clock pre-checks) and two closed helpers, `guest_append_refusal` and
+  `guest_append_replay`, plus a rollback-only self-test DO block (grants,
+  revoked/expired token, replay, replaced-token replay). It documents that
+  `server_recorded_at = now()` is the transaction start.
+- `log-event` calls `replay_guest_event` first for a keyed guest request.
+  `public/agent-protocol.md` describes the guest replay order.
+- The race script rebuilds its connection from a strictly parsed loopback URL,
+  refuses any PG*/PSQL* env, and before writing requires the server to report a
+  loopback address and the marker
+  `alter database postgres set trustflow.disposable_race_db = 'yes'`. Synthetic
+  events carry explicit ids. Lock order is proven by a `pg_blocking_pids`
+  handshake, not clocks. **New file:** `scripts/lib/local-db-guard.sh` (the
+  guard; `npm run test:race:guest -- --self-check` exercises its rejection
+  paths without a DB). **Neither the race script nor its self-check has been
+  run**, and the migration self-test has never executed.
+
 **Release order:** apply the migration, then deploy `log-event`. Old function +
 new DB is unchanged behaviour; new function + old DB fails guest writes closed.
-Details: `.ada/claude-report-58.md`.
+Details: `.ada/claude-report-58.md`, `.ada/claude-report-59.md`.
 
 ---
 

@@ -294,9 +294,13 @@ UUID; use a new nonempty opaque key per operation, not a secret. Empty strings
 are not safe idempotency keys. Other 409 errors can also occur. A guest write
 answers 403 `guest_credential_revoked` when the token was replaced, and 403
 `guest_credential_expired` when it expired, between the request's arrival and
-its recording; a guest replay is checked against the current token first, so a
-replaced token cannot read back what it wrote. Either way, ask the owner to
-re-issue access. 503 `guest_append_unavailable` is a server deployment fault,
+its recording. Either way, ask the owner to re-issue access. A guest retry
+with the same `idempotency_key`, type and guest is checked against the current
+token and its expiry first, so a replaced or expired token cannot read back
+what it wrote; once that check passes, the earlier event is returned (200,
+`deduplicated: true`) before any check that only applies to writing a new
+event, so a retry of a write that landed is not refused for chain or clock
+reasons. 503 `guest_append_unavailable` is a server deployment fault,
 not a refusal of the request.
 
 A successful acceptance (`accept: true`) returns HTTP 200 and a JSON object

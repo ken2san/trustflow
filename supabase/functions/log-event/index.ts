@@ -251,6 +251,15 @@ Deno.serve(async (req: Request) => {
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
 
+  // A database that predates 20261114120000. Refused rather than written the
+  // old way: a fallback would keep the race those functions close, silently,
+  // for as long as the deploy order stayed wrong.
+  const guestRpcUnavailable = (error: { code?: string }) => {
+    if (error.code !== 'PGRST202') return null
+    console.error('[log-event] guest append functions are missing: apply 20261114120000 before this function')
+    return json({ error: 'guest_append_unavailable' }, 503)
+  }
+
 
   try {
     const body = await req.json().catch(() => null)
@@ -368,6 +377,35 @@ Deno.serve(async (req: Request) => {
       // returning the other event would disclose it, and writing a second
       // row under one key would make "idempotent" meaningless.
       if (outcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)
+    }
+
+    // A keyed guest retry is answered here, under the contract lock and after
+    // the credential, and BEFORE the tip, accepted-version and clock checks
+    // below. Those exist to build a new event; letting them refuse a retry of
+    // a write that already landed broke the promise idempotency makes (Codex
+    // Task 76, Q1). 'none' means no earlier write: go on and build one, and
+    // append_guest_event looks again under its own lock for a twin that
+    // commits in between.
+    if (idempotency_key && actor.role === 'guest_hirer') {
+      const { data: result, error: rpcError } = await admin.rpc('replay_guest_event', {
+        p_contract_id:     contract_id,
+        p_guest_token:     presentedGuestToken,
+        p_type:            type,
+        p_actor_id:        actor.actorId,
+        p_idempotency_key: idempotency_key,
+      })
+      if (rpcError) {
+        const unavailable = guestRpcUnavailable(rpcError)
+        if (unavailable) return unavailable
+        const isolationFault = isolationFaultLine('log-event', rpcError)
+        if (isolationFault) console.error(isolationFault)
+        return json({ error: 'lookup_failed' }, 500)
+      }
+      const status = result?.status as string | undefined
+      if (status === 'replayed') return json({ event: result.event, deduplicated: true }, 200)
+      const refused = GUEST_APPEND_REFUSALS[status ?? '']
+      if (refused) return json({ error: refused.error }, refused.status)
+      if (status !== 'none') return json({ error: 'lookup_failed' }, 500)
     }
 
     // Set when an attempt was abandoned, or refused by the database, because
@@ -502,13 +540,8 @@ Deno.serve(async (req: Request) => {
           if (refused) return json({ error: refused.error }, refused.status)
           return json({ error: 'insert_failed' }, 500)
         }
-        // A database that predates the function. Refused rather than written
-        // the old way: a fallback would keep the race this function closes,
-        // silently, for as long as the deploy order stayed wrong.
-        if (rpcError.code === 'PGRST202') {
-          console.error('[log-event] append_guest_event is missing: apply 20261114120000 before this function')
-          return json({ error: 'guest_append_unavailable' }, 503)
-        }
+        const unavailable = guestRpcUnavailable(rpcError)
+        if (unavailable) return unavailable
         insertError = rpcError
       } else {
         const { data: inserted, error } = await admin
