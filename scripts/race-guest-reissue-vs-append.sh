@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Guest append vs. reissue, both orders, on a LOCAL disposable database.
 #
-#   npm run test:race:guest -- --self-check     guard rejection paths, no DB
+#   npm run test:race:guest -- --self-check     guard checks, no DB
 #   LOCAL_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
 #     npm run test:race:guest
 #
@@ -34,21 +34,22 @@ source "$(dirname "$0")/lib/local-db-guard.sh"
 die() { echo "FAIL: $*" >&2; exit 1; }
 
 if [ "${1:-}" = "--self-check" ]; then
-  guard_self_check && { echo "guard self-check PASS"; exit 0; }
+  guard_self_check "$0" && { echo "guard self-check PASS"; exit 0; }
   die "guard self-check"
 fi
 
 why="$(refuse_redirecting_env)" || die "$why"
-why="$(parse_local_db_url "${LOCAL_DB_URL:-}")" || die "LOCAL_DB_URL: $why"
+# In this shell, not $(...): the parsed parts must survive the call.
+parse_local_db_url "${LOCAL_DB_URL:-}" || die "LOCAL_DB_URL: $GUARD_WHY"
+why="$(local_conninfo race-guest)" || die "LOCAL_DB_URL: $why"
 command -v psql >/dev/null || die "psql is required"
 
 # qa APP_NAME psql-args… — the connection is rebuilt from the validated parts,
-# never from the URL. Every part matched a charset with no space, quote or '='.
+# never from the URL; local_conninfo re-checks and quotes each one.
 qa() {
-  local app="$1"; shift
-  PGPASSWORD="$DB_PASS" psql \
-    "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER application_name=$app" \
-    -X -q -t -A -v ON_ERROR_STOP=1 "$@"
+  local app="$1" conninfo; shift
+  conninfo="$(local_conninfo "$app")" || die "conninfo: $conninfo"
+  PGPASSWORD="$DB_PASS" psql "$conninfo" -X -q -t -A -v ON_ERROR_STOP=1 "$@"
 }
 q() { qa race-guest "$@"; }
 

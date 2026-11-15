@@ -123,6 +123,14 @@ production).
 **Task 59 — fixes for Codex Task 76** (migration edited in place; still applied
 nowhere):
 
+- Codex Task 77 re-reviewed 20872c8: FAIL
+- Claude Task 60 fixed its P1: the race script parses `LOCAL_DB_URL` in the
+  parent shell, refuses inherited `DB_*` (like PG*/PSQL*), and builds a quoted
+  conninfo from re-validated parts only; `--self-check` now also runs the real
+  script against a stub `psql` (no DB). Files:
+  `scripts/race-guest-reissue-vs-append.sh`, `scripts/lib/local-db-guard.sh`.
+  Report: `.ada/claude-report-60.md`. Still never run against a database.
+
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
   clock pre-checks) and two closed helpers, `guest_append_refusal` and
