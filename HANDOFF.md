@@ -299,6 +299,17 @@ nowhere):
 - Claude Task 87 (Codex 91, text only): the script header (new RESUME WRITES section) and the printed usage now say `--resume` can make
   permanent E2E writes and needs its own action-time approval; approving `--check` or a record run doesn't cover it. No logic change.
   Arg + lock tests 10/10. Report: `.ada/claude-report-87.md`.
+- Claude Task 88: stopped at preflight (the cached earner session had expired); nothing run. Report: `.ada/claude-report-88.md`.
+- Claude Task 89 (Kenji OK 13:58 ET), **E2E fixture recorded**, E2E `yqjtawffpesplqyurlpj` only:
+  - One `ownerSession()` sign-in refreshed `tests/e2e/.earner-session.json` (auth session only, no rows).
+  - Preflight 3/3 and `--check` were clean (log-event still v14).
+  - One record run, exit 0. Permanent on E2E: 1 contract + 3 events (acceptance + 2 cancellations).
+    - Run `a7d86529-20c1-4fd0-ae41-e01d62d4146d`.
+    - Contract `5d0ce316-3041-46b2-b816-4b2b88614989`.
+    - Owner cancellation `b4b72882-6efa-4d97-bca0-74968285c6be`; guest cancellation `ece19c71-27b0-4056-b3d4-c582c8eaad10`.
+  - **Credential file: `tests/e2e/.cancel-fixture.json`** (gitignored, 0600, `status: complete`, holds the guest token). Keep it: it cannot be made again
+    after the refusing log-event is deployed.
+  - Not done: log-event deploy, E2E specs, push.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
