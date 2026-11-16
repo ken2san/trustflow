@@ -290,6 +290,12 @@ nowhere):
   - Printed reasons come from a fixed set of known error codes; anything else prints `unrecognised_reason`.
   - Lock: the assumption is now stated plainly — delete a lock by hand only after its holder has fully exited. The token check is best-effort, not a guarantee.
   - 58/58 + validator OK. Report: `.ada/claude-report-85.md`.
+- Claude Task 86 (Codex 90 FAIL → fixes; local only, script NOT run):
+  - **Arguments:** new `scripts/lib/fixtureArgs.mjs` accepts exactly none, `--check` or `--resume`. Anything else exits 2 with a fixed message
+    before the script even imports tfClient/liveEnv (now dynamic imports).
+  - **Output:** the lock error prints only fixed text and a validated pid. Printed ids must be UUIDs. Unexpected failures print a fixed line.
+  - **Note:** `--resume` can send a cancellation that was never attempted, after reconciling. That's a permanent write and needs approval.
+  - Unit args + lock + log-event 61/61; the arg tests fail under a fall-through mutation. Report: `.ada/claude-report-86.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

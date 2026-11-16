@@ -71,15 +71,17 @@ export async function acquireFixtureLock(lockFile, purpose) {
     handle = await open(lockFile, 'wx', 0o600);
   } catch (error) {
     if (error?.code !== 'EEXIST') throw error;
-    let holder = null;
-    try { holder = JSON.parse(await readFile(lockFile, 'utf8')); } catch { /* unreadable or half-written */ }
-    const who = holder
-      ? `pid ${holder.pid} (${processState(holder.pid)}), ${holder.purpose ?? 'unknown purpose'}, since ${holder.created_at ?? '?'}`
-      : 'an unreadable holder';
+    // Only fixed text and a validated pid: the lock file's other fields are
+    // whatever is on disk, and are not printed (Codex Task 90).
+    let pid = null;
+    try { pid = JSON.parse(await readFile(lockFile, 'utf8'))?.pid ?? null; } catch { /* unreadable or half-written */ }
+    const holder = Number.isSafeInteger(pid) && pid > 0
+      ? `process ${pid} (${processState(pid)})`
+      : 'an unidentified holder';
     throw Object.assign(new Error(
-      `fixture lock is held by ${who}: ${lockFile}. It is never taken over. `
+      `the fixture lock is held by ${holder}; it is never taken over. `
       + 'Delete it by hand only after verifying that process has fully exited and nothing else uses the fixture.',
-    ), { code: 'ELOCKED', holder, cause: error });
+    ), { code: 'ELOCKED', cause: error });
   }
   try {
     await handle.writeFile(JSON.stringify(body));

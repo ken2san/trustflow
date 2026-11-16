@@ -66,10 +66,27 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { ownerSession, rest, invoke, PROJECT_REF, SUPABASE_URL } from './lib/tfClient.mjs';
 import { readCredentialFile, writeCredentialFile } from './lib/credentialFile.mjs';
 import { CANCEL_FIXTURE_FILE, CANCEL_FIXTURE_LOCK, acquireFixtureLock } from './lib/fixtureLock.mjs';
-import { SUPABASE_KEY, EARNER_EMAIL } from '../tests/e2e/liveEnv.js';
+import { FIXTURE_USAGE, parseFixtureArgs } from './lib/fixtureArgs.mjs';
+
+// Arguments first, before anything that reads configuration, signs in, locks
+// or writes. tfClient and liveEnv are imported only after this, dynamically.
+const mode = parseFixtureArgs(process.argv.slice(2));
+if (mode === null) {
+  console.error(`STOP: unrecognised arguments; nothing was done. ${FIXTURE_USAGE}`);
+  process.exit(2);
+}
+
+let ownerSession, rest, invoke, PROJECT_REF, SUPABASE_URL, SUPABASE_KEY, EARNER_EMAIL;
+try {
+  ({ ownerSession, rest, invoke, PROJECT_REF, SUPABASE_URL } = await import('./lib/tfClient.mjs'));
+  ({ SUPABASE_KEY, EARNER_EMAIL } = await import('../tests/e2e/liveEnv.js'));
+} catch {
+  // Its message can name configuration values; say only what failed.
+  console.error('STOP: could not load the E2E configuration (details not shown); nothing was done.');
+  process.exit(1);
+}
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOWN_FILE = path.relative(REPO_ROOT, CANCEL_FIXTURE_FILE);
@@ -86,8 +103,9 @@ const CANCELLED = 'contract.cancelled';
 const GUEST_EMAIL = 'cancel.fixture@example.test';
 const GUEST_ACTOR = `guest:${GUEST_EMAIL}`;
 
-const args = new Set(process.argv.slice(2));
-const mode = args.has('--resume') ? 'resume' : args.has('--check') ? 'check' : 'record';
+/** A server-issued id, printed only if it is a UUID. */
+const safeId = id => (typeof id === 'string'
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : '(id not shown)');
 
 class Stop extends Error {}
 const stop = (message) => { throw new Stop(message); };
@@ -115,8 +133,8 @@ function deployedLogEventDigest() {
     listing = JSON.parse(execFileSync('supabase',
       ['functions', 'list', '--project-ref', PROJECT_REF, '-o', 'json'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
-  } catch (error) {
-    stop(`could not list E2E functions with the supabase CLI (${error.code ?? error.name})`);
+  } catch {
+    stop('could not list E2E functions with the supabase CLI');
   }
   return listing.find(f => f.slug === 'log-event')?.ezbr_sha256 ?? null;
 }
@@ -136,8 +154,8 @@ async function cachedOwnerReadOnly() {
   let session;
   try {
     session = await readCredentialFile(SESSION_CACHE, { readOnly: true });
-  } catch (error) {
-    stop(`no usable cached owner session (${error.code ?? "unreadable or loosely permitted"}); --check does not sign in`);
+  } catch {
+    stop('no usable cached owner session (missing, unreadable or loosely permitted); --check does not sign in');
   }
   if (!session?.access_token || !session?.user?.id || !(session.expires_at * 1000 > Date.now())) {
     stop('the cached owner session is missing or expired; --check does not sign in or refresh');
@@ -197,7 +215,7 @@ async function cancel(label, auth, expectedActor, owner) {
       stop(`the ${label} key is held by an event of another type or actor; reconcile by hand`);
     }
     await save({ [idField]: found.id, [outcomeField]: 'recorded', step: idField });
-    say(`  ${label} cancellation found and recorded: ${found.id}`);
+    say(`  ${label} cancellation found and recorded: ${safeId(found.id)}`);
     return;
   }
 
@@ -213,15 +231,15 @@ async function cancel(label, auth, expectedActor, owner) {
       ...auth,
       body: { type: CANCELLED, contract_id: record.contract_id, idempotency_key: record[keyField] },
     });
-  } catch (error) {
-    stop(`${label} cancellation request failed (${error.name}); its outcome is unknown, reconcile with --resume`);
+  } catch {
+    stop(`${label} cancellation request failed; its outcome is unknown, reconcile with --resume`);
   }
   const ok = (r.status === 201 || (r.status === 200 && r.data?.deduplicated === true)) && r.data?.event?.id;
   if (!ok) {
     stop(`${label} cancellation answered ${r.status} ${safeReason(r.reason)}; its outcome is unknown, reconcile with --resume`);
   }
   await save({ [idField]: r.data.event.id, [outcomeField]: 'recorded', step: idField });
-  say(`  ${label} cancellation recorded: ${r.data.event.id}`);
+  say(`  ${label} cancellation recorded: ${safeId(r.data.event.id)}`);
 }
 
 async function finish(owner) {
@@ -233,7 +251,7 @@ async function finish(owner) {
     stop('the recorded cancellations are not both visible to the owner as expected');
   }
   await save({ status: 'complete', step: 'complete' });
-  say(`Fixture complete: contract ${record.contract_id}. Keep ${SHOWN_FILE}.`);
+  say(`Fixture complete: contract ${safeId(record.contract_id)}. Keep ${SHOWN_FILE}.`);
 }
 
 async function startRecord(owner) {
@@ -280,7 +298,7 @@ async function startRecord(owner) {
   const contract = created.status === 201 && Array.isArray(created.body) ? created.body[0] : null;
   if (!contract?.id) stop(`contract creation answered ${created.status}; find it by its project name before anything else`);
   await save({ contract_id: contract.id, invite_token: contract.invite_token, step: 'contract_id' });
-  say(`  contract created: ${contract.id}`);
+  say(`  contract created: ${safeId(contract.id)}`);
 
   const accept = await invoke('validate-invite-token', {
     body: { invite_token: contract.invite_token, accept: true, hirer_email: GUEST_EMAIL, counterparty_name: 'Fixture Guest' },
@@ -293,8 +311,8 @@ async function startRecord(owner) {
 }
 
 async function loadForResume() {
-  try { record = await readCredentialFile(CANCEL_FIXTURE_FILE); } catch (e) {
-    stop(`no fixture file to resume (${e.code ?? e.name})`);
+  try { record = await readCredentialFile(CANCEL_FIXTURE_FILE); } catch {
+    stop('no readable fixture file to resume');
   }
   if (record.project_ref !== PROJECT_REF) stop('the fixture file was made for another project');
   if (record.status === 'complete') return false;
@@ -322,7 +340,7 @@ async function main() {
   }
 
   const release = await acquireFixtureLock(CANCEL_FIXTURE_LOCK, `record-cancel-fixture ${mode}`)
-    .catch(e => stop(e.message));
+    .catch(e => stop(e?.code === 'ELOCKED' ? e.message : 'could not take the fixture lock'));
   try {
     const owner = await verifiedOwner();
     say('  owner session: the E2E test account');
@@ -342,8 +360,11 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  if (!(error instanceof Stop)) throw error;
-  console.error(`STOP: ${error.message}`);
+  // Only this script's own fixed messages are printed. Anything unexpected
+  // may carry a request, a response or a credential, so it is not.
+  console.error(error instanceof Stop
+    ? `STOP: ${error.message}`
+    : 'STOP: unexpected failure (details not shown, they may carry credentials).');
   console.error(`Nothing further was written. Record file: ${SHOWN_FILE}`);
   process.exitCode = 1;
 }
