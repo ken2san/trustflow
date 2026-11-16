@@ -199,7 +199,8 @@ paths:
           description: |
             For a `ReplayOnlyEventType`, `type_not_allowed` answers a request
             with no usable key at once, and a valid, authorized keyed request
-            only when its key matches no earlier write of this caller's. A
+            only when there is no event under that contract and key (another
+            actor's or type's event under it is 409 instead). A
             keyed request can be answered by any earlier check first
             (`contract_not_found`, `not_a_party`, `lookup_failed`, …); see
             that schema.
@@ -1098,8 +1099,11 @@ components:
       description: |
         A type a party may no longer write. It is accepted as input ONLY as a
         keyed retry (`idempotency_key` required, a nonempty string) of the
-        same actor's earlier write of it, and nothing of this type is ever
-        newly recorded. What a request gets, in the order log-event checks:
+        same actor's earlier write of it; log-event records no new one. (That
+        is this endpoint's rule. Privileged server-side writers are outside
+        it, and a request already in flight when the refusing version was
+        deployed may have completed under the old one.) What a request gets,
+        in the order log-event checks:
 
         - no key, an empty key, or a non-string key: 400 `type_not_allowed`
           at once, before anything else in the body is looked at;
@@ -1115,8 +1119,8 @@ components:
           failing: 500 `lookup_failed` (owner) or the guest path's 5xx, never
           a refusal. A guest credential that dies under the lock: 403
           `guest_credential_revoked` / `guest_credential_expired`.
-        - a valid, authorized request whose key matches nothing: 400
-          `type_not_allowed`.
+        - a valid, authorized request when there is no event at all under
+          that contract and key: 400 `type_not_allowed`.
 
         A schema-valid request therefore does not guarantee a 200: only a
         matching earlier write of this caller's produces one.

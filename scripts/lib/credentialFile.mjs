@@ -53,7 +53,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { constants as FS } from 'node:fs';
-import { link, open, rename, unlink } from 'node:fs/promises';
+import { link, lstat, open, rename, unlink } from 'node:fs/promises';
 
 /** Owner read/write and nothing else. */
 const OWNER_ONLY = 0o600;
@@ -87,6 +87,7 @@ export async function writeCredentialFile(file, value, { stagingName = null, noC
   // error, a failed write or a failed close used to exit before the cleanup and
   // leave a staging copy of the credential behind — restrictive and gitignored,
   // but a second copy. Codex's finding 3.
+  let published = false;
   try {
     try {
       await handle.writeFile(JSON.stringify(value, null, 2));
@@ -95,6 +96,7 @@ export async function writeCredentialFile(file, value, { stagingName = null, noC
     }
     if (noClobber) {
       await link(staging, file);
+      published = true;
       await unlink(staging);
     } else {
       await rename(staging, file);
@@ -103,6 +105,19 @@ export async function writeCredentialFile(file, value, { stagingName = null, noC
     // The original error is what the caller needs; a failure to clean up must
     // not replace it.
     await unlink(staging).catch(() => { /* nothing better to do */ });
+    // After a successful link the destination EXISTS, whatever failed next.
+    // Saying only "failed" would let a caller treat it as unwritten and try
+    // again — into EEXIST, or worse, into a different file. So the error
+    // says it was published, and names the staging copy if it is still
+    // there: a second copy of a credential that someone must remove (Codex
+    // Task 88).
+    if (published) {
+      const orphan = await lstat(staging).then(() => staging, () => null);
+      throw Object.assign(
+        new Error(`${file} was published, but cleanup failed${orphan ? `; remove ${orphan}` : ''}`),
+        { code: 'EPUBLISHED_CLEANUP_FAILED', published: file, orphan, cause: err },
+      );
+    }
     throw err;
   }
   return file;
@@ -122,7 +137,7 @@ export async function writeCredentialFile(file, value, { stagingName = null, noC
  * operator reads an error. The exposure is reported, because a chmod does not
  * undo the time the file was readable — `onExposed` receives that message.
  */
-export async function readCredentialFile(file, { onExposed = null } = {}) {
+export async function readCredentialFile(file, { onExposed = null, readOnly = false } = {}) {
   // O_NOFOLLOW, not lstat-then-open.
   //
   // The first version checked with `lstat` and then opened by path, and Codex
@@ -153,6 +168,12 @@ export async function readCredentialFile(file, { onExposed = null } = {}) {
     }
     const mode = info.mode & 0o777;
     if (mode & 0o077) {
+      // A read-only caller (a `--check` that promises to change nothing)
+      // refuses instead of narrowing: chmod is a write.
+      if (readOnly) {
+        throw new Error(`${file} is mode ${mode.toString(8)}, readable beyond its owner; `
+          + 'not narrowing it in read-only mode');
+      }
       await handle.chmod(OWNER_ONLY);
       onExposed?.(`${file} was mode ${mode.toString(8)} — narrowed to 600. `
         + 'It was readable beyond its owner until now.');

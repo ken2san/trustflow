@@ -17,15 +17,13 @@
 // and tests/e2e/.cancel-fixture.json (gitignored, mode 0600: it holds a guest
 // token).
 
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { open, readFile, rm } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { getEarnerSession } from './earnerSession.js';
 import { SUPABASE_URL, SUPABASE_KEY, EARNER_EMAIL, LIVE_SKIPPED } from './liveEnv.js';
 import { E2E_PROJECT_REF, assertE2EProject } from '../../scripts/lib/e2eGuard.mjs';
 import { readCredentialFile } from '../../scripts/lib/credentialFile.mjs';
+import { CANCEL_FIXTURE_FILE, CANCEL_FIXTURE_LOCK, acquireFixtureLock } from '../../scripts/lib/fixtureLock.mjs';
 
 test.skip(LIVE_SKIPPED,
   'TF_LIVE_E2E=skip — the live-API suites were deliberately disabled.');
@@ -33,50 +31,23 @@ test.skip(LIVE_SKIPPED,
 // Every test here can write permanent events. Refuse, never skip, anywhere else.
 assertE2EProject(SUPABASE_URL);
 
-const FIXTURE_FILE = process.env.TF_CANCEL_FIXTURE
-  ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '.cancel-fixture.json');
-
-const LOCK_FILE = `${FIXTURE_FILE}.lock`;
+const FIXTURE_FILE = CANCEL_FIXTURE_FILE;
 
 const CANCELLED = 'contract.cancelled';
 
 // One fixture contract is shared: the guest test reissues its access, which
 // adds an event and revokes the guest token, while the owner test compares
-// its event set. So the tests run in one worker, in order, and a second run
-// anywhere on this machine is refused rather than allowed to race it
-// (Codex Task 87). A lock left by a dead process is taken over; a live
-// holder is never waited for.
+// its event set. So the tests run in one worker, in order, under the lock the
+// fixture's writer also takes. Any existing lock, even a dead process's, fails
+// the run: it is never taken over (see scripts/lib/fixtureLock.mjs).
 test.describe.configure({ mode: 'serial' });
 
+let releaseLock = null;
 test.beforeAll(async () => {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const lock = await open(LOCK_FILE, 'wx', 0o600);
-      await lock.writeFile(JSON.stringify({ pid: process.pid, created_at: Date.now() }));
-      await lock.close();
-      return;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      let holder = null;
-      try { holder = JSON.parse(await readFile(LOCK_FILE, 'utf8')).pid; } catch { /* unreadable: treat as live */ }
-      let alive = true;
-      if (Number.isSafeInteger(holder) && holder > 0) {
-        try { process.kill(holder, 0); } catch (e) { alive = e?.code !== 'ESRCH'; }
-      }
-      if (alive) {
-        throw new Error(`another run holds ${path.basename(LOCK_FILE)}; this suite does not run concurrently`,
-          { cause: error });
-      }
-      await rm(LOCK_FILE, { force: true });
-    }
-  }
-  throw new Error(`could not take ${path.basename(LOCK_FILE)}`);
+  releaseLock = await acquireFixtureLock(CANCEL_FIXTURE_LOCK, 'cancellation-refusal.spec');
 });
-
 test.afterAll(async () => {
-  try {
-    if (JSON.parse(await readFile(LOCK_FILE, 'utf8')).pid === process.pid) await rm(LOCK_FILE, { force: true });
-  } catch { /* already gone */ }
+  await releaseLock?.();
 });
 
 async function api(request, path, { method = 'POST', token, guestToken, body, prefer } = {}) {

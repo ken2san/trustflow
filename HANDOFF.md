@@ -269,6 +269,21 @@ nowhere):
     - It writes `tests/e2e/.cancel-fixture.json` (no-clobber, 0600) before any DB write.
     - Needs Kenji's approval to run.
   - Unit `eventWriteRules` + `logEventHandler` 51/51. Report: `.ada/claude-report-83.md`.
+- Claude Task 84 (Codex 88 FAIL → fixes). **Local only; fixture script still NOT run, not even `--check`.**
+  - **One lock:** `scripts/lib/fixtureLock.mjs`, taken by the spec and by the script's record/`--resume`.
+    It fails closed on ANY existing lock, stale included; a human verifies and deletes one. Release removes only the caller's own (token match).
+    Fixed fixture and lock paths; the `TF_CANCEL_FIXTURE` override is removed.
+  - **`--check` is read-only:**
+    - it uses the cached session as it is (`readCredentialFile(…, { readOnly: true })` refuses loose perms instead of chmodding);
+    - no sign-in, refresh, lock or file write; only `GET /auth/v1/user` and `supabase functions list`.
+  - **Cancellations:**
+    - each is marked `unknown` before sending, and `recorded` only on a success response with an id;
+    - `--resume` only reconciles (expected type, actor and key);
+    - re-sending needs `--retry-unsettled` plus 15 minutes of quiescence, with the v14 digest and the unique `events_idempotency_idx` as the stated proof.
+  - **Record updates** check `run_id` + `revision` under the lock. A `link` that succeeds before the staging cleanup fails now reports
+    `EPUBLISHED_CLEANUP_FAILED` with the orphan path, instead of looking unpublished.
+  - OpenAPI 400 now says "no event under that contract and key". Printed server reasons are allowlisted.
+  - Unit `eventWriteRules` + `logEventHandler` + `fixtureLock` 58/58. OpenAPI 3.1 validator OK. Report: `.ada/claude-report-84.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
