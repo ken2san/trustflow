@@ -296,6 +296,9 @@ nowhere):
   - **Output:** the lock error prints only fixed text and a validated pid. Printed ids must be UUIDs. Unexpected failures print a fixed line.
   - **Note:** `--resume` can send a cancellation that was never attempted, after reconciling. That's a permanent write and needs approval.
   - Unit args + lock + log-event 61/61; the arg tests fail under a fall-through mutation. Report: `.ada/claude-report-86.md`.
+- Claude Task 87 (Codex 91, text only): the script header (new RESUME WRITES section) and the printed usage now say `--resume` can make
+  permanent E2E writes and needs its own action-time approval; approving `--check` or a record run doesn't cover it. No logic change.
+  Arg + lock tests 10/10. Report: `.ada/claude-report-87.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

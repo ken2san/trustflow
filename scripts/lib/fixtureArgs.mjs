@@ -7,7 +7,9 @@
 // Kept apart from the script so it can be tested without importing anything
 // that reads credentials.
 
-export const FIXTURE_USAGE = 'usage: node scripts/record-cancel-fixture.mjs [--check | --resume]';
+export const FIXTURE_USAGE = 'usage: node scripts/record-cancel-fixture.mjs [--check | --resume]. '
+  + '--check is read-only; no argument and --resume both make permanent E2E writes, '
+  + 'and each needs its own approval at the time it is run.';
 
 /** 'record' | 'check' | 'resume', or null for anything else. */
 export function parseFixtureArgs(argv) {

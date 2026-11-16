@@ -4,7 +4,8 @@
 //
 //   node scripts/record-cancel-fixture.mjs --check    read-only preflight (see READ-ONLY below)
 //   node scripts/record-cancel-fixture.mjs            record the fixture
-//   node scripts/record-cancel-fixture.mjs --resume   finish an interrupted run (cancellations only)
+//   node scripts/record-cancel-fixture.mjs --resume   finish an interrupted run (cancellations only).
+//                                                     CAN MAKE PERMANENT E2E WRITES: see RESUME WRITES.
 //
 // WHY A ONE-OFF, AND WHY BEFORE THE DEPLOY
 // After Task 81, log-event refuses every new contract.cancelled and only
@@ -43,10 +44,11 @@
 // it is sent, and becomes `recorded` only on a success response carrying the
 // event id. Anything else — a timeout, a 5xx, a dropped connection, an
 // unexpected status — leaves it `unknown` and stops: the request may still be
-// running. `--resume` then only RECONCILES: it reads the contract's events as
-// the owner and records a cancellation found under the key, if its type and
-// actor are the expected ones (a mismatch stops). If none is found it stops
-// again. The script NEVER re-sends an attempt whose outcome is unknown:
+// running. For THAT attempt, `--resume` only reconciles: it reads the
+// contract's events as the owner and records a cancellation found under the
+// key, if its type and actor are the expected ones (a mismatch stops). If none
+// is found it stops again. The script NEVER re-sends an attempt whose outcome
+// is unknown:
 // nothing here proves the earlier request has finished, or that a second one
 // could not add a second event (Codex Task 89). Settling it is manual —
 // reconcile what E2E actually holds — and any re-send needs Kenji's explicit
@@ -60,6 +62,13 @@
 //   - Stopped before `guest_token_at_record`: the invitation may already be
 //     consumed. Not resumable; the owner can reissue guest access by hand.
 //   - Stopped at a cancellation: `--resume` as above.
+//
+// RESUME WRITES. `--resume` is not read-only and not only reconciliation. After
+// reconciling, it SENDS any cancellation that was never attempted — e.g. the
+// guest's, when the run stopped after the owner's — which is a permanent E2E
+// write. Running it needs the same action-time authorization as a record run.
+// Approval of `--check`, or of an earlier record run, is NOT approval of a
+// later `--resume`.
 
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
