@@ -194,6 +194,13 @@ nowhere):
     which only the local race script covers.
   - No spec covers a keyed guest replay or reissue → old-token refusal.
   - Report: `.ada/claude-report-73.md`.
+- Claude Task 74 (plan only):
+  - Pushed `199bfc6`.
+  - Planned one new spec, `tests/e2e/guest-credential.spec.js`, on E2E: keyed guest replay, reissue (old token refused for append and
+    replay), and expiry via the 2020 fixture token.
+  - Finding: `log-event`'s pre-check answers a stale or expired token with `403 not_a_party`. `guest_credential_revoked/expired` occur only in the
+    race, so they stay with the local self-test and race evidence.
+  - No spec written. Report: `.ada/claude-report-74.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
