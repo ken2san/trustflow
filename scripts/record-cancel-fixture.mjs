@@ -5,8 +5,6 @@
 //   node scripts/record-cancel-fixture.mjs --check    read-only preflight (see READ-ONLY below)
 //   node scripts/record-cancel-fixture.mjs            record the fixture
 //   node scripts/record-cancel-fixture.mjs --resume   finish an interrupted run (cancellations only)
-//   ... --resume --retry-unsettled                    allow re-sending a cancellation whose outcome was
-//                                                     never known, after the checks in UNKNOWN OUTCOMES
 //
 // WHY A ONE-OFF, AND WHY BEFORE THE DEPLOY
 // After Task 81, log-event refuses every new contract.cancelled and only
@@ -47,17 +45,12 @@
 // unexpected status — leaves it `unknown` and stops: the request may still be
 // running. `--resume` then only RECONCILES: it reads the contract's events as
 // the owner and records a cancellation found under the key, if its type and
-// actor are the expected ones (a mismatch stops). If none is found it does not
-// send again unless `--retry-unsettled` is given AND all of these hold, which
-// together are the proof that a re-send cannot add a second event:
-//   - at least QUIESCENCE_MS has passed since the unsettled attempt, longer
-//     than an Edge Function can run, so the earlier request has finished;
-//   - E2E log-event is still the v14 artifact (checked at start), whose keyed
-//     path replays the same actor's same type;
-//   - events_idempotency_idx is unique on (contract_id, idempotency_key)
-//     (20260924000001), so even a concurrent duplicate cannot commit: the
-//     loser hits 23505 and is answered from the existing row;
-//   - the re-send uses the SAME key, actor and type.
+// actor are the expected ones (a mismatch stops). If none is found it stops
+// again. The script NEVER re-sends an attempt whose outcome is unknown:
+// nothing here proves the earlier request has finished, or that a second one
+// could not add a second event (Codex Task 89). Settling it is manual —
+// reconcile what E2E actually holds — and any re-send needs Kenji's explicit
+// approval and is done by hand, outside this script.
 //
 // RECOVERY. On any stop the file says `status: "pending"`, the last completed
 // `step`, and any `*_outcome: "unknown"`. Do not delete it.
@@ -89,24 +82,30 @@ const SESSION_CACHE = process.env.TF_TEST_EARNER_SESSION
 // number.
 const ACCEPTING_LOG_EVENT_EZBR = 'a1f2f779fe04d3e4620414298b8f965e7875239941f3067280fdee9ed26f1b84';
 
-// Longer than any Edge Function invocation can run.
-const QUIESCENCE_MS = 15 * 60 * 1000;
-
 const CANCELLED = 'contract.cancelled';
 const GUEST_EMAIL = 'cancel.fixture@example.test';
 const GUEST_ACTOR = `guest:${GUEST_EMAIL}`;
 
 const args = new Set(process.argv.slice(2));
 const mode = args.has('--resume') ? 'resume' : args.has('--check') ? 'check' : 'record';
-const retryUnsettled = args.has('--retry-unsettled');
 
 class Stop extends Error {}
 const stop = (message) => { throw new Stop(message); };
 const say = message => console.log(message);
 
-/** A server error code, or a placeholder: nothing else of a response is ever printed. */
-const safeReason = reason => (typeof reason === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(reason)
-  ? reason : 'unrecognised_reason');
+// The error codes log-event and validate-invite-token are known to return.
+// Only these are ever printed; any other server-supplied text is not, however
+// harmless it looks (Codex Task 89: a format filter would pass a token).
+const KNOWN_REASONS = new Set([
+  'accept_failed', 'already_used', 'chain_contention', 'clock_behind_chain', 'contract_deleted',
+  'contract_not_found', 'dod_hash_is_server_derived', 'expired', 'guest_append_unavailable',
+  'guest_credential_expired', 'guest_credential_revoked', 'idempotency_key_in_use', 'insert_failed',
+  'internal_error', 'invalid_body', 'invalid_idempotency_key', 'invalid_payload', 'lookup_failed',
+  'missing_contract_id', 'not_a_party', 'not_found', 'payload_too_large', 'terms_changed',
+  'terms_check_unsupported', 'type_is_server_recorded', 'type_not_allowed', 'type_retired',
+  'wrong_party_for_event_type', 'wrong_state_for_event_type',
+]);
+const safeReason = reason => (KNOWN_REASONS.has(reason) ? reason : 'unrecognised_reason');
 
 // ── Preconditions: no writes ────────────────────────────────────────────────
 
@@ -138,7 +137,7 @@ async function cachedOwnerReadOnly() {
   try {
     session = await readCredentialFile(SESSION_CACHE, { readOnly: true });
   } catch (error) {
-    stop(`no usable cached owner session (${error.code ?? error.message}); --check does not sign in`);
+    stop(`no usable cached owner session (${error.code ?? "unreadable or loosely permitted"}); --check does not sign in`);
   }
   if (!session?.access_token || !session?.user?.id || !(session.expires_at * 1000 > Date.now())) {
     stop('the cached owner session is missing or expired; --check does not sign in or refresh');
@@ -203,14 +202,8 @@ async function cancel(label, auth, expectedActor, owner) {
   }
 
   if (record[outcomeField] === 'unknown') {
-    if (!retryUnsettled) {
-      stop(`the earlier ${label} cancellation's outcome is unknown and no event is visible yet; `
-        + 'see UNKNOWN OUTCOMES before passing --retry-unsettled');
-    }
-    const elapsed = Date.now() - Date.parse(record[attemptedField] ?? '');
-    if (!(elapsed >= QUIESCENCE_MS)) {
-      stop(`the unsettled ${label} attempt is too recent to have certainly finished; wait and resume`);
-    }
+    stop(`the earlier ${label} cancellation's outcome is unknown and no event is visible; `
+      + 'this script will not re-send it (see UNKNOWN OUTCOMES)');
   }
 
   await save({ [outcomeField]: 'unknown', [attemptedField]: new Date().toISOString() });

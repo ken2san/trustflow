@@ -13,10 +13,15 @@
 // message says who held it and whether that process still runs; a human
 // verifies and deletes it.
 //
-// OWNERSHIP ON RELEASE
-// Each acquisition writes a random token. Release removes the file only if it
-// still carries that token, so a holder cannot delete a lock that someone
-// replaced after a manual cleanup.
+// MANUAL CLEANUP: ONLY AFTER THE HOLDER HAS FULLY EXITED
+// Each acquisition writes a random token, and release unlinks only if the
+// file still carries it. That is a best-effort check, not a guarantee: the
+// read and the unlink are two steps, so if a lock is deleted by hand and a new
+// holder creates one between them, the old holder's release deletes the new
+// lock (Codex Task 89). The rule that makes it sound is the operator's: delete
+// a lock by hand only after verifying its holder process has exited. A plain
+// file lock is enough under that rule; an OS lock would only be needed to
+// support removing a lock while its holder still runs, which nothing here does.
 //
 // Same precondition as credentialFile.mjs: the directory is writable only by
 // the owning user. O_EXCL makes creation exclusive; nothing here defends a
@@ -73,7 +78,7 @@ export async function acquireFixtureLock(lockFile, purpose) {
       : 'an unreadable holder';
     throw Object.assign(new Error(
       `fixture lock is held by ${who}: ${lockFile}. It is never taken over. `
-      + 'If that process is gone and nothing else uses the fixture, verify that and delete the file by hand.',
+      + 'Delete it by hand only after verifying that process has fully exited and nothing else uses the fixture.',
     ), { code: 'ELOCKED', holder, cause: error });
   }
   try {

@@ -66,7 +66,10 @@ describe('acquireFixtureLock', () => {
     expect(await readFile(lockFile, 'utf8')).toBe('not json')
   })
 
-  it('does not remove a lock that was replaced after its own was cleaned up', async () => {
+  // Best effort only: a replacement made between release's read and its
+  // unlink is not caught, which is why manual cleanup waits for the holder
+  // to exit (see fixtureLock.mjs).
+  it('does not remove a lock replaced before it releases (best-effort check)', async () => {
     const release = await acquireFixtureLock(lockFile, 'first')
     // A manual cleanup, then someone else's lock at the same path.
     await rm(lockFile)

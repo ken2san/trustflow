@@ -284,6 +284,12 @@ nowhere):
     `EPUBLISHED_CLEANUP_FAILED` with the orphan path, instead of looking unpublished.
   - OpenAPI 400 now says "no event under that contract and key". Printed server reasons are allowlisted.
   - Unit `eventWriteRules` + `logEventHandler` + `fixtureLock` 58/58. OpenAPI 3.1 validator OK. Report: `.ada/claude-report-84.md`.
+- Claude Task 85 (Codex 89 FAIL → fixes; local only, script NOT run):
+  - **`--retry-unsettled` and the 15-minute "proof" are removed.** An unknown cancellation outcome with no visible event always stops.
+    Any re-send is manual and needs Kenji's explicit approval. No unique-index claim is made.
+  - Printed reasons come from a fixed set of known error codes; anything else prints `unrecognised_reason`.
+  - Lock: the assumption is now stated plainly — delete a lock by hand only after its holder has fully exited. The token check is best-effort, not a guarantee.
+  - 58/58 + validator OK. Report: `.ada/claude-report-85.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
