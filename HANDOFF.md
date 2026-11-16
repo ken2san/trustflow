@@ -382,6 +382,7 @@ nowhere):
   - **Restoring names is a separate task:** it needs a per-event provenance column (trigger-stamped, writer-overriding) or a server signature per event,
     then `guest-contract-events` returning it. That means a migration, a deploy and review (`.ada/claude-report-99.md`).
   - Strict-date hardening of display/sort parsing is also a separate, later task.
+- Claude Task 101 (Codex T97 PASS on `231dbc2`): normal push `076be3b..231dbc2` (8 commits, origin/main = `231dbc2`), plus this HANDOFF line. The push deployed the frontend through Vercel; no backend deploy. `log-event`'s `50b2ae4` fail-closed lookups are pushed but **not deployed** (they ship with the next log-event rollout).
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
