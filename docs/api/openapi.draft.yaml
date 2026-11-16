@@ -108,9 +108,24 @@ paths:
             schema:
               type: object
               required: [type, contract_id]
+              # A replay-only type is a valid input only as a keyed retry:
+              # without a nonempty key there is nothing it could replay.
+              if:
+                properties:
+                  type:
+                    $ref: '#/components/schemas/ReplayOnlyEventType'
+                required: [type]
+              then:
+                required: [idempotency_key]
+                properties:
+                  idempotency_key:
+                    type: string
+                    minLength: 1
               properties:
                 type:
-                  $ref: '#/components/schemas/PartyAssertableEventType'
+                  anyOf:
+                    - $ref: '#/components/schemas/PartyAssertableEventType'
+                    - $ref: '#/components/schemas/ReplayOnlyEventType'
                 contract_id:
                   type: string
                   format: uuid
@@ -182,6 +197,10 @@ paths:
                     type: boolean
         '400':
           description: |
+            `type_not_allowed` also answers a `ReplayOnlyEventType` with no key
+            at once, and one with a key once the caller is authenticated as a
+            party and no matching earlier write is found — so a keyed request
+            can see `contract_not_found` or `not_a_party` first.
             `invalid_body`, `type_not_allowed`, `type_retired`,
             `type_is_server_recorded`, `missing_contract_id`, `invalid_payload`,
             `dod_hash_is_server_derived`, `invalid_idempotency_key`.
@@ -989,8 +1008,7 @@ components:
         `work.submitted`/`approved`/`rejected` are retired but still readable on
         historical rows (`type_retired`); every Stripe-verified payment name is
         absent on purpose and never assertable from a client.
-        `contract.cancelled` is not accepted yet (`type_not_allowed`); only a
-        keyed retry of one recorded earlier returns it.
+        `contract.cancelled` is not in this list: see `ReplayOnlyEventType`.
       enum:
         - contract.initiated
         - contract.accepted
@@ -1072,6 +1090,23 @@ components:
             is NOT extended to include it — a plain unique index treats two
             NULLs as distinct, which would silently drop the uniqueness every
             human-session write has today.
+
+    ReplayOnlyEventType:
+      type: string
+      description: |
+        A type a party may no longer write, accepted as input ONLY as a keyed
+        retry (`idempotency_key` required and nonempty) of the same actor's
+        earlier write of it. That retry returns the existing event: 200,
+        `deduplicated: true`. Every other request of this type is refused:
+        400 `type_not_allowed` for a new write (with or without a key), 409
+        `idempotency_key_in_use` if the key belongs to another actor or type,
+        500 `lookup_failed` if the lookup itself fails (never read as a new
+        write). For a guest, the credential is re-checked under the contract
+        lock first, so a replaced or expired token cannot replay.
+        `contract.cancelled` is here because what calling an agreement off
+        means is undecided (Decisions.md, 2026-09-29; Task 81).
+      enum:
+        - contract.cancelled
 
     RecordedEventType:
       type: string

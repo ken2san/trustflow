@@ -69,7 +69,7 @@ import {
 } from '../_shared/eventRecord.ts'
 import {
   createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
-  isolationFaultLine, typeAdmission,
+  isolationFaultLine, ownerKeyedOutcome, typeAdmission,
 } from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
@@ -369,14 +369,17 @@ Deno.serve(async (req: Request) => {
     // of a check made before the lock, which a reissue can already have
     // overtaken (20261114120000).
     if (idempotency_key && actor.role !== 'guest_hirer') {
-      const { data: existing } = await admin
+      const lookup = await admin
         .from('events')
         .select('*')
         .eq('contract_id', contract_id)
         .eq('idempotency_key', idempotency_key)
         .maybeSingle()
-      const outcome = idempotencyOutcome(existing, { type, actorId: actor.actorId })
-      if (outcome === 'replay') return json({ event: existing, deduplicated: true }, 200)
+      const outcome = ownerKeyedOutcome(lookup, { type, actorId: actor.actorId })
+      // Fail closed: without the lookup, neither a replay nor a collision can
+      // be told from a new write. Same answer as the guest path's RPC error.
+      if (outcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)
+      if (outcome === 'replay') return json({ event: lookup.data, deduplicated: true }, 200)
       // Same key, different operation. Refusing names the real problem;
       // returning the other event would disclose it, and writing a second
       // row under one key would make "idempotent" meaningless.

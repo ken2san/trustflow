@@ -305,7 +305,8 @@ not a refusal of the request. `contract.cancelled` is not accepted yet: a new
 one answers 400 `type_not_allowed` (with an `idempotency_key`, only after the
 caller is authenticated as a party), because what calling an agreement off
 means is undecided. A retry with the same key, type and actor of one recorded
-earlier still returns it (200, `deduplicated: true`).
+earlier still returns it (200, `deduplicated: true`); 500 `lookup_failed`
+means that lookup itself failed and is never a refusal of the replay.
 
 A successful acceptance (`accept: true`) returns HTTP 200 and a JSON object
 with `contract_id`, `project_name`, `dod`, `amount_jpy`, `amount_minor`,

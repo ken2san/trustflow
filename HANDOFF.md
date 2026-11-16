@@ -248,6 +248,14 @@ nowhere):
   - **Release order:** deploy `log-event` (E2E, then production) before pushing, because the push publishes `agent-protocol.md`.
   - Out of scope: service-role writers (`append_guest_event` has no type allowlist), and the "Cancelled" labels on historical rows in
     AgreementView/GuestEvidenceView. Report: `.ada/claude-report-81.md`.
+- Claude Task 82 (Codex 86 fixes on `0462ffe`). **Local only: not pushed, not deployed, nothing run on E2E.**
+  - The owner keyed lookup no longer drops its error: `ownerKeyedOutcome` in `_shared/eventWriteRules.ts`; a failure answers 500 `lookup_failed`
+    for every keyed owner write.
+  - OpenAPI models `contract.cancelled` as a `ReplayOnlyEventType`: the 3.1 `if`/`then` requires a nonempty key. The 400 note says a keyed
+    request can see `contract_not_found`/`not_a_party` first.
+  - New **unrun** `tests/e2e/cancellation-refusal.spec.js`. It needs `tests/e2e/.cancel-fixture.json` (gitignored), recorded on E2E
+    **before** the new log-event is deployed, and fails without it.
+  - Unit `eventWriteRules` 45/45. Fixture plan in `.ada/claude-report-82.md`; it needs Kenji's approval.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

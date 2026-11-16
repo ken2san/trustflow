@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import {
   GUEST_ACCESS_TOKEN_TTL_DAYS, REPLAY_ONLY_TYPES, createdAtFollows, eventWriteFault, guestCredentialStillValid,
-  idempotencyOutcome, isolationFaultLine, typeAdmission,
+  idempotencyOutcome, isolationFaultLine, ownerKeyedOutcome, typeAdmission,
 } from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
@@ -346,5 +346,48 @@ describe('typeAdmission — contract.cancelled is replay-only', () => {
     expect(typeAdmission('dispute.opened', ALLOWED, 'k')).toBe('write')
     expect(typeAdmission('no.such.type', ALLOWED, 'k')).toBe('refuse')
     expect(typeAdmission(undefined, ALLOWED, 'k')).toBe('refuse')
+  })
+})
+
+// The owner path's keyed lookup, as log-event reads it from supabase-js
+// ({ data, error }). A failed lookup used to be dropped and read as 'none'
+// (Codex Task 86).
+describe('ownerKeyedOutcome — a failed lookup is never a new write', () => {
+  const cancelled = {
+    id: '55555555-5555-4555-8555-555555555555',
+    type: 'contract.cancelled',
+    actor_id: OWNER,
+    idempotency_key: 'cancel-k',
+  }
+  const op = { type: 'contract.cancelled', actorId: OWNER }
+
+  it('replays the caller\'s own earlier write', () => {
+    expect(ownerKeyedOutcome({ data: cancelled, error: null }, op)).toBe('replay')
+  })
+
+  it('reports a collision with another actor or type', () => {
+    expect(ownerKeyedOutcome({ data: cancelled, error: null }, { ...op, actorId: GUEST })).toBe('conflict')
+    expect(ownerKeyedOutcome({ data: cancelled, error: null }, { ...op, type: 'dispute.opened' })).toBe('conflict')
+  })
+
+  it('reports none only when the lookup succeeded and found nothing', () => {
+    expect(ownerKeyedOutcome({ data: null, error: null }, op)).toBe('none')
+  })
+
+  it('reports lookup_failed on an error, whether or not data came back', () => {
+    const error = { code: 'PGRST116', message: 'multiple rows' }
+    expect(ownerKeyedOutcome({ data: null, error }, op)).toBe('lookup_failed')
+    expect(ownerKeyedOutcome({ data: cancelled, error }, op)).toBe('lookup_failed')
+    // The collision a failed lookup used to hide is not reported as none either.
+    expect(ownerKeyedOutcome({ data: null, error }, { ...op, actorId: GUEST })).toBe('lookup_failed')
+  })
+
+  it('log-event answers lookup_failed with a 5xx before the replay-only refusal', () => {
+    const source = readFileSync(
+      new URL('../../supabase/functions/log-event/index.ts', import.meta.url), 'utf8')
+    const failed = source.indexOf("if (outcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)")
+    const refused = source.indexOf("if (admission === 'replay_only') return json({ error: 'type_not_allowed' }, 400)")
+    expect(failed).toBeGreaterThan(-1)
+    expect(refused).toBeGreaterThan(failed)
   })
 })

@@ -51,6 +51,25 @@ export function idempotencyOutcome(
 }
 
 /**
+ * The owner path's answer to a keyed request, from the lookup's raw result.
+ *
+ * A failed lookup is its own outcome. It used to be dropped, which made
+ * `existing` absent and the request read as 'none': a key collision went
+ * unseen and the request carried on to write, and a replay-only type
+ * (below) was refused as a new write when its earlier event may well exist
+ * (Codex Task 86). The caller fails closed on 'lookup_failed'.
+ */
+export type OwnerKeyedOutcome = IdempotencyOutcome | 'lookup_failed'
+
+export function ownerKeyedOutcome(
+  lookup: { data?: { type?: unknown; actor_id?: unknown } | null; error?: unknown },
+  operation: { type: string; actorId: string },
+): OwnerKeyedOutcome {
+  if (lookup.error) return 'lookup_failed'
+  return idempotencyOutcome(lookup.data, operation)
+}
+
+/**
  * Types a party may no longer write, but whose earlier keyed writes may still
  * be replayed.
  *

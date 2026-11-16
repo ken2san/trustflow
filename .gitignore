@@ -111,3 +111,7 @@ tests/e2e/.earner-session.json.lock
 # An agent-held owner credential. A refresh token is the whole account.
 tests/e2e/.owner-api-key.json
 tests/e2e/.owner-api-key.json.next
+
+# contract.cancelled events recorded before new writes were refused (see
+# cancellation-refusal.spec.js). Holds a guest token, revoked on every run.
+tests/e2e/.cancel-fixture.json
