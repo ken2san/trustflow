@@ -56,7 +56,10 @@ Both projects run the **same artifacts, byte for byte**, as of the Task 36
 rollout (2026-11-10, built from `4b571bf`). Production versions and digests:
 `log-event` v15 (`8e834b9214e30c1d…`), `validate-invite-token` v16
 (`6ae1e8dd42362aa4…`), `guest-contract-events` v13 (`b2bcab62be6a4266…`),
-`reissue-guest-access` v6 (`4c063dd2d16609121…`), identical to E2E's. The
+`reissue-guest-access` v6 (`4c063dd2d16609121…`), identical to E2E's — except
+E2E `log-event`, which is v14 (`a1f2f779fe04d3e4…`, from `45633e6`) since
+Task 73 (2026-11-16); E2E's rollback target is the old v13 (`8e834b92…`,
+source `4b571bf`). The
 previous production artifacts (Task 17, from `be4287f`) are the rollback target:
 `931793338b5a4234…`, `4724b50d9229cf18…`, `84884fa66c4a38c3…`,
 `65e12b06b05361c1…`. Compare **measured `ezbr_sha256`**, never `updated_at` or
@@ -98,11 +101,12 @@ from the implementation unnoticed.
 
 ---
 
-## Local, committed, unpushed
+## Guest append under the credential lock — on E2E, not in production
 
-**Task 58 — guest append under the credential lock. Local commit only: not
-pushed, not deployed, migration applied nowhere** (not local, not E2E, not
-production).
+**Task 58 — guest append under the credential lock. Pushed to `origin/main`
+(so the reissue copy and `agent-protocol.md` are live on Vercel), applied and
+deployed on E2E only (Task 73), not in production.** The published claim is
+therefore ahead of production's backend until the production rollout.
 
 - Codex Task 76 reviewed b467194: FAIL
 
@@ -177,6 +181,19 @@ nowhere):
 - Claude Task 67: applied migrations as `postgres` over 127.0.0.1 inside trustflow-localdb; 13/47 OK, `20260923000001` failed (`function auth.jwt() does not exist` — GoTrue's, not in the bare image). Self-test and race not run. Report: `.ada/claude-report-67.md`.
 - Claude Task 68: recreated trustflow-localdb (127.0.0.1:54322 IPv4 only), ran GoTrue v2.197.0 `auth migrate` once (75 OK, no ports, removed); project migrations 18/47 OK, `20260924123733_reconcile_migration_history` failed (`supabase_migrations.schema_migrations` does not exist — the CLI's history table). Self-test/race not run. Report: `.ada/claude-report-68.md`.
 - Claude Task 69: fresh trustflow-localdb (127.0.0.1:54322 IPv4 only) + GoTrue migrate; CLI-shaped `supabase_migrations.schema_migrations` (DDL from the CLI binary), **47/47 migrations applied as `postgres`, self-test passed**; marker needed `supabase_admin` (PG17 refuses `postgres`: permission denied to set parameter); **race script PASS** (all cases ok) run inside the container. Container left running. Report: `.ada/claude-report-69.md`.
+- Claude Task 73 (owner OK 2026-11-16, E2E `yqjtawffpesplqyurlpj` only; Task 72 had stopped at an `op read` timeout):
+  - **PGPASSWORD:** CLI 2.105.0 honours `PGPASSWORD` with a password-less `--db-url`. Without it the same call fails `28P01`.
+    That keeps the password out of argv, so prefer it to the doc's URL-encoded recipe.
+  - **A:** dry run listed only `20261114120000`.
+  - **B:** `db push` OK. History 47. `append_guest_event`, `replay_guest_event` and both helpers grant EXECUTE to `postgres` and `service_role` only.
+  - **C:** `log-event` v13 `8e834b9214e30c1d…5b58389` → v14 `a1f2f779fe04d3e4620414298b8f965e7875239941f3067280fdee9ed26f1b84`,
+    entrypoint `file:///Users/…`. Rollback = redeploy from `4b571bf`; its digest must be re-measured, not assumed.
+    The bogus-token probe returned `404 contract_not_found`, not `503 guest_append_unavailable`.
+  - **D:** `00-backend-guard` 1/1 alone, then `guest-evidence`, `event-ingestion`, `agreement-binding` and `mixed-surface` 43/43.
+  - This shows wiring and no regression (authorized guest writes go through the RPC). It does **not** show the race,
+    which only the local race script covers.
+  - No spec covers a keyed guest replay or reissue → old-token refusal.
+  - Report: `.ada/claude-report-73.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
@@ -193,8 +210,8 @@ nowhere):
   events carry explicit ids. Lock order is proven by a `pg_blocking_pids`
   handshake, not clocks. **New file:** `scripts/lib/local-db-guard.sh` (the
   guard; `npm run test:race:guest -- --self-check` exercises its rejection
-  paths without a DB). **Neither the race script nor its self-check has been
-  run**, and the migration self-test has never executed.
+  paths without a DB). Race script and migration self-test both passed
+  locally in Task 69, and the self-test ran again inside the E2E push (Task 73).
 
 **Release order:** apply the migration, then deploy `log-event`. Old function +
 new DB is unchanged behaviour; new function + old DB fails guest writes closed.
