@@ -343,6 +343,15 @@ nowhere):
   - New `cancellationClaimLabel` in `src/lib/contractStatus.js`. Unit `contractStatus` 58/58 (+3).
   - The unreachable `CANCELLED` *state* label is unchanged, since no event projects into it. Display only: no change to writing, API or DB.
   - Not checked in a browser.
+- Claude Task 96 (Codex 93 fixes on `e7f791f`), **local only**:
+  - The claim names the **actual actor**: new `claimantOfActorId` (owner rows) and `claimantOfShapedActor` (guest-contract-events actors) in `contractStatus.js`.
+    Unknown, legacy or missing actors → "a party", never a guess.
+  - `App.jsx` gives both event shapes a `claimant` field. AgreementView uses it and drops the duplicate name beside a cancellation row.
+    GuestEvidenceView guards a missing `event.actor`.
+  - New render tests `tests/unit/cancellationClaimViews.test.js` (`react-dom/server`). `vitest.config.js` now uses the automatic JSX runtime, like the app build.
+  - `contractStatus` + render tests 64/64, and a guessed-label mutation fails the tests.
+  - **Browser check NOT done:** the cached owner session had expired (a sign-in is a write) and the guest view needs a reissue (an event write). It needs a decision.
+    Report: `.ada/claude-report-96.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

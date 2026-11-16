@@ -9,7 +9,7 @@
 
 import { ShieldCheck, ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
 import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts';
-import { cancellationClaimLabel } from '../lib/contractStatus.js';
+import { cancellationClaimLabel, claimantOfShapedActor } from '../lib/contractStatus.js';
 
 const TYPE_LABELS = {
   'contract.initiated':   'Agreement created',
@@ -146,18 +146,18 @@ function EventRow({ event }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-white font-bold text-sm">
           {event.type === 'contract.cancelled'
-            ? cancellationClaimLabel(event.actor.label)
+            ? cancellationClaimLabel(claimantOfShapedActor(event.actor))
             : TYPE_LABELS[event.type] ?? event.type}
         </span>
         <span className="text-[11px] text-slate-400 font-mono">{formatWhen(event.created_at)}</span>
       </div>
 
       <p className="text-xs text-slate-400 mt-1">
-        by <span className="text-slate-300">{event.actor.label}</span>
+        by <span className="text-slate-300">{event.actor?.label ?? 'Unknown'}</span>
         {/* The server already labels the viewer's own acts "You"; adding
             "(you)" to that produced "by You (you)". The suffix is for an act
             attributed to a named party that happens to be the reader. */}
-        {event.actor.role === 'guest_hirer' && event.actor.label !== 'You'
+        {event.actor?.role === 'guest_hirer' && event.actor?.label !== 'You'
           && <span className="text-slate-400"> (you)</span>}
       </p>
 

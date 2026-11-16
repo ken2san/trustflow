@@ -138,7 +138,7 @@ import GuestEvidenceView from './views/GuestEvidenceView';
 import ContractsHomeView from './views/ContractsHomeView';
 import SignInView from './views/SignInView';
 import AgreementView from './views/AgreementView';
-import { performsHere } from './lib/contractStatus.js';
+import { performsHere, claimantOfActorId, claimantOfShapedActor } from './lib/contractStatus.js';
 
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
@@ -489,6 +489,8 @@ const App = () => {
           actorLabel: byCreator
             ? 'by you'
             : `by ${String(ev.actor_id ?? '').replace(/^guest:/, '') || 'the other party'}`,
+          // Strict, unlike actorLabel: named only from the actual actor id.
+          claimant: claimantOfActorId(ev.actor_id, contract.earner_user_id),
           reason: ev.payload?.reason ?? ev.payload?.note ?? null,
           _performerIsCreator: performerIsCreator,
         };
@@ -576,6 +578,7 @@ const App = () => {
         type: ev.type,
         created_at: ev.created_at,
         actorLabel: ev.actor.role === 'guest_hirer' ? 'by you' : `by ${ev.actor.label}`,
+        claimant: claimantOfShapedActor(ev.actor),
         reason: ev.payload?.reason ?? ev.payload?.note ?? null,
       })),
       role: evidence.contract.viewer_role ?? 'receiver',

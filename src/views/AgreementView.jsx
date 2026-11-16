@@ -57,7 +57,8 @@ const RECORD_LABELS = {
 
 function recordLabel(event) {
   if (event.type === 'contract.cancelled') {
-    return cancellationClaimLabel(String(event.actorLabel ?? '').replace(/^by /, ''));
+    // `claimant` is set from the event's actual actor, or null ("a party").
+    return cancellationClaimLabel(event.claimant);
   }
   return RECORD_LABELS[event.type] ?? event.type;
 }
@@ -82,7 +83,10 @@ function Record({ events }) {
         <li key={event.id} className="flex flex-wrap items-baseline gap-x-3 text-sm">
           <span className="text-white font-bold">{recordLabel(event)}</span>
           <span className="text-[11px] font-mono text-slate-400">{formatWhen(event.created_at)}</span>
-          <span className="text-xs text-slate-500">{event.actorLabel}</span>
+          {/* A cancellation's label already names who claimed it. */}
+          {event.type !== 'contract.cancelled' && (
+            <span className="text-xs text-slate-500">{event.actorLabel}</span>
+          )}
           {event.reason && (
             <span className="w-full text-xs text-slate-500 pl-1">“{event.reason}”</span>
           )}

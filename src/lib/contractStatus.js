@@ -560,6 +560,33 @@ export function cancellationClaimLabel(party) {
 }
 
 /**
+ * Who wrote an event, from a raw `events` row as the owner reads it — named
+ * only when the actor id says so. 'you' for the owner's own id, the email for
+ * a `guest:<email>` actor, and null for anything else: legacy rows carried
+ * whatever the browser supplied, which identifies nobody (Codex Task 93). A
+ * null claimant is shown as "a party", never guessed.
+ */
+export function claimantOfActorId(actorId, ownerUserId) {
+  if (typeof actorId !== 'string' || actorId === '') return null
+  if (typeof ownerUserId === 'string' && actorId === ownerUserId) return 'you'
+  if (actorId.startsWith('guest:')) return actorId.slice('guest:'.length).trim() || null
+  return null
+}
+
+/**
+ * The same, from an actor as guest-contract-events describes it. Its reader is
+ * always the guest, so a `guest_hirer` actor is 'you'; an `earner` actor is
+ * named by its label; 'unknown' and every other role are null, whatever the
+ * label says ("Unknown", "Unverified actor").
+ */
+export function claimantOfShapedActor(actor) {
+  if (!actor || typeof actor !== 'object') return null
+  if (actor.role === 'guest_hirer') return 'you'
+  if (actor.role === 'earner' && typeof actor.label === 'string' && actor.label.trim()) return actor.label.trim()
+  return null
+}
+
+/**
  * Format an amount the way the contract records it — in its own currency.
  *
  * It used to hard-code a yen sign and `amount_jpy`, which was true of every
