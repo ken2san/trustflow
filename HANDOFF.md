@@ -219,6 +219,13 @@ nowhere):
   - E2E, with `TF_LIVE_E2E` unset: guard 1/1 alone, spec **3/3 passed, 0 skipped**, `test-results/` empty. Rows: 2 contracts and 7 events.
   - Still not proven: the HTTP race and the locked-RPC error mapping (`guest_credential_revoked/expired`).
   - Not pushed. Report: `.ada/claude-report-76.md`.
+- Claude Task 77 (plan only, nothing run): production rollout of the credential lock.
+  - Order: P0 target/tree → P1 functions → P2 drift + dry run (only `20261114120000`) → B push (OK) → B' grants →
+    C deploy log-event alone (OK) → C' ezbr `a1f2f779…` + probe + `smoke:prod`.
+  - Rollback target v15 `8e834b92…`. Its digest is reproducible only from this checkout path.
+  - "B applied, C failed" is safe to leave; the forward repair is re-running C.
+  - `docs/e2e-project.md` should switch to the PGPASSWORD form (not edited).
+  - Report: `.ada/claude-report-77.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
