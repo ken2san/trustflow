@@ -989,13 +989,14 @@ components:
         `work.submitted`/`approved`/`rejected` are retired but still readable on
         historical rows (`type_retired`); every Stripe-verified payment name is
         absent on purpose and never assertable from a client.
+        `contract.cancelled` is not accepted yet (`type_not_allowed`); only a
+        keyed retry of one recorded earlier returns it.
       enum:
         - contract.initiated
         - contract.accepted
         - performance.asserted
         - performance.accepted
         - performance.rejected
-        - contract.cancelled
         - contract.completed
         - dispute.opened
         - rating.submitted
@@ -1087,6 +1088,8 @@ components:
         `work.submitted` / `work.approved` / `work.rejected`
         (`:114`), refused with `type_retired`. Payment names verified by Stripe
         may also appear on historical rows and were never client-assertable.
+        `contract.cancelled` appears on rows written before new ones were
+        refused (Task 81): one party's assertion that projects nothing.
       examples:
         - performance.asserted
         - dod.consent_recorded

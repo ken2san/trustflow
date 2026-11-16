@@ -73,13 +73,18 @@ DRAFTING ──▶ AWAITING_ACCEPTANCE ──▶ TERMS_ACCEPTED ──▶ AWAITI
 
 A party may record: `contract.initiated`, `contract.accepted`,
 `performance.asserted`, `performance.accepted`, `performance.rejected`,
-`contract.cancelled`, `contract.completed`, `dispute.opened`,
-`rating.submitted`.
+`contract.completed`, `dispute.opened`, `rating.submitted`.
 
 Only `performance.asserted`, `performance.accepted` and `performance.rejected`
 move the state. The rest are recorded without changing where the protocol
-stands — `contract.cancelled` in particular is accepted, stored, and projects
-nothing, because whether a party may void an accepted agreement is undecided.
+stands.
+
+`contract.cancelled` is **not accepted** (Task 81): a new one is refused with
+400 `type_not_allowed`, because whether and how a party may call an agreement
+off is undecided. A keyed retry of one already recorded still returns that
+event (200, `deduplicated: true`). Events written before the refusal stay as
+they are: one party's assertion, projecting nothing, not proof that the
+agreement ended.
 
 `dod.consent_recorded` is **server-recorded**: the authoritative acceptance,
 written by `validate-invite-token` inside the acceptance transaction and refused

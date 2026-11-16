@@ -20,7 +20,8 @@
 //   created_at      — the server's clock.
 //   event_hash      — computed here, over the server's own field values.
 //   prev_event_hash — read from the contract's current chain tip here.
-//   type            — checked against ALLOWED_TYPES; anything else is rejected.
+//   type            — checked against ALLOWED_TYPES; anything else is rejected,
+//                     except a keyed replay of a REPLAY_ONLY_TYPES event.
 //
 // The actor must also be a party to the referenced contract, and the contract
 // must be a real row in `contracts`. Events referencing marketplace fixtures
@@ -68,7 +69,7 @@ import {
 } from '../_shared/eventRecord.ts'
 import {
   createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
-  isolationFaultLine,
+  isolationFaultLine, typeAdmission,
 } from '../_shared/eventWriteRules.ts'
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
@@ -103,7 +104,9 @@ const ALLOWED_TYPES = new Set([
   'performance.asserted',
   'performance.accepted',
   'performance.rejected',
-  'contract.cancelled',
+  // contract.cancelled is not here: new writes are refused until its meaning
+  // is decided, and only a keyed replay of one already recorded is answered.
+  // See REPLAY_ONLY_TYPES in _shared/eventWriteRules.ts.
   'contract.completed',
   'dispute.opened',
   'rating.submitted',
@@ -269,7 +272,8 @@ Deno.serve(async (req: Request) => {
 
     const { type, contract_id, payload, dod_hash, idempotency_key } = body as Record<string, unknown>
 
-    if (typeof type !== 'string' || !ALLOWED_TYPES.has(type)) {
+    const admission = typeAdmission(type, ALLOWED_TYPES, idempotency_key)
+    if (typeof type !== 'string' || admission === 'refuse') {
       const retired = typeof type === 'string' && RETIRED_TYPES.has(type)
       const serverRecorded = typeof type === 'string' && SERVER_RECORDED_TYPES.has(type)
       return json({
@@ -407,6 +411,11 @@ Deno.serve(async (req: Request) => {
       if (refused) return json({ error: refused.error }, refused.status)
       if (status !== 'none') return json({ error: 'lookup_failed' }, 500)
     }
+
+    // A replay-only type that found no earlier write of this caller's is a new
+    // write, and new writes of it are refused. Both replay lookups above have
+    // answered by now; nothing below may build or insert one.
+    if (admission === 'replay_only') return json({ error: 'type_not_allowed' }, 400)
 
     // Set when an attempt was abandoned, or refused by the database, because
     // this isolate's clock was not ahead of the chain — so the refusal at the

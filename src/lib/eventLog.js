@@ -48,7 +48,7 @@ export const EVENT_TYPES = {
   PAYMENT_RELEASED:     'payment.released',      // full payment released
   DISPUTE_OPENED:       'dispute.opened',        // dispute raised by either party
   DISPUTE_RESOLVED:     'dispute.resolved',      // arbiter or system resolved dispute
-  CONTRACT_CANCELLED:   'contract.cancelled',
+  CONTRACT_CANCELLED:   'contract.cancelled',    // no longer accepted by the server (historical rows only)
   CONTRACT_COMPLETED:   'contract.completed',    // step 5 reached
   RATING_SUBMITTED:     'rating.submitted',      // blind rating submitted
   // Bad-actor events — permanently attached to an actor's reputation record

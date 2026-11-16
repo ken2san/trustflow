@@ -220,7 +220,9 @@ test('the chain links each event to its predecessor and cannot be forked', async
   // (contract_id, prev_event_hash) means only one of them can claim it, and
   // the other retries — so the tail is a chain, never a fork.
   const concurrent = await Promise.all(
-    ['contract.completed', 'contract.cancelled', 'dispute.opened'].map(type =>
+    // Any three party-writable types with no order rule; contract.cancelled
+    // was one until new writes of it were refused (Task 81).
+    ['contract.completed', 'rating.submitted', 'dispute.opened'].map(type =>
       api(request, '/functions/v1/log-event', { token, body: { type, contract_id: contract.id } })
     )
   );

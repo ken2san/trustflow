@@ -301,7 +301,11 @@ what it wrote; once that check passes, the earlier event is returned (200,
 `deduplicated: true`) before any check that only applies to writing a new
 event, so a retry of a write that landed is not refused for chain or clock
 reasons. 503 `guest_append_unavailable` is a server deployment fault,
-not a refusal of the request.
+not a refusal of the request. `contract.cancelled` is not accepted yet: a new
+one answers 400 `type_not_allowed` (with an `idempotency_key`, only after the
+caller is authenticated as a party), because what calling an agreement off
+means is undecided. A retry with the same key, type and actor of one recorded
+earlier still returns it (200, `deduplicated: true`).
 
 A successful acceptance (`accept: true`) returns HTTP 200 and a JSON object
 with `contract_id`, `project_name`, `dod`, `amount_jpy`, `amount_minor`,

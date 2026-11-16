@@ -51,6 +51,45 @@ export function idempotencyOutcome(
 }
 
 /**
+ * Types a party may no longer write, but whose earlier keyed writes may still
+ * be replayed.
+ *
+ * `contract.cancelled` was accepted from either party on any contract and
+ * projected nothing: a permanent event whose meaning was never decided
+ * (Decisions.md, 2026-09-29). New writes are refused until it is (Task 81).
+ * A retry of one already recorded still gets its event back — the owner's
+ * choice (option A, 2026-11-16) — so a client that retries after a lost
+ * response is not told its earlier write never happened.
+ */
+export const REPLAY_ONLY_TYPES: ReadonlySet<string> = new Set(['contract.cancelled'])
+
+/**
+ * Whether a request of this type may proceed, before anything is looked up.
+ *
+ *   'write'        an allowed type: proceed as usual.
+ *   'replay_only'  a replay-only type with a key: proceed through
+ *                  authentication and the replay lookup, and refuse with
+ *                  `type_not_allowed` if no earlier write is found. It must
+ *                  never reach an insert.
+ *   'refuse'       anything else, including a replay-only type with no key —
+ *                  there is nothing such a request could replay.
+ */
+export type TypeAdmission = 'write' | 'replay_only' | 'refuse'
+
+export function typeAdmission(
+  type: unknown,
+  allowed: ReadonlySet<string>,
+  idempotencyKey: unknown,
+): TypeAdmission {
+  if (typeof type !== 'string') return 'refuse'
+  if (allowed.has(type)) return 'write'
+  if (REPLAY_ONLY_TYPES.has(type) && typeof idempotencyKey === 'string' && idempotencyKey !== '') {
+    return 'replay_only'
+  }
+  return 'refuse'
+}
+
+/**
  * How long a guest access token stays valid, in days.
  *
  * **30, reduced from 90** (reviewer finding M3). It lives here, next to

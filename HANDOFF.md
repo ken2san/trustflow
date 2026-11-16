@@ -239,6 +239,15 @@ nowhere):
   - Finding: any party (guest and agents included) can write it today on any contract. It is permanent, labelled "Cancelled", and projects nothing.
   - Recommended: Step 0, refuse new writes until the owner decides the semantics (open decisions 1–4 in the report). Then move to scoped delegation.
   - Report: `.ada/claude-report-80.md`.
+- Claude Task 81 (Step 0, owner option A, Codex 85 applied). **Committed locally only: not pushed, not deployed.**
+  - `contract.cancelled` is removed from `log-event`'s `ALLOWED_TYPES`. New writes → 400 `type_not_allowed`.
+  - A keyed retry still gets back a `contract.cancelled` the same actor already recorded. `REPLAY_ONLY_TYPES` and `typeAdmission` in
+    `_shared/eventWriteRules.ts`, plus one guard after both replay lookups, keep it from ever reaching an insert.
+  - Unit `eventWriteRules` 40/40. E2E `event-ingestion` concurrency fixture now uses `rating.submitted` (not run).
+    Protocol §4, `public/agent-protocol.md`, the OpenAPI draft and the `eventLog.js` comment are updated.
+  - **Release order:** deploy `log-event` (E2E, then production) before pushing, because the push publishes `agent-protocol.md`.
+  - Out of scope: service-role writers (`append_guest_event` has no type allowlist), and the "Cancelled" labels on historical rows in
+    AgreementView/GuestEvidenceView. Report: `.ada/claude-report-81.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

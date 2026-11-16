@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import {
-  GUEST_ACCESS_TOKEN_TTL_DAYS, createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome, isolationFaultLine,
+  GUEST_ACCESS_TOKEN_TTL_DAYS, REPLAY_ONLY_TYPES, createdAtFollows, eventWriteFault, guestCredentialStillValid,
+  idempotencyOutcome, isolationFaultLine, typeAdmission,
 } from '../../supabase/functions/_shared/eventWriteRules.ts'
 
 // These rules are the ones log-event used to state inline, more than once
@@ -295,5 +297,54 @@ describe('comparing a presented guest token', () => {
 
   it('refuses a case-folded token', () => {
     expect(guestCredentialStillValid(row(future), token.toUpperCase())).toBe(false)
+  })
+})
+
+// contract.cancelled: new writes refused until its meaning is decided; a keyed
+// retry of one already recorded still gets its event back (Task 81, option A).
+describe('typeAdmission — contract.cancelled is replay-only', () => {
+  const ALLOWED = new Set(['performance.asserted', 'dispute.opened'])
+  const cancelled = {
+    id: '44444444-4444-4444-8444-444444444444',
+    type: 'contract.cancelled',
+    actor_id: OWNER,
+    idempotency_key: 'cancel-k',
+  }
+
+  it('log-event no longer lists contract.cancelled as a type a party may write', () => {
+    const source = readFileSync(
+      new URL('../../supabase/functions/log-event/index.ts', import.meta.url), 'utf8')
+    const block = source.match(/const ALLOWED_TYPES = new Set\(\[([\s\S]*?)\]\)/)
+    expect(block).not.toBeNull()
+    expect(block[1]).not.toMatch(/^\s*'contract\.cancelled',/m)
+    expect(REPLAY_ONLY_TYPES.has('contract.cancelled')).toBe(true)
+  })
+
+  it('refuses a new write: no key means nothing to replay', () => {
+    for (const key of [undefined, null, '', 42]) {
+      expect(typeAdmission('contract.cancelled', ALLOWED, key)).toBe('refuse')
+    }
+  })
+
+  it('lets a keyed request through only as far as the replay lookup', () => {
+    expect(typeAdmission('contract.cancelled', ALLOWED, 'cancel-k')).toBe('replay_only')
+  })
+
+  it('a replay of an existing one returns that event; a fresh key finds nothing and is refused', () => {
+    expect(idempotencyOutcome(cancelled, { type: 'contract.cancelled', actorId: OWNER })).toBe('replay')
+    // 'none' under replay_only is answered type_not_allowed by log-event.
+    expect(idempotencyOutcome(null, { type: 'contract.cancelled', actorId: OWNER })).toBe('none')
+  })
+
+  it('keeps the mismatch refusal for the same key used by another actor or type', () => {
+    expect(idempotencyOutcome(cancelled, { type: 'contract.cancelled', actorId: GUEST })).toBe('conflict')
+    expect(idempotencyOutcome(cancelled, { type: 'dispute.opened', actorId: OWNER })).toBe('conflict')
+  })
+
+  it('leaves allowed and unknown types as they were', () => {
+    expect(typeAdmission('dispute.opened', ALLOWED, undefined)).toBe('write')
+    expect(typeAdmission('dispute.opened', ALLOWED, 'k')).toBe('write')
+    expect(typeAdmission('no.such.type', ALLOWED, 'k')).toBe('refuse')
+    expect(typeAdmission(undefined, ALLOWED, 'k')).toBe('refuse')
   })
 })
