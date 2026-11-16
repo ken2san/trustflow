@@ -329,6 +329,14 @@ nowhere):
   - This HANDOFF entry is a later local commit, not pushed. Report: `.ada/claude-report-91.md`.
 - Claude Task 92: `scripts/lib/tfClient.mjs`'s session-cache exposure warning is now fixed text, with no file path (home directory).
   No other path-printing warning in that file. No unit test covers tfClient. Local only. Report: `.ada/claude-report-92.md`.
+- Claude Task 94 (Kenji OK 14:16 ET; plan `.ada/claude-report-93.md`), **local only, ships with the next log-event rollout**:
+  - The three `log-event` reads that dropped their DB error now fail closed with `500 lookup_failed`, as the owner pre-check does:
+    - the chain-tip read (it used to fall back to GENESIS and end as contention);
+    - the TF001 twin check (it used to answer 409 `wrong_state_for_event_type`);
+    - the lookup after an idempotency-key 23505 (it used to loop to `chain_contention`).
+  - None of them could write a duplicate or a wrong event; only the replies were wrong.
+  - Files: `supabase/functions/log-event/index.ts`, `tests/unit/logEventHandler.test.js` (+5 tests; the fake's reads became an ordered queue, plus `.not` and an insert result).
+  - `logEventHandler` + `eventWriteRules` 56/56. Each new 500 line, removed, fails exactly its test. Not deployed to E2E or production; not pushed.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

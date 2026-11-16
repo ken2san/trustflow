@@ -68,7 +68,7 @@ import {
   ACCEPTANCE_TYPE, PRE_ACCEPTANCE_STATES, acceptedSnapshotVersion, buildEventRecord, roleInAgreement,
 } from '../_shared/eventRecord.ts'
 import {
-  createdAtFollows, eventWriteFault, guestCredentialStillValid, idempotencyOutcome,
+  createdAtFollows, eventWriteFault, guestCredentialStillValid,
   isolationFaultLine, ownerKeyedOutcome, typeAdmission,
 } from '../_shared/eventWriteRules.ts'
 import {
@@ -436,7 +436,7 @@ Deno.serve(async (req: Request) => {
     const mustBeAccepted = !PRE_ACCEPTANCE_STATES.has(String(contract.state ?? ''))
 
     for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
-      const { data: tip } = await admin
+      const tipRead = await admin
         .from('events')
         // created_at comes back too: the stamp this event will carry has to be
         // later than its predecessor's, and this is the predecessor.
@@ -450,6 +450,10 @@ Deno.serve(async (req: Request) => {
         .order('id', { ascending: false })
         .limit(1)
         .maybeSingle()
+      // A failed read is not an empty chain. Taken as one, it built against
+      // GENESIS and was refused by the fork index as contention (Task 94).
+      if (tipRead.error) return json({ error: 'lookup_failed' }, 500)
+      const tip = tipRead.data
 
       const prevHash = tip?.event_hash ?? GENESIS_HASH
 
@@ -633,15 +637,17 @@ Deno.serve(async (req: Request) => {
         // under the lock, after the credential, so a TF001 there is genuine,
         // and looking again here would be a replay outside that check.
         if (idempotency_key && actor.role !== 'guest_hirer') {
-          const { data: twin } = await admin
+          const twinRead = await admin
             .from('events')
             .select('*')
             .eq('contract_id', contract_id)
             .eq('idempotency_key', idempotency_key as string)
             .maybeSingle()
-          if (idempotencyOutcome(twin, { type, actorId: actor.actorId }) === 'replay') {
-            return json({ event: twin, deduplicated: true }, 200)
-          }
+          // Fail closed, as the pre-check does: a failed read cannot tell a
+          // twin from no twin (Task 94).
+          const twinOutcome = ownerKeyedOutcome(twinRead, { type, actorId: actor.actorId })
+          if (twinOutcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)
+          if (twinOutcome === 'replay') return json({ event: twinRead.data, deduplicated: true }, 200)
         }
         return json({
           error: 'wrong_state_for_event_type',
@@ -662,14 +668,16 @@ Deno.serve(async (req: Request) => {
           // likely to be the other party's — and until now it was returned
           // raw, without asking whose it was. Narrower than the lookup path,
           // and the same leak.
-          const { data: raced } = await admin
+          const racedRead = await admin
             .from('events')
             .select('*')
             .eq('contract_id', contract_id)
             .eq('idempotency_key', idempotency_key as string)
             .maybeSingle()
-          const racedOutcome = idempotencyOutcome(raced, { type, actorId: actor.actorId })
-          if (racedOutcome === 'replay') return json({ event: raced, deduplicated: true }, 200)
+          // Fail closed: a failed read used to loop and end as contention (Task 94).
+          const racedOutcome = ownerKeyedOutcome(racedRead, { type, actorId: actor.actorId })
+          if (racedOutcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)
+          if (racedOutcome === 'replay') return json({ event: racedRead.data, deduplicated: true }, 200)
           if (racedOutcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)
         }
         continue
