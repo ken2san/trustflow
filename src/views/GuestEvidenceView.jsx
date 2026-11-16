@@ -131,17 +131,19 @@ const PAYLOAD_LABELS = {
 
 const humanise = (key) => key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
-function EventRow({ event }) {
+function EventRow({ event, contractCreatedAt }) {
   const attested = event.integrity.trust_model === 'server_attested';
   // Only false is a problem. null means the row carries nothing to check,
   // which is a different statement from "the check failed".
   const broken = event.integrity.hash_valid === false || event.integrity.chain_linked === false;
-  // Who wrote the row, shown only as a nonempty string and only when the
-  // server derived it: a client_asserted row's actor was browser-chosen, and
-  // React cannot render a non-string label anyway (Codex Task 94).
-  const label = event.actor?.label;
-  const shownActor = event.integrity?.trust_model === 'server_attested'
-    && typeof label === 'string' && label.trim() ? label.trim() : null;
+  // Who wrote the row, by the same rule as the claim text: named only for a
+  // recognised role on a row the server provably wrote (Codex Tasks 94, 95).
+  // An unknown role is "a party" whatever its label says, and only a
+  // nonempty string is ever rendered.
+  const claimant = claimantOfShapedActor(event.actor, event.integrity?.trust_model, contractCreatedAt);
+  const label = typeof event.actor?.label === 'string' ? event.actor.label.trim() : '';
+  const isGuest = claimant !== null && event.actor?.role === 'guest_hirer';
+  const shownActor = claimant === null ? null : isGuest ? (label || 'you') : claimant;
 
   return (
     <li className="relative pl-8 pb-6 last:pb-0 border-l border-white/10 last:border-transparent">
@@ -152,7 +154,7 @@ function EventRow({ event }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-white font-bold text-sm">
           {event.type === 'contract.cancelled'
-            ? cancellationClaimLabel(claimantOfShapedActor(event.actor, event.integrity?.trust_model))
+            ? cancellationClaimLabel(claimant)
             : TYPE_LABELS[event.type] ?? event.type}
         </span>
         <span className="text-[11px] text-slate-400 font-mono">{formatWhen(event.created_at)}</span>
@@ -163,7 +165,7 @@ function EventRow({ event }) {
         {/* The server already labels the viewer's own acts "You"; adding
             "(you)" to that produced "by You (you)". The suffix is for an act
             attributed to a named party that happens to be the reader. */}
-        {shownActor && event.actor?.role === 'guest_hirer' && shownActor !== 'You'
+        {isGuest && label && label !== 'You'
           && <span className="text-slate-400"> (you)</span>}
       </p>
 
@@ -366,7 +368,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
         <p className="text-slate-400 text-sm">Nothing has been recorded on this agreement yet.</p>
       ) : (
         <ol className="ml-1">
-          {events.map(event => <EventRow key={event.id} event={event} />)}
+          {events.map(event => <EventRow key={event.id} event={event} contractCreatedAt={contract?.created_at} />)}
         </ol>
       )}
 

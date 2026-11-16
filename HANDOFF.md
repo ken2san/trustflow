@@ -361,6 +361,14 @@ nowhere):
   - **Browser check:** one E2E `ownerSession()` sign-in, then read-only Playwright on fixture `5d0ce316-…` at 1280px and 375px. Correct claims, no overflow.
     Every non-GET was aborted and logged (only `POST /rest/v1/runtime_snapshots`).
   - GuestEvidenceView is render-tested only: reaching it needs an acceptance (a write).
+- Claude Task 98 (Codex 95 fixes; Kenji OK 18:16 ET), **local only**:
+  - **Provenance:** `hash_version` alone proves nothing. `20260924000001` defaulted it to 2 while inserts were still open, until `000002`
+    (API-applied between 12:23:03 and 12:37:13 on 2026-09-24, per `20260924123733`).
+  - So an actor is named only on a **contract created at or after 2026-09-25T00:00Z** (`SERVER_ONLY_EVENTS_FROM`): contract id and created_at are
+    server-owned since `20260923000000`, and nothing re-grants event inserts.
+  - GuestEvidenceView's byline now uses the same role rule as the claim; an unknown role is "a party" whatever its label.
+  - `guest-contract-events` now returns `contract.created_at` (**needs deploy**; until then the guest path names nobody, which is fail-safe).
+  - Tests 71/71; a mutation removing the contract-time condition fails 3 tests. Report: `.ada/claude-report-98.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

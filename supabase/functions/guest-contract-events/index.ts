@@ -178,7 +178,7 @@ Deno.serve(async (req: Request) => {
     const { data: contract, error: contractError } = await admin
       .from('contracts')
       .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, performed_by, '
-        + 'earner_user_id, earner_display_name, hirer_email, guest_access_token_expires_at')
+        + 'earner_user_id, earner_display_name, hirer_email, guest_access_token_expires_at, created_at')
       .eq('guest_access_token', guestToken)
       .maybeSingle()
 
@@ -334,6 +334,10 @@ Deno.serve(async (req: Request) => {
         // next action is theirs, and it is a term of the deal rather than
         // anything internal.
         performed_by:        contract.performed_by,
+        // Server-set (now(), not client-insertable). The client names a row's
+        // actor only for a contract created after events stopped being
+        // client-writable; see SERVER_ONLY_EVENTS_FROM in src/lib/contractStatus.js.
+        created_at:          contract.created_at,
         // The guest is always the counterparty; saying so plainly saves the
         // client from re-deriving it.
         viewer_role:         contract.performed_by === 'counterparty' ? 'performer' : 'receiver',

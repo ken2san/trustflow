@@ -560,15 +560,39 @@ export function cancellationClaimLabel(party) {
 }
 
 /**
+ * The earliest contract creation time from which every event on the contract
+ * is known to have been written by the server (Task 98).
+ *
+ * WHY A CONTRACT TIME AND NOT THE ROW'S hash_version. 20260924000001 gave
+ * events.hash_version a column DEFAULT of 2 while inserts were still open to
+ * the anon key; 20260924000002 closed them, and was applied after log-event
+ * was deployed. In between, a client could insert any actor_id and get — or
+ * set — any hash_version, so no field on a row proves who wrote it.
+ * A contract's id (gen_random_uuid()) and created_at (now()) have been
+ * server-owned since 20260923000000, and no later migration re-grants insert
+ * on events to anon or authenticated. So a contract created after the window
+ * closed cannot have a window-written event: its id did not exist yet.
+ * The window closed by 2026-09-24 12:37:13 (the management API's own version
+ * stamps, listed in 20260924123733); midnight UTC the next day covers that
+ * whether those stamps were UTC or local time.
+ */
+export const SERVER_ONLY_EVENTS_FROM = Date.parse('2026-09-25T00:00:00Z')
+
+function contractPostdatesOpenWrites(contractCreatedAt) {
+  const t = typeof contractCreatedAt === 'string' ? Date.parse(contractCreatedAt) : NaN
+  return Number.isFinite(t) && t >= SERVER_ONLY_EVENTS_FROM
+}
+
+/**
  * Who wrote an event, from a raw `events` row as the owner reads it — named
- * only when the actor id says so AND the server derived it. 'you' for the
+ * only when the actor id says so AND the server provably derived it. 'you' for the
  * owner's own id, the email for a `guest:<email>` actor, null for anything
  * else. Rows before hash_version 2 (20260924000001) carried whatever actor id
  * the browser chose, a `guest:` prefix included, so they name nobody (Codex
  * Tasks 93, 94). A null claimant is shown as "a party", never guessed.
  */
-export function claimantOfActorId(actorId, ownerUserId, hashVersion) {
-  if (!(Number(hashVersion) >= 2)) return null
+export function claimantOfActorId(actorId, ownerUserId, hashVersion, contractCreatedAt) {
+  if (!(Number(hashVersion) >= 2) || !contractPostdatesOpenWrites(contractCreatedAt)) return null
   if (typeof actorId !== 'string' || actorId === '') return null
   if (typeof ownerUserId === 'string' && actorId === ownerUserId) return 'you'
   if (actorId.startsWith('guest:')) return actorId.slice('guest:'.length).trim() || null
@@ -583,8 +607,8 @@ export function claimantOfActorId(actorId, ownerUserId, hashVersion) {
  * its label; 'unknown' and every other role are null, whatever the label says
  * ("Unknown", "Unverified actor").
  */
-export function claimantOfShapedActor(actor, trustModel) {
-  if (trustModel !== 'server_attested') return null
+export function claimantOfShapedActor(actor, trustModel, contractCreatedAt) {
+  if (trustModel !== 'server_attested' || !contractPostdatesOpenWrites(contractCreatedAt)) return null
   if (!actor || typeof actor !== 'object') return null
   if (actor.role === 'guest_hirer') return 'you'
   if (actor.role === 'earner' && typeof actor.label === 'string' && actor.label.trim()) return actor.label.trim()

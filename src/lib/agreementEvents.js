@@ -26,7 +26,7 @@ export function shapeOwnerEvents(rows, contract, viewerUserId) {
     .filter(ev => ev.type !== 'runtime.snapshot')
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
     .map(ev => {
-      const claimant = claimantOfActorId(ev.actor_id, viewerUserId, ev.hash_version);
+      const claimant = claimantOfActorId(ev.actor_id, viewerUserId, ev.hash_version, contract.created_at);
       return {
         id: ev.id,
         type: ev.type,
@@ -39,9 +39,13 @@ export function shapeOwnerEvents(rows, contract, viewerUserId) {
     });
 }
 
-/** One event from guest-contract-events, which already names its actor. */
-export function shapeGuestEvent(ev) {
-  const claimant = claimantOfShapedActor(ev?.actor, ev?.integrity?.trust_model);
+/**
+ * One event from guest-contract-events, which already names its actor.
+ * `contract` is that response's contract; without its created_at nothing is
+ * named.
+ */
+export function shapeGuestEvent(ev, contract) {
+  const claimant = claimantOfShapedActor(ev?.actor, ev?.integrity?.trust_model, contract?.created_at);
   return {
     id: ev?.id,
     type: ev?.type,

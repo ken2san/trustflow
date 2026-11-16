@@ -544,7 +544,7 @@ const App = () => {
       evidence,
       contract: evidence.contract,
       // The shaped response already names the actor in readable terms.
-      events: (evidence.events ?? []).map(shapeGuestEvent),
+      events: (evidence.events ?? []).map(ev => shapeGuestEvent(ev, evidence.contract)),
       role: evidence.contract.viewer_role ?? 'receiver',
     });
   }, []);

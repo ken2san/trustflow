@@ -21,7 +21,11 @@ const CONTRACT = {
   state: 'TERMS_ACCEPTED', performed_by: 'creator',
   earner_user_id: OWNER, earner_display_name: 'Acme Translations',
   invited_hirer_email: 'guest@example.test', hirer_email: 'guest@example.test',
+  created_at: '2026-11-01T00:00:00.000Z',   // after events stopped being client-writable
 }
+// A contract from before 2026-09-25: its events could have been written by any
+// client with the anon key, whatever hash_version they carry.
+const OLD_CONTRACT = { ...CONTRACT, created_at: '2026-09-20T00:00:00.000Z' }
 
 const textOf = html => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
 const count = (text, s) => text.split(s).length - 1
@@ -49,6 +53,15 @@ describe('owner rows → AgreementView', () => {
     expect(text).toContain('Cancellation claimed by guest@example.test · not confirmed')
     expect(count(text, 'Cancellation claimed by a party · not confirmed')).toBe(3)
     expect(text).not.toMatch(/\bCancelled\b/)
+  })
+
+  it('names nobody on a contract from before events stopped being client-writable', () => {
+    const shaped = shapeOwnerEvents([
+      row('e1', 'contract.cancelled', OWNER, 4, 1),
+      row('e2', 'dispute.opened', 'guest:guest@example.test', 4, 2),
+    ], OLD_CONTRACT, OWNER)
+    expect(shaped.map(e => [e.claimant, e.actorLabel])).toEqual([[null, 'by a party'], [null, 'by a party']])
+    expect(renderAgreement(shaped)).toContain('Cancellation claimed by a party · not confirmed')
   })
 
   it('says "by you" on other rows only when the owner provably wrote them', () => {
@@ -89,7 +102,7 @@ describe('guest response → AgreementView (App\'s guest path)', () => {
     const shaped = [
       guestEvent('e1', 'contract.cancelled', undefined),
       guestEvent('e2', 'dispute.opened', null),
-    ].map(shapeGuestEvent)
+    ].map(ev => shapeGuestEvent(ev, CONTRACT))
     expect(shaped.map(e => [e.claimant, e.actorLabel])).toEqual([[null, 'by a party'], [null, 'by a party']])
     const text = renderAgreement(shaped)
     expect(text).toContain('Cancellation claimed by a party · not confirmed')
@@ -101,8 +114,12 @@ describe('guest response → AgreementView (App\'s guest path)', () => {
       guestEvent('e2', 'contract.cancelled', { role: 'guest_hirer', label: 'guest@example.test' }),
       guestEvent('e3', 'contract.cancelled', { role: 'earner', label: 'Acme Translations' }, 'client_asserted'),
       guestEvent('e4', 'contract.cancelled', { role: 'unknown', label: 'Unknown' }),
-    ].map(shapeGuestEvent)
+    ].map(ev => shapeGuestEvent(ev, CONTRACT))
     expect(shaped.map(e => e.claimant)).toEqual(['Acme Translations', 'you', null, null])
+    // The same rows on a pre-cutoff contract, or with no contract time, name nobody.
+    expect([guestEvent('e1', 'contract.cancelled', { role: 'earner', label: 'Acme Translations' })]
+      .map(ev => shapeGuestEvent(ev, OLD_CONTRACT))[0].claimant).toBeNull()
+    expect(shapeGuestEvent(guestEvent('e1', 'contract.cancelled', { role: 'guest_hirer', label: 'g@x.test' }), {}).claimant).toBeNull()
   })
 })
 
@@ -111,9 +128,9 @@ describe('GuestEvidenceView', () => {
     id, type, created_at: '2026-11-16T12:00:00.000Z',
     actor, payload: {}, integrity: { hash_valid: true, chain_linked: true, trust_model: trust },
   })
-  const render = events => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, {
+  const render = (events, contract = CONTRACT) => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, {
     evidence: {
-      contract: { ...CONTRACT, viewer_role: 'receiver' },
+      contract: { ...contract, viewer_role: 'receiver' },
       accepted_agreement: null,
       chain: { event_count: events.length, client_asserted: 0, server_attested: events.length, verified: true, truncated: false },
       events,
@@ -142,10 +159,38 @@ describe('GuestEvidenceView', () => {
       event('e4', 'dispute.opened', { role: 'guest_hirer', label: 42 }),
     ])
     expect(count(text, 'Cancellation claimed by a party · not confirmed')).toBe(2)
-    // Four "by" lines, plus the two claim labels that also say "by a party".
-    expect(count(text, 'by a party')).toBe(6)
+    // Three unnamed "by" lines plus the two claim labels. The guest_hirer row is
+    // named by its ROLE ("you"); its non-string label is never rendered.
+    expect(count(text, 'by a party')).toBe(5)
+    expect(count(text, 'by you')).toBe(1)
+    expect(text).not.toContain('42')
     expect(text).not.toContain('[object Object]')
     expect(text).not.toContain('(you)')
+  })
+
+  it('never names an unknown or legacy role from its label, on cancellation and other rows', () => {
+    const misleading = [
+      event('e1', 'contract.cancelled', { role: 'unknown', label: 'Alice' }),
+      event('e2', 'dispute.opened', { role: 'unknown', label: 'Alice' }),
+      event('e3', 'contract.cancelled', { role: 'earner_legacy', label: 'Bob' }),
+      event('e4', 'dispute.opened', { role: 'earner_legacy', label: 'Bob' }),
+    ]
+    const text = render(misleading)
+    expect(text).not.toContain('Alice')
+    expect(text).not.toContain('Bob')
+    expect(count(text, 'Cancellation claimed by a party · not confirmed')).toBe(2)
+    // Four "by" lines, plus the two claim labels that also say "by a party".
+    expect(count(text, 'by a party')).toBe(6)
+  })
+
+  it('names nobody on a contract from before 2026-09-25, even server_attested rows', () => {
+    const text = render([
+      event('e1', 'contract.cancelled', { role: 'earner', label: 'Acme Translations' }),
+      event('e2', 'dispute.opened', { role: 'guest_hirer', label: 'guest@example.test' }),
+    ], OLD_CONTRACT)
+    expect(text).not.toContain('by Acme Translations')
+    expect(text).not.toContain('by guest@example.test')
+    expect(text).toContain('Cancellation claimed by a party · not confirmed')
   })
 
   it('shows a legacy row\'s actor as "a party" even when it carries a guest: label', () => {
@@ -158,17 +203,24 @@ describe('GuestEvidenceView', () => {
 })
 
 describe('claimant rules', () => {
-  it('name only server-derived actors', () => {
-    expect(claimantOfActorId(OWNER, OWNER, 2)).toBe('you')
-    expect(claimantOfActorId(OWNER, OWNER, null)).toBeNull()
-    expect(claimantOfActorId('guest:a@b.test', OWNER, 2)).toBe('a@b.test')
-    expect(claimantOfActorId('guest:a@b.test', OWNER, 1)).toBeNull()
-    expect(claimantOfActorId('guest:', OWNER, 2)).toBeNull()
-    expect(claimantOfActorId('a@b.test', OWNER, 2)).toBeNull()
-    expect(claimantOfActorId(42, OWNER, 2)).toBeNull()
-    expect(claimantOfShapedActor({ role: 'earner', label: 'A' }, 'server_attested')).toBe('A')
-    expect(claimantOfShapedActor({ role: 'earner', label: 'A' }, 'client_asserted')).toBeNull()
-    expect(claimantOfShapedActor({ role: 'earner', label: '  ' }, 'server_attested')).toBeNull()
-    expect(claimantOfShapedActor(null, 'server_attested')).toBeNull()
+  it('name only actors on server-written rows of a post-cutoff contract', () => {
+    const NEW = CONTRACT.created_at
+    const OLD = OLD_CONTRACT.created_at
+    expect(claimantOfActorId(OWNER, OWNER, 2, NEW)).toBe('you')
+    expect(claimantOfActorId(OWNER, OWNER, 2, OLD)).toBeNull()
+    expect(claimantOfActorId(OWNER, OWNER, 2, undefined)).toBeNull()
+    expect(claimantOfActorId(OWNER, OWNER, 2, 'not a date')).toBeNull()
+    expect(claimantOfActorId(OWNER, OWNER, null, NEW)).toBeNull()
+    expect(claimantOfActorId('guest:a@b.test', OWNER, 2, NEW)).toBe('a@b.test')
+    expect(claimantOfActorId('guest:a@b.test', OWNER, 1, NEW)).toBeNull()
+    expect(claimantOfActorId('guest:', OWNER, 2, NEW)).toBeNull()
+    expect(claimantOfActorId('a@b.test', OWNER, 2, NEW)).toBeNull()
+    expect(claimantOfActorId(42, OWNER, 2, NEW)).toBeNull()
+    expect(claimantOfShapedActor({ role: 'earner', label: 'A' }, 'server_attested', NEW)).toBe('A')
+    expect(claimantOfShapedActor({ role: 'earner', label: 'A' }, 'server_attested', OLD)).toBeNull()
+    expect(claimantOfShapedActor({ role: 'earner', label: 'A' }, 'client_asserted', NEW)).toBeNull()
+    expect(claimantOfShapedActor({ role: 'earner', label: '  ' }, 'server_attested', NEW)).toBeNull()
+    expect(claimantOfShapedActor({ role: 'unknown', label: 'Alice' }, 'server_attested', NEW)).toBeNull()
+    expect(claimantOfShapedActor(null, 'server_attested', NEW)).toBeNull()
   })
 })
