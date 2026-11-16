@@ -3,6 +3,7 @@ import {
   CONTRACT_STATES, EXPIRY_WARNING_HOURS, CLOCKS, GUEST_ACCESS_WARNING_DAYS,
   statusLabel, isTerminal, nextActionFor, groupContracts, stepForState,
   formatAmount, formatDeadline, relativeAge, deadlineStatus, clocksFor, sinceText,
+  cancellationClaimLabel,
 } from '../../src/lib/contractStatus.js'
 
 const NOW = new Date('2026-09-24T12:00:00.000Z')
@@ -534,5 +535,26 @@ describe('a guest-shaped contract', () => {
 
   it('has no since to show, rather than a wrong one', () => {
     expect(nextActionFor(shaped, NOW).since).toBeNull()
+  })
+})
+
+// A contract.cancelled event is one party's claim, not the agreement's end
+// (Kenji's wording, 2026-11-16).
+describe('cancellationClaimLabel', () => {
+  it('names the party and says it is not confirmed', () => {
+    expect(cancellationClaimLabel('Acme Translations'))
+      .toBe('Cancellation claimed by Acme Translations · not confirmed')
+    expect(cancellationClaimLabel('you')).toBe('Cancellation claimed by you · not confirmed')
+  })
+
+  it('never states the cancellation as a fact', () => {
+    expect(cancellationClaimLabel('Acme')).not.toMatch(/^(Agreement )?cancelled$/i)
+    expect(cancellationClaimLabel('Acme')).toMatch(/not confirmed$/)
+  })
+
+  it('falls back to "a party" when no name is known', () => {
+    for (const party of [undefined, null, '', '   ']) {
+      expect(cancellationClaimLabel(party)).toBe('Cancellation claimed by a party · not confirmed')
+    }
   })
 })

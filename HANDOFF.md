@@ -337,6 +337,12 @@ nowhere):
   - None of them could write a duplicate or a wrong event; only the replies were wrong.
   - Files: `supabase/functions/log-event/index.ts`, `tests/unit/logEventHandler.test.js` (+5 tests; the fake's reads became an ordered queue, plus `.not` and an insert result).
   - `logEventHandler` + `eventWriteRules` 56/56. Each new 500 line, removed, fails exactly its test. Not deployed to E2E or production; not pushed.
+- Claude Task 95 (Kenji's wording, 14:17 ET), **local only**:
+  - A `contract.cancelled` event now reads "Cancellation claimed by <party> · not confirmed" in AgreementView (party from its `actorLabel`)
+    and GuestEvidenceView (party from `event.actor.label`). It used to read "Cancelled" / "Agreement cancelled".
+  - New `cancellationClaimLabel` in `src/lib/contractStatus.js`. Unit `contractStatus` 58/58 (+3).
+  - The unreachable `CANCELLED` *state* label is unchanged, since no event projects into it. Display only: no change to writing, API or DB.
+  - Not checked in a browser.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

@@ -548,6 +548,18 @@ export function stepForState(state) {
 }
 
 /**
+ * How a `contract.cancelled` event is shown: as one party's claim, never as
+ * the agreement having ended. Nothing projects it into the state and the
+ * other side has not ratified it, so "Cancelled" stated more than the record
+ * holds (Kenji's wording, 2026-11-16). `party` is the name the view already
+ * uses for whoever wrote the event.
+ */
+export function cancellationClaimLabel(party) {
+  const who = typeof party === 'string' && party.trim() ? party.trim() : 'a party'
+  return `Cancellation claimed by ${who} · not confirmed`
+}
+
+/**
  * Format an amount the way the contract records it — in its own currency.
  *
  * It used to hard-code a yen sign and `amount_jpy`, which was true of every

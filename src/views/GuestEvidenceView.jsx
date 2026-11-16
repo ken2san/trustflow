@@ -9,6 +9,7 @@
 
 import { ShieldCheck, ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
 import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts';
+import { cancellationClaimLabel } from '../lib/contractStatus.js';
 
 const TYPE_LABELS = {
   'contract.initiated':   'Agreement created',
@@ -22,7 +23,8 @@ const TYPE_LABELS = {
   'work.submitted':       'Work submitted',
   'work.approved':        'Work approved',
   'work.rejected':        'Work rejected',
-  'contract.cancelled':   'Agreement cancelled',
+  // contract.cancelled is not here: it is one party's claim, labelled with
+  // that party where the row is rendered.
   'contract.completed':   'Agreement completed',
   'dod.consent_recorded': 'Terms accepted',
   'dispute.opened':       'Dispute opened',
@@ -143,7 +145,9 @@ function EventRow({ event }) {
 
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-white font-bold text-sm">
-          {TYPE_LABELS[event.type] ?? event.type}
+          {event.type === 'contract.cancelled'
+            ? cancellationClaimLabel(event.actor.label)
+            : TYPE_LABELS[event.type] ?? event.type}
         </span>
         <span className="text-[11px] text-slate-400 font-mono">{formatWhen(event.created_at)}</span>
       </div>

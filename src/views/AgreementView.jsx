@@ -21,7 +21,7 @@
 
 import React from 'react';
 import { ArrowLeft, CheckCircle2, Send, Loader2, AlertTriangle, Download, Copy } from 'lucide-react';
-import { clocksFor, relativeAge, sinceText, CLOCKS, formatAmount } from '../lib/contractStatus.js';
+import { clocksFor, relativeAge, sinceText, CLOCKS, formatAmount, cancellationClaimLabel } from '../lib/contractStatus.js';
 
 /** Human wording for the attested event types, from the reader's side. */
 const RECORD_LABELS = {
@@ -31,7 +31,8 @@ const RECORD_LABELS = {
   'performance.asserted':  'Marked delivered',
   'performance.accepted':  'Accepted',
   'performance.rejected':  'Correction requested',
-  'contract.cancelled':    'Cancelled',
+  // contract.cancelled is not here: it is one party's claim, labelled with
+  // that party by recordLabel below.
   'contract.completed':    'Closed',
   // Retired names, still present on older records.
   'work.submitted':        'Marked delivered',
@@ -54,6 +55,13 @@ const RECORD_LABELS = {
   'access.reissued':       'Counterparty access re-issued',
 };
 
+function recordLabel(event) {
+  if (event.type === 'contract.cancelled') {
+    return cancellationClaimLabel(String(event.actorLabel ?? '').replace(/^by /, ''));
+  }
+  return RECORD_LABELS[event.type] ?? event.type;
+}
+
 function formatWhen(iso) {
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -72,7 +80,7 @@ function Record({ events }) {
     <ol className="space-y-3">
       {events.map(event => (
         <li key={event.id} className="flex flex-wrap items-baseline gap-x-3 text-sm">
-          <span className="text-white font-bold">{RECORD_LABELS[event.type] ?? event.type}</span>
+          <span className="text-white font-bold">{recordLabel(event)}</span>
           <span className="text-[11px] font-mono text-slate-400">{formatWhen(event.created_at)}</span>
           <span className="text-xs text-slate-500">{event.actorLabel}</span>
           {event.reason && (
