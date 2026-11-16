@@ -52,15 +52,16 @@ Production and E2E each hold exactly these, all `verify_jwt: true`:
 `log-event`, `validate-invite-token`, `guest-contract-events`,
 `reissue-guest-access`.
 
-Both projects run the **same artifacts, byte for byte**, as of Task 79
-(2026-11-16). Production versions and digests: `log-event` v16
-(`a1f2f779fe04d3e4…`, from `45633e6`; E2E v14), `validate-invite-token` v16
-(`6ae1e8dd42362aa4…`), `guest-contract-events` v13 (`b2bcab62be6a4266…`),
-`reissue-guest-access` v6 (`4c063dd2d16609121…`), identical to E2E's. The
-other three are still the Task 36 artifacts (from `4b571bf`). **`log-event`
-rollback target:** the previous v15 `8e834b9214e30c1d…` (source `4b571bf`;
-that digest reproduces only when deployed from this checkout's path, and
-rolling back reopens the in-flight reissue race). Compare **measured `ezbr_sha256`**, never `updated_at` or
+Both projects run the **same artifacts, byte for byte**, as of Task 91
+(2026-11-16). Production versions and digests: `log-event` v17
+(`0018df819efa95df…`, from `9819a15`, refuses new `contract.cancelled`; E2E
+v16), `validate-invite-token` v16 (`6ae1e8dd42362aa4…`),
+`guest-contract-events` v13 (`b2bcab62be6a4266…`), `reissue-guest-access` v6
+(`4c063dd2d16609121…`), identical to E2E's. The other three are still the
+Task 36 artifacts (from `4b571bf`). **`log-event` rollback target:** the
+previous `a1f2f779fe04d3e4…` (source `45633e6`; accepts new
+`contract.cancelled` again). Any of these digests reproduces only when
+deployed from this checkout's path. Compare **measured `ezbr_sha256`**, never `updated_at` or
 version numbers, which differ between projects for ordinary reasons.
 
 **Deploy with Docker running.** Without it, `supabase functions deploy` silently
@@ -320,6 +321,12 @@ nowhere):
   - All with `--workers=1`, `TF_LIVE_E2E` unset, run one at a time: guard 1/1, `cancellation-refusal` 4/4, `event-ingestion` 11/11, `guest-credential` 3/3. No skips.
   - **Production is still v16 `a1f2f779…`, which accepts `contract.cancelled`.** Production deploy and the push each need their own OK.
     Report: `.ada/claude-report-90.md`.
+- Claude Task 91 (Kenji OK 14:05 ET), **refusing log-event in production**, log-event only, no DB change:
+  - Production log-event v16 `a1f2f779…` (**rollback target**) → **v17 `0018df819efa95df4a26beb71204b44587b7e403279fb0dddb95e461bba0d6b3`**,
+    equal to the E2E-tested artifact. Entrypoint `file:///Users/…`, `verify_jwt` true, the other three unchanged.
+  - Probe (no writes): unkeyed `contract.cancelled` → `400 type_not_allowed`; control → `404 contract_not_found`. `smoke:prod` 16/16.
+  - Then a normal push `3b6d01d..076be3b`, which published the updated `agent-protocol.md`.
+  - This HANDOFF entry is a later local commit, not pushed. Report: `.ada/claude-report-91.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
