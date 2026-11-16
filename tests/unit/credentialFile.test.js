@@ -103,6 +103,24 @@ describe('writing a file that holds a credential', () => {
     expect(await readdir(dir)).toEqual(['key.json'])
     expect((await readCredentialFile(f)).refresh_token).toBe('live')
   })
+
+  // noClobber: the destination is the only record of permanent rows, so an
+  // existing one must survive a second write (Codex Task 87).
+  it('with noClobber, creates a new file owner-only and leaves no staging copy', async () => {
+    const f = path.join(dir, 'fixture.json')
+    await writeCredentialFile(f, { token: 'first' }, { noClobber: true })
+    expect(await modeOf(f)).toBe(0o600)
+    expect(await readdir(dir)).toEqual(['fixture.json'])
+  })
+
+  it('with noClobber, refuses an existing destination and keeps it intact', async () => {
+    const f = path.join(dir, 'fixture.json')
+    await writeCredentialFile(f, { token: 'first' }, { noClobber: true })
+    await expect(writeCredentialFile(f, { token: 'second' }, { noClobber: true }))
+      .rejects.toMatchObject({ code: 'EEXIST' })
+    expect((await readCredentialFile(f)).token).toBe('first')
+    expect(await readdir(dir)).toEqual(['fixture.json'])
+  })
 })
 
 describe('reading a file that holds a credential', () => {

@@ -53,7 +53,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { constants as FS } from 'node:fs';
-import { open, rename, unlink } from 'node:fs/promises';
+import { link, open, rename, unlink } from 'node:fs/promises';
 
 /** Owner read/write and nothing else. */
 const OWNER_ONLY = 0o600;
@@ -61,9 +61,17 @@ const OWNER_ONLY = 0o600;
 /**
  * Write JSON to a file that holds a credential, atomically, owner-only.
  *
+ * `noClobber: true` publishes with link(2) instead of rename(2): link fails
+ * with EEXIST rather than replacing an existing destination, atomically, so
+ * there is no check-then-write window. For a file whose loss is not
+ * recoverable — one recording ids and keys of permanent rows — where an
+ * overwrite would destroy the only record of what was written (Codex Task 87:
+ * rename silently replaced it, and the O_EXCL above guards only the staging
+ * name). The staging copy is removed either way.
+ *
  * Returns the path, so a caller can log where it went — never what went there.
  */
-export async function writeCredentialFile(file, value, { stagingName = null } = {}) {
+export async function writeCredentialFile(file, value, { stagingName = null, noClobber = false } = {}) {
   // Injectable only so a test can precreate this exact pathname and prove the
   // exclusive open refuses it. Codex's finding 2 on the third review: with a
   // randomized name no test could reach the staging path, so changing 'wx' to
@@ -85,7 +93,12 @@ export async function writeCredentialFile(file, value, { stagingName = null } = 
     } finally {
       await handle.close();
     }
-    await rename(staging, file);
+    if (noClobber) {
+      await link(staging, file);
+      await unlink(staging);
+    } else {
+      await rename(staging, file);
+    }
   } catch (err) {
     // The original error is what the caller needs; a failure to clean up must
     // not replace it.

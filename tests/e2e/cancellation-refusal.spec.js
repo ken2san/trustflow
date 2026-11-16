@@ -19,6 +19,7 @@
 
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { open, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { getEarnerSession } from './earnerSession.js';
@@ -35,7 +36,48 @@ assertE2EProject(SUPABASE_URL);
 const FIXTURE_FILE = process.env.TF_CANCEL_FIXTURE
   ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '.cancel-fixture.json');
 
+const LOCK_FILE = `${FIXTURE_FILE}.lock`;
+
 const CANCELLED = 'contract.cancelled';
+
+// One fixture contract is shared: the guest test reissues its access, which
+// adds an event and revokes the guest token, while the owner test compares
+// its event set. So the tests run in one worker, in order, and a second run
+// anywhere on this machine is refused rather than allowed to race it
+// (Codex Task 87). A lock left by a dead process is taken over; a live
+// holder is never waited for.
+test.describe.configure({ mode: 'serial' });
+
+test.beforeAll(async () => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const lock = await open(LOCK_FILE, 'wx', 0o600);
+      await lock.writeFile(JSON.stringify({ pid: process.pid, created_at: Date.now() }));
+      await lock.close();
+      return;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let holder = null;
+      try { holder = JSON.parse(await readFile(LOCK_FILE, 'utf8')).pid; } catch { /* unreadable: treat as live */ }
+      let alive = true;
+      if (Number.isSafeInteger(holder) && holder > 0) {
+        try { process.kill(holder, 0); } catch (e) { alive = e?.code !== 'ESRCH'; }
+      }
+      if (alive) {
+        throw new Error(`another run holds ${path.basename(LOCK_FILE)}; this suite does not run concurrently`,
+          { cause: error });
+      }
+      await rm(LOCK_FILE, { force: true });
+    }
+  }
+  throw new Error(`could not take ${path.basename(LOCK_FILE)}`);
+});
+
+test.afterAll(async () => {
+  try {
+    if (JSON.parse(await readFile(LOCK_FILE, 'utf8')).pid === process.pid) await rm(LOCK_FILE, { force: true });
+  } catch { /* already gone */ }
+});
 
 async function api(request, path, { method = 'POST', token, guestToken, body, prefer } = {}) {
   const headers = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' };
@@ -117,6 +159,7 @@ async function recordedFixture(request, earnerToken, earnerUserId) {
     throw new Error(`cancellation fixture unavailable (${error.code ?? error.name}); `
       + 'it must be recorded on E2E before the refusing log-event is deployed', { cause: error });
   }
+  expect(fixture.status === 'complete', 'fixture recording did not finish; see its recovery notes').toBe(true);
   for (const field of ['project_ref', 'contract_id', 'owner_key', 'owner_event_id',
     'guest_key', 'guest_event_id', 'guest_token_at_record']) {
     expect(typeof fixture[field] === 'string' && fixture[field] !== '', `fixture lacks ${field}`).toBe(true);

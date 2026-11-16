@@ -140,8 +140,8 @@ paths:
                     namespace for derived facts.
                   additionalProperties: true
                 idempotency_key:
-                  type: string
-                  nullable: true
+                  # 3.1 has no `nullable`; null is accepted by the server.
+                  type: [string, 'null']
                   description: |
                     Scoped to an operation, not to a contract: a hit is a replay
                     only when contract, key, type AND actor all match
@@ -197,10 +197,12 @@ paths:
                     type: boolean
         '400':
           description: |
-            `type_not_allowed` also answers a `ReplayOnlyEventType` with no key
-            at once, and one with a key once the caller is authenticated as a
-            party and no matching earlier write is found — so a keyed request
-            can see `contract_not_found` or `not_a_party` first.
+            For a `ReplayOnlyEventType`, `type_not_allowed` answers a request
+            with no usable key at once, and a valid, authorized keyed request
+            only when its key matches no earlier write of this caller's. A
+            keyed request can be answered by any earlier check first
+            (`contract_not_found`, `not_a_party`, `lookup_failed`, …); see
+            that schema.
             `invalid_body`, `type_not_allowed`, `type_retired`,
             `type_is_server_recorded`, `missing_contract_id`, `invalid_payload`,
             `dod_hash_is_server_derived`, `invalid_idempotency_key`.
@@ -1094,15 +1096,30 @@ components:
     ReplayOnlyEventType:
       type: string
       description: |
-        A type a party may no longer write, accepted as input ONLY as a keyed
-        retry (`idempotency_key` required and nonempty) of the same actor's
-        earlier write of it. That retry returns the existing event: 200,
-        `deduplicated: true`. Every other request of this type is refused:
-        400 `type_not_allowed` for a new write (with or without a key), 409
-        `idempotency_key_in_use` if the key belongs to another actor or type,
-        500 `lookup_failed` if the lookup itself fails (never read as a new
-        write). For a guest, the credential is re-checked under the contract
-        lock first, so a replaced or expired token cannot replay.
+        A type a party may no longer write. It is accepted as input ONLY as a
+        keyed retry (`idempotency_key` required, a nonempty string) of the
+        same actor's earlier write of it, and nothing of this type is ever
+        newly recorded. What a request gets, in the order log-event checks:
+
+        - no key, an empty key, or a non-string key: 400 `type_not_allowed`
+          at once, before anything else in the body is looked at;
+        - otherwise the usual checks run first and can answer as they would
+          for any type: body errors (400/413), 404 `contract_not_found`,
+          403 `not_a_party` (including a replaced or expired guest token),
+          and 5xx when a lookup fails;
+        - then the key is looked up (a guest's under the contract lock,
+          after its credential is re-checked there). The same actor's earlier
+          write of this type: 200 with that event, `deduplicated: true`. The
+          key used by another actor or for another type: 409
+          `idempotency_key_in_use`, without the other event. The lookup
+          failing: 500 `lookup_failed` (owner) or the guest path's 5xx, never
+          a refusal. A guest credential that dies under the lock: 403
+          `guest_credential_revoked` / `guest_credential_expired`.
+        - a valid, authorized request whose key matches nothing: 400
+          `type_not_allowed`.
+
+        A schema-valid request therefore does not guarantee a 200: only a
+        matching earlier write of this caller's produces one.
         `contract.cancelled` is here because what calling an agreement off
         means is undecided (Decisions.md, 2026-09-29; Task 81).
       enum:

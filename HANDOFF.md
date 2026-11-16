@@ -256,6 +256,19 @@ nowhere):
   - New **unrun** `tests/e2e/cancellation-refusal.spec.js`. It needs `tests/e2e/.cancel-fixture.json` (gitignored), recorded on E2E
     **before** the new log-event is deployed, and fails without it.
   - Unit `eventWriteRules` 45/45. Fixture plan in `.ada/claude-report-82.md`; it needs Kenji's approval.
+- Claude Task 83 (Codex 87 fixes). **Local only: not pushed, not deployed, nothing written to any DB, fixture script NOT run.**
+  - `writeCredentialFile(…, { noClobber: true })` publishes with link(2), so an existing file is never replaced.
+  - `cancellation-refusal.spec.js` runs serially and holds a cross-run lock (`tests/e2e/.cancel-fixture.json.lock`). It requires fixture `status: complete`.
+  - OpenAPI replay-only wording now promises only what the code does. It passes `openapi-spec-validator` (3.1) plus 7 body cases;
+    `idempotency_key` is now `[string, null]`.
+  - New handler-level `tests/unit/logEventHandler.test.js`: the real `log-event` handler with a stubbed `Deno.serve` and supabase-js.
+    The owner lookup error → 500; the test fails if the fix is removed.
+  - **New one-off script `scripts/record-cancel-fixture.mjs`:**
+    - `--check` (no writes), record, `--resume`.
+    - It refuses unless E2E log-event's ezbr is v14 `a1f2f779…` and the session is the test account.
+    - It writes `tests/e2e/.cancel-fixture.json` (no-clobber, 0600) before any DB write.
+    - Needs Kenji's approval to run.
+  - Unit `eventWriteRules` + `logEventHandler` 51/51. Report: `.ada/claude-report-83.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

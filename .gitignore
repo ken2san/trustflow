@@ -115,3 +115,4 @@ tests/e2e/.owner-api-key.json.next
 # contract.cancelled events recorded before new writes were refused (see
 # cancellation-refusal.spec.js). Holds a guest token, revoked on every run.
 tests/e2e/.cancel-fixture.json
+tests/e2e/.cancel-fixture.json.lock
