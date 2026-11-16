@@ -310,6 +310,16 @@ nowhere):
   - **Credential file: `tests/e2e/.cancel-fixture.json`** (gitignored, 0600, `status: complete`, holds the guest token). Keep it: it cannot be made again
     after the refusing log-event is deployed.
   - Not done: log-event deploy, E2E specs, push.
+- Claude Task 90, **refusing log-event deployed to E2E only**, from `9819a15`:
+  - The T87 checks held: the cancellation spec is serial with the shared fail-closed lock, and the OpenAPI replay-only text is qualified.
+  - E2E log-event v14 `a1f2f779…` (the rollback target) → **v16 `0018df819efa95df4a26beb71204b44587b7e403279fb0dddb95e461bba0d6b3`**,
+    entrypoint `file:///Users/…`, `verify_jwt` true, the other three unchanged.
+  - Behaviour probe, no writes:
+    - unkeyed `contract.cancelled` on a random contract → `400 type_not_allowed` (v14 answered 404);
+    - control `dispute.opened` → `404 contract_not_found`.
+  - All with `--workers=1`, `TF_LIVE_E2E` unset, run one at a time: guard 1/1, `cancellation-refusal` 4/4, `event-ingestion` 11/11, `guest-credential` 3/3. No skips.
+  - **Production is still v16 `a1f2f779…`, which accepts `contract.cancelled`.** Production deploy and the push each need their own OK.
+    Report: `.ada/claude-report-90.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
