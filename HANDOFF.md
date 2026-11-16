@@ -352,6 +352,15 @@ nowhere):
   - `contractStatus` + render tests 64/64, and a guessed-label mutation fails the tests.
   - **Browser check NOT done:** the cached owner session had expired (a sign-in is a write) and the guest view needs a reissue (an event write). It needs a decision.
     Report: `.ada/claude-report-96.md`.
+- Claude Task 97 (Codex 94 fixes + legacy "by you" + browser check A; Kenji OK 18:03 ET), **local only**:
+  - **Provenance:** a row names anyone only if the server derived its actor (`hash_version >= 2` / `trust_model: server_attested`). Older rows' actor ids were
+    browser-chosen, so they read "a party".
+  - **"you":** only for the **signed-in** user's id. The owner list never selected `earner_user_id`, which the browser check exposed.
+  - Event shaping moved from `App.jsx` to `src/lib/agreementEvents.js`; it is safe on a missing actor. GuestEvidenceView renders only a nonempty, server-attested label.
+  - Tests: render + mapping 68/68.
+  - **Browser check:** one E2E `ownerSession()` sign-in, then read-only Playwright on fixture `5d0ce316-…` at 1280px and 375px. Correct claims, no overflow.
+    Every non-GET was aborted and logged (only `POST /rest/v1/runtime_snapshots`).
+  - GuestEvidenceView is render-tested only: reaching it needs an acceptance (a write).
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

@@ -138,7 +138,8 @@ import GuestEvidenceView from './views/GuestEvidenceView';
 import ContractsHomeView from './views/ContractsHomeView';
 import SignInView from './views/SignInView';
 import AgreementView from './views/AgreementView';
-import { performsHere, claimantOfActorId, claimantOfShapedActor } from './lib/contractStatus.js';
+import { performsHere } from './lib/contractStatus.js';
+import { shapeOwnerEvents, shapeGuestEvent } from './lib/agreementEvents.js';
 
 // InviteView for counterparty invite link flow
 import InviteView from './views/InviteView';
@@ -466,36 +467,6 @@ const App = () => {
     setShowBYOCForm(true);
   }, []);
 
-  /**
-   * Turn raw event rows into the shape the agreement record renders.
-   *
-   * The owner reads events straight from PostgREST under the party-scoped
-   * SELECT policy; the guest gets an already-shaped response from
-   * guest-contract-events. This normalises the first into the second so one
-   * component serves both rather than two screens drifting apart.
-   */
-  const shapeOwnerEvents = useCallback((rows, contract) => {
-    const performerIsCreator = (contract.performed_by ?? 'creator') === 'creator';
-    return [...(rows ?? [])]
-      .filter(ev => ev.type !== 'runtime.snapshot')
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-      .map(ev => {
-        const byCreator = ev.actor_id === contract.earner_user_id
-          || (ev.actor_id && !String(ev.actor_id).startsWith('guest:'));
-        return {
-          id: ev.id,
-          type: ev.type,
-          created_at: ev.created_at,
-          actorLabel: byCreator
-            ? 'by you'
-            : `by ${String(ev.actor_id ?? '').replace(/^guest:/, '') || 'the other party'}`,
-          // Strict, unlike actorLabel: named only from the actual actor id.
-          claimant: claimantOfActorId(ev.actor_id, contract.earner_user_id),
-          reason: ev.payload?.reason ?? ev.payload?.note ?? null,
-          _performerIsCreator: performerIsCreator,
-        };
-      });
-  }, []);
 
   /** Open a database-backed agreement as its owner. */
   // Read on every render of the home view rather than held in state: the list
@@ -525,9 +496,9 @@ const App = () => {
       return;
     }
     setAgreement(prev => (prev?.contract?.id === contract.id
-      ? { ...prev, events: shapeOwnerEvents(rows, contract) }
+      ? { ...prev, events: shapeOwnerEvents(rows, contract, actorId) }
       : prev));
-  }, [shapeOwnerEvents]);
+  }, [actorId]);
 
   /** Open the same agreement as the invited counterparty, with no account. */
   const openAgreementAsGuest = useCallback(async (contractId, tokenOverride = null) => {
@@ -573,14 +544,7 @@ const App = () => {
       evidence,
       contract: evidence.contract,
       // The shaped response already names the actor in readable terms.
-      events: (evidence.events ?? []).map(ev => ({
-        id: ev.id,
-        type: ev.type,
-        created_at: ev.created_at,
-        actorLabel: ev.actor.role === 'guest_hirer' ? 'by you' : `by ${ev.actor.label}`,
-        claimant: claimantOfShapedActor(ev.actor),
-        reason: ev.payload?.reason ?? ev.payload?.note ?? null,
-      })),
+      events: (evidence.events ?? []).map(shapeGuestEvent),
       role: evidence.contract.viewer_role ?? 'receiver',
     });
   }, []);
@@ -697,13 +661,13 @@ const App = () => {
     try {
       const rows = await fetchContractEvents(contract.id);
       setAgreement(prev => (prev?.contract?.id === contract.id
-        ? { ...prev, events: shapeOwnerEvents(rows, contract) }
+        ? { ...prev, events: shapeOwnerEvents(rows, contract, actorId) }
         : prev));
     } catch (err) {
       console.warn('[TrustFlow] contract events fetch failed:', err);
     }
     return guestAccessUrlFor(token);
-  }, [agreement, shapeOwnerEvents]);
+  }, [agreement, actorId]);
 
   const recordAgreementEvent = useCallback(async (type, payload = {}) => {
     const contract = agreement?.contract;
@@ -749,14 +713,14 @@ const App = () => {
       // The id guard is the other half: there are two awaits above this, and
       // whoever was on screen when it started may not be on screen now.
       setAgreement(prev => (prev?.contract?.id === contract.id
-        ? { ...prev, contract: fresh, events: shapeOwnerEvents(rows, fresh) }
+        ? { ...prev, contract: fresh, events: shapeOwnerEvents(rows, fresh, actorId) }
         : prev));
       setMyContracts(contracts);
     } else {
       // Guest path: no PostgREST access, so re-read the shaped response.
       await openAgreementAsGuest(contract.id);
     }
-  }, [agreement, actorId, refreshContracts, shapeOwnerEvents, openAgreementAsGuest]);
+  }, [agreement, actorId, refreshContracts, openAgreementAsGuest]);
 
   const copyInviteLink = useCallback(async (contract) => {
     if (!contract?.invite_token) return;

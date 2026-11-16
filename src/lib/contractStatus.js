@@ -561,12 +561,14 @@ export function cancellationClaimLabel(party) {
 
 /**
  * Who wrote an event, from a raw `events` row as the owner reads it — named
- * only when the actor id says so. 'you' for the owner's own id, the email for
- * a `guest:<email>` actor, and null for anything else: legacy rows carried
- * whatever the browser supplied, which identifies nobody (Codex Task 93). A
- * null claimant is shown as "a party", never guessed.
+ * only when the actor id says so AND the server derived it. 'you' for the
+ * owner's own id, the email for a `guest:<email>` actor, null for anything
+ * else. Rows before hash_version 2 (20260924000001) carried whatever actor id
+ * the browser chose, a `guest:` prefix included, so they name nobody (Codex
+ * Tasks 93, 94). A null claimant is shown as "a party", never guessed.
  */
-export function claimantOfActorId(actorId, ownerUserId) {
+export function claimantOfActorId(actorId, ownerUserId, hashVersion) {
+  if (!(Number(hashVersion) >= 2)) return null
   if (typeof actorId !== 'string' || actorId === '') return null
   if (typeof ownerUserId === 'string' && actorId === ownerUserId) return 'you'
   if (actorId.startsWith('guest:')) return actorId.slice('guest:'.length).trim() || null
@@ -574,12 +576,15 @@ export function claimantOfActorId(actorId, ownerUserId) {
 }
 
 /**
- * The same, from an actor as guest-contract-events describes it. Its reader is
- * always the guest, so a `guest_hirer` actor is 'you'; an `earner` actor is
- * named by its label; 'unknown' and every other role are null, whatever the
- * label says ("Unknown", "Unverified actor").
+ * The same, from an actor as guest-contract-events describes it, with the
+ * row's `integrity.trust_model`. Only a 'server_attested' row names anyone
+ * (a 'client_asserted' row's actor was browser-chosen). Its reader is always
+ * the guest, so a `guest_hirer` actor is 'you'; an `earner` actor is named by
+ * its label; 'unknown' and every other role are null, whatever the label says
+ * ("Unknown", "Unverified actor").
  */
-export function claimantOfShapedActor(actor) {
+export function claimantOfShapedActor(actor, trustModel) {
+  if (trustModel !== 'server_attested') return null
   if (!actor || typeof actor !== 'object') return null
   if (actor.role === 'guest_hirer') return 'you'
   if (actor.role === 'earner' && typeof actor.label === 'string' && actor.label.trim()) return actor.label.trim()

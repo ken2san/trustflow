@@ -136,6 +136,12 @@ function EventRow({ event }) {
   // Only false is a problem. null means the row carries nothing to check,
   // which is a different statement from "the check failed".
   const broken = event.integrity.hash_valid === false || event.integrity.chain_linked === false;
+  // Who wrote the row, shown only as a nonempty string and only when the
+  // server derived it: a client_asserted row's actor was browser-chosen, and
+  // React cannot render a non-string label anyway (Codex Task 94).
+  const label = event.actor?.label;
+  const shownActor = event.integrity?.trust_model === 'server_attested'
+    && typeof label === 'string' && label.trim() ? label.trim() : null;
 
   return (
     <li className="relative pl-8 pb-6 last:pb-0 border-l border-white/10 last:border-transparent">
@@ -146,18 +152,18 @@ function EventRow({ event }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-white font-bold text-sm">
           {event.type === 'contract.cancelled'
-            ? cancellationClaimLabel(claimantOfShapedActor(event.actor))
+            ? cancellationClaimLabel(claimantOfShapedActor(event.actor, event.integrity?.trust_model))
             : TYPE_LABELS[event.type] ?? event.type}
         </span>
         <span className="text-[11px] text-slate-400 font-mono">{formatWhen(event.created_at)}</span>
       </div>
 
       <p className="text-xs text-slate-400 mt-1">
-        by <span className="text-slate-300">{event.actor?.label ?? 'Unknown'}</span>
+        by <span className="text-slate-300">{shownActor ?? 'a party'}</span>
         {/* The server already labels the viewer's own acts "You"; adding
             "(you)" to that produced "by You (you)". The suffix is for an act
             attributed to a named party that happens to be the reader. */}
-        {event.actor?.role === 'guest_hirer' && event.actor?.label !== 'You'
+        {shownActor && event.actor?.role === 'guest_hirer' && shownActor !== 'You'
           && <span className="text-slate-400"> (you)</span>}
       </p>
 
