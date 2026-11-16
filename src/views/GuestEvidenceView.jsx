@@ -131,16 +131,16 @@ const PAYLOAD_LABELS = {
 
 const humanise = (key) => key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
-function EventRow({ event, contractCreatedAt }) {
+function EventRow({ event }) {
   const attested = event.integrity.trust_model === 'server_attested';
   // Only false is a problem. null means the row carries nothing to check,
   // which is a different statement from "the check failed".
   const broken = event.integrity.hash_valid === false || event.integrity.chain_linked === false;
-  // Who wrote the row, by the same rule as the claim text: named only for a
-  // recognised role on a row the server provably wrote (Codex Tasks 94, 95).
-  // An unknown role is "a party" whatever its label says, and only a
-  // nonempty string is ever rendered.
-  const claimant = claimantOfShapedActor(event.actor, event.integrity?.trust_model, contractCreatedAt);
+  // Who wrote the row, by the same rule as the claim text: named only with
+  // server-recorded per-event provenance, which no event carries today, so
+  // this is always "a party" (see SERVER_RECORDED_PROVENANCE). An unknown role
+  // is never named from its label, and only a nonempty string is rendered.
+  const claimant = claimantOfShapedActor(event.actor);
   const label = typeof event.actor?.label === 'string' ? event.actor.label.trim() : '';
   const isGuest = claimant !== null && event.actor?.role === 'guest_hirer';
   const shownActor = claimant === null ? null : isGuest ? (label || 'you') : claimant;
@@ -368,7 +368,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
         <p className="text-slate-400 text-sm">Nothing has been recorded on this agreement yet.</p>
       ) : (
         <ol className="ml-1">
-          {events.map(event => <EventRow key={event.id} event={event} contractCreatedAt={contract?.created_at} />)}
+          {events.map(event => <EventRow key={event.id} event={event} />)}
         </ol>
       )}
 

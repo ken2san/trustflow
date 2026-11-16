@@ -4,11 +4,11 @@
 // one shape so one component serves both rather than two screens drifting
 // apart. Moved out of App.jsx (Task 97) so the mapping itself can be tested.
 //
-// Who wrote a row is named only when that is provable: a server-attested row
-// whose actor is the signed-in viewer ("you"), the guest, or (for a guest
-// reader) the earner.
-// Anything else — a legacy browser-written row, an unknown actor, a missing
-// one — reads "a party" (Codex Tasks 93, 94).
+// Who wrote a row is named only with server-recorded, per-event provenance,
+// and no event carries any today: every row reads "a party", the owner's own
+// acts included. See SERVER_RECORDED_PROVENANCE in contractStatus.js for why,
+// and what would restore names. No provenance argument is passed below — on
+// purpose, so a field appearing in the data cannot name anyone unreviewed.
 
 import { claimantOfActorId, claimantOfShapedActor } from './contractStatus.js';
 
@@ -16,9 +16,7 @@ const byLine = claimant => `by ${claimant ?? 'a party'}`;
 
 /**
  * Raw `events` rows, as the contract's owner reads them. `viewerUserId` is the
- * signed-in user: "you" is said only for that id, never for the contract's
- * earner as such (the owner list does not even select earner_user_id, and a
- * party who reads a contract is not necessarily its earner).
+ * signed-in user: once provenance exists, "you" is said only for that id.
  */
 export function shapeOwnerEvents(rows, contract, viewerUserId) {
   const performerIsCreator = (contract.performed_by ?? 'creator') === 'creator';
@@ -26,7 +24,7 @@ export function shapeOwnerEvents(rows, contract, viewerUserId) {
     .filter(ev => ev.type !== 'runtime.snapshot')
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
     .map(ev => {
-      const claimant = claimantOfActorId(ev.actor_id, viewerUserId, ev.hash_version, contract.created_at);
+      const claimant = claimantOfActorId(ev.actor_id, viewerUserId);
       return {
         id: ev.id,
         type: ev.type,
@@ -39,13 +37,9 @@ export function shapeOwnerEvents(rows, contract, viewerUserId) {
     });
 }
 
-/**
- * One event from guest-contract-events, which already names its actor.
- * `contract` is that response's contract; without its created_at nothing is
- * named.
- */
-export function shapeGuestEvent(ev, contract) {
-  const claimant = claimantOfShapedActor(ev?.actor, ev?.integrity?.trust_model, contract?.created_at);
+/** One event from guest-contract-events, which describes its actor. */
+export function shapeGuestEvent(ev) {
+  const claimant = claimantOfShapedActor(ev?.actor);
   return {
     id: ev?.id,
     type: ev?.type,

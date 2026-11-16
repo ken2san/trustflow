@@ -560,55 +560,44 @@ export function cancellationClaimLabel(party) {
 }
 
 /**
- * The earliest contract creation time from which every event on the contract
- * is known to have been written by the server (Task 98).
+ * The per-event provenance value that would let the UI name an event's actor.
  *
- * WHY A CONTRACT TIME AND NOT THE ROW'S hash_version. 20260924000001 gave
- * events.hash_version a column DEFAULT of 2 while inserts were still open to
- * the anon key; 20260924000002 closed them, and was applied after log-event
- * was deployed. In between, a client could insert any actor_id and get — or
- * set — any hash_version, so no field on a row proves who wrote it.
- * A contract's id (gen_random_uuid()) and created_at (now()) have been
- * server-owned since 20260923000000, and no later migration re-grants insert
- * on events to anon or authenticated. So a contract created after the window
- * closed cannot have a window-written event: its id did not exist yet.
- * The window closed by 2026-09-24 12:37:13 (the management API's own version
- * stamps, listed in 20260924123733); midnight UTC the next day covers that
- * whether those stamps were UTC or local time.
+ * NOTHING CARRIES IT TODAY, so no actor is ever named: every row reads "a
+ * party", the owner's own acts included (option A, Kenji, 2026-11-16). Every
+ * field the server sets on an event — payload._actor_role and _authentication,
+ * server_recorded_at, hash_version — could also be set by any anon-key client
+ * while events were world-writable (20260924000002_events_lockdown.sql), and no
+ * date or migration-order heuristic is accepted as proof (Codex Tasks 95, 96).
+ * Naming returns only with a server-recorded, per-event signal: a
+ * trigger-stamped provenance column or a server signature, which is a separate
+ * task needing a migration and review (.ada/claude-report-99.md).
  */
-export const SERVER_ONLY_EVENTS_FROM = Date.parse('2026-09-25T00:00:00Z')
+export const SERVER_RECORDED_PROVENANCE = 'server_derived'
 
-function contractPostdatesOpenWrites(contractCreatedAt) {
-  const t = typeof contractCreatedAt === 'string' ? Date.parse(contractCreatedAt) : NaN
-  return Number.isFinite(t) && t >= SERVER_ONLY_EVENTS_FROM
-}
+const hasServerProvenance = provenance => provenance === SERVER_RECORDED_PROVENANCE
 
 /**
- * Who wrote an event, from a raw `events` row as the owner reads it — named
- * only when the actor id says so AND the server provably derived it. 'you' for the
- * owner's own id, the email for a `guest:<email>` actor, null for anything
- * else. Rows before hash_version 2 (20260924000001) carried whatever actor id
- * the browser chose, a `guest:` prefix included, so they name nobody (Codex
- * Tasks 93, 94). A null claimant is shown as "a party", never guessed.
+ * Who wrote an event, from a raw `events` row as the owner reads it: 'you' for
+ * the signed-in viewer's id, the email for a `guest:<email>` actor, null for
+ * anything else — and null for everything unless `provenance` is the
+ * server-recorded marker above. A null claimant is shown as "a party".
  */
-export function claimantOfActorId(actorId, ownerUserId, hashVersion, contractCreatedAt) {
-  if (!(Number(hashVersion) >= 2) || !contractPostdatesOpenWrites(contractCreatedAt)) return null
+export function claimantOfActorId(actorId, viewerUserId, provenance) {
+  if (!hasServerProvenance(provenance)) return null
   if (typeof actorId !== 'string' || actorId === '') return null
-  if (typeof ownerUserId === 'string' && actorId === ownerUserId) return 'you'
+  if (typeof viewerUserId === 'string' && actorId === viewerUserId) return 'you'
   if (actorId.startsWith('guest:')) return actorId.slice('guest:'.length).trim() || null
   return null
 }
 
 /**
- * The same, from an actor as guest-contract-events describes it, with the
- * row's `integrity.trust_model`. Only a 'server_attested' row names anyone
- * (a 'client_asserted' row's actor was browser-chosen). Its reader is always
- * the guest, so a `guest_hirer` actor is 'you'; an `earner` actor is named by
- * its label; 'unknown' and every other role are null, whatever the label says
- * ("Unknown", "Unverified actor").
+ * The same, from an actor as guest-contract-events describes it. Its reader is
+ * always the guest, so a recognised `guest_hirer` actor is 'you' and an
+ * `earner` is named by its label; any other role is null whatever its label
+ * says. Null for everything unless `provenance` is the server-recorded marker.
  */
-export function claimantOfShapedActor(actor, trustModel, contractCreatedAt) {
-  if (trustModel !== 'server_attested' || !contractPostdatesOpenWrites(contractCreatedAt)) return null
+export function claimantOfShapedActor(actor, provenance) {
+  if (!hasServerProvenance(provenance)) return null
   if (!actor || typeof actor !== 'object') return null
   if (actor.role === 'guest_hirer') return 'you'
   if (actor.role === 'earner' && typeof actor.label === 'string' && actor.label.trim()) return actor.label.trim()

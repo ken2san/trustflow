@@ -369,6 +369,19 @@ nowhere):
   - GuestEvidenceView's byline now uses the same role rule as the claim; an unknown role is "a party" whatever its label.
   - `guest-contract-events` now returns `contract.created_at` (**needs deploy**; until then the guest path names nobody, which is fail-safe).
   - Tests 71/71; a mutation removing the contract-time condition fails 3 tests. Report: `.ada/claude-report-98.md`.
+- Claude Task 99: plan only (option A). Report: `.ada/claude-report-99.md`.
+- Claude Task 100 (option A, Kenji GO 18:28 ET), **local only**:
+  - **No screen names an event's actor any more:** every row reads "by a party" / "Cancellation claimed by a party · not confirmed",
+    the owner's own acts included.
+  - Why: no event carries server-recorded per-event provenance. Every server-set field (`payload._actor_role`/`_authentication`, `server_recorded_at`,
+    `hash_version`) was client-writable while events were world-writable, and date or migration-order heuristics are rejected.
+  - The 2026-09-25 cutoff and all date/version checks are removed. `claimantOfActorId`/`claimantOfShapedActor` name someone only for the
+    `SERVER_RECORDED_PROVENANCE` marker, which no caller supplies.
+  - The `contract.created_at` addition to `guest-contract-events` is reverted (byte-identical to `402c277` again), so **no Edge Function deploy is needed**.
+  - Tests `cancellationClaimViews` + `contractStatus` 65/65; re-allowing `hash_version` naming fails 3 tests.
+  - **Restoring names is a separate task:** it needs a per-event provenance column (trigger-stamped, writer-overriding) or a server signature per event,
+    then `guest-contract-events` returning it. That means a migration, a deploy and review (`.ada/claude-report-99.md`).
+  - Strict-date hardening of display/sort parsing is also a separate, later task.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
