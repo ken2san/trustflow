@@ -211,6 +211,14 @@ nowhere):
     and lock, so they rest on the migration self-test and the local race script.
   - Rows per run: 2 contracts and 7 events (a: acceptance, asserted, accepted; b: acceptance, asserted, `access.reissued`, rating). (c) writes none.
   - Report: `.ada/claude-report-75.md`.
+- Claude Task 76 (Codex 83 fixes, spec only):
+  - (c) now requires a nonempty expiry string, a finite parse and a past instant. A NULL expiry had read as 1970 and passed.
+  - Assertion messages show status/error code only, no response bodies.
+  - Artifacts: `retries: 0` means `trace: 'on-first-retry'` never records, there's no HTML reporter, and this spec opens no page. Enabling
+    retries would make traces keep bearer and guest tokens. Noted, config not changed.
+  - E2E, with `TF_LIVE_E2E` unset: guard 1/1 alone, spec **3/3 passed, 0 skipped**, `test-results/` empty. Rows: 2 contracts and 7 events.
+  - Still not proven: the HTTP race and the locked-RPC error mapping (`guest_credential_revoked/expired`).
+  - Not pushed. Report: `.ada/claude-report-76.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and

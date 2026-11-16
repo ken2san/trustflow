@@ -43,6 +43,10 @@ async function api(request, path, { method = 'POST', token, guestToken, body, pr
 const EXPIRED_CONTRACT_ID = 'fffffff0-0000-4000-8000-000000000000';
 const EXPIRED_GUEST_TOKEN = 'fffffff0-0000-4000-8000-000000000001';
 
+// Assertion messages carry a status and an error code, never a response body:
+// a body can hold fields nobody asked for, and messages end up in run output.
+const errorCode = body => String(body?.error ?? body?.code ?? '');
+
 const uniqueKey = label => `guest-credential:${label}:${randomUUID()}`;
 
 /**
@@ -66,7 +70,7 @@ async function ownerEventSet(request, token, contractId) {
   const read = await api(request,
     `/rest/v1/events?select=id,type,idempotency_key&contract_id=eq.${contractId}&order=id`,
     { method: 'GET', token });
-  expect(read.status, `owner event read failed: ${JSON.stringify(read.body)}`).toBe(200);
+  expect(read.status, `owner event read failed: ${read.status} ${errorCode(read.body)}`).toBe(200);
   return read.body.map(e => `${e.id}|${e.type}|${e.idempotency_key ?? ''}`);
 }
 
@@ -89,7 +93,7 @@ async function guestPerformedAgreement(request) {
       invited_hirer_email: 'guest.credential@example.test',
     },
   });
-  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(201);
+  expect(created.status, `contract insert failed: ${created.status} ${errorCode(created.body)}`).toBe(201);
   const contract = created.body[0];
 
   const accept = await api(request, '/functions/v1/validate-invite-token', {
@@ -229,7 +233,13 @@ test('an expired guest token cannot write, and nothing lands', async ({ request 
   const row = fixture.body[0];
   expect(row.earner_user_id === userId, 'expired fixture is not owned by the test Earner').toBe(true);
   expect(row.guest_access_token === EXPIRED_GUEST_TOKEN, 'fixture token differs from the expected one').toBe(true);
-  expect(new Date(row.guest_access_token_expires_at).getTime()).toBeLessThan(Date.now());
+  // A NULL expiry would parse as 1970 and look "past"; the backend does not
+  // treat NULL that way, so the instant must be present and real.
+  const expiresAt = row.guest_access_token_expires_at;
+  expect(typeof expiresAt === 'string' && expiresAt.length > 0, 'fixture has no expiry timestamp').toBe(true);
+  const expiresMs = Date.parse(expiresAt);
+  expect(Number.isFinite(expiresMs), 'fixture expiry is not a valid instant').toBe(true);
+  expect(expiresMs < Date.now(), 'fixture expiry is not in the past').toBe(true);
 
   const before = await ownerEventSet(request, earnerToken, EXPIRED_CONTRACT_ID);
 
