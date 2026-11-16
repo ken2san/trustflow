@@ -201,6 +201,16 @@ nowhere):
   - Finding: `log-event`'s pre-check answers a stale or expired token with `403 not_a_party`. `guest_credential_revoked/expired` occur only in the
     race, so they stay with the local self-test and race evidence.
   - No spec written. Report: `.ada/claude-report-74.md`.
+- Claude Task 75: new `tests/e2e/guest-credential.spec.js` (Codex 82 changes applied). Results on E2E: guard 1/1 alone, then the spec **3/3**.
+  - Not pushed: Codex reviews first.
+  - What it proves (sequential HTTP), with "nothing written" measured each time as the owner's event set (id|type|key) before and after:
+    - (a) keyed guest replay: 201, then 200 `deduplicated` with the same id after the chain moved; a different type with the same key → 409, no event.
+    - (b) after a reissue, the old token's append and replay → 403 `not_a_party`, no event, nothing written; the new token replays (same id) and appends (201).
+    - (c) the 2020 fixture token (checked present, owned by the test earner, expired) → 403 `not_a_party`, nothing written.
+  - What it does **not** prove: the in-flight race, or `guest_credential_revoked/expired` over HTTP. Those are reachable only between pre-check
+    and lock, so they rest on the migration self-test and the local race script.
+  - Rows per run: 2 contracts and 7 events (a: acceptance, asserted, accepted; b: acceptance, asserted, `access.reissued`, rating). (c) writes none.
+  - Report: `.ada/claude-report-75.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
