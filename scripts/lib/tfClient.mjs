@@ -77,7 +77,10 @@ export async function ownerSession() {
       // Codex pointed out that a cache still valid on read never gets written
       // and so never got repaired.
       const cached = await readCredentialFile(SESSION_CACHE,
-        { onExposed: m => console.warn(`[session-cache] ${m}`) });
+        // Fixed text: the helper's message names the file, whose path holds
+        // the home directory (and can be overridden by environment).
+        { onExposed: () => console.warn('[session-cache] the cached session file was readable '
+          + 'beyond its owner until now; it has been narrowed to 600.') });
       if (unexpired(cached) && await stillLive(cached)) return cached;
     } catch { /* absent, unreadable or unreachable — grant a fresh one */ }
 

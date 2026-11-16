@@ -327,6 +327,8 @@ nowhere):
   - Probe (no writes): unkeyed `contract.cancelled` → `400 type_not_allowed`; control → `404 contract_not_found`. `smoke:prod` 16/16.
   - Then a normal push `3b6d01d..076be3b`, which published the updated `agent-protocol.md`.
   - This HANDOFF entry is a later local commit, not pushed. Report: `.ada/claude-report-91.md`.
+- Claude Task 92: `scripts/lib/tfClient.mjs`'s session-cache exposure warning is now fixed text, with no file path (home directory).
+  No other path-printing warning in that file. No unit test covers tfClient. Local only. Report: `.ada/claude-report-92.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
