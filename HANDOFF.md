@@ -226,6 +226,8 @@ nowhere):
   - "B applied, C failed" is safe to leave; the forward repair is re-running C.
   - `docs/e2e-project.md` should switch to the PGPASSWORD form (not edited).
   - Report: `.ada/claude-report-77.md`.
+- Claude Task 78: after Codex 84 PASS, pushed `199bfc6..0d18d25` normally, so the guest-credential spec (Tasks 75/76) is now on `origin/main`.
+  Production is still untouched.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
