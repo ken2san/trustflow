@@ -235,6 +235,10 @@ nowhere):
     Entrypoint `file:///Users/…`, `verify_jwt` true, other three unchanged.
   - **C':** bogus-token probe → `404 contract_not_found`. `smoke:prod` 16/16.
   - Rollback target v15 `8e834b92…`. Report: `.ada/claude-report-79.md`.
+- Claude Task 80: pushed `0d18d25..3b6d01d`. Plan only for `contract.cancelled`; nothing built.
+  - Finding: any party (guest and agents included) can write it today on any contract. It is permanent, labelled "Cancelled", and projects nothing.
+  - Recommended: Step 0, refuse new writes until the owner decides the semantics (open decisions 1–4 in the report). Then move to scoped delegation.
+  - Report: `.ada/claude-report-80.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
