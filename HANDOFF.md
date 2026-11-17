@@ -391,6 +391,17 @@ nowhere):
   - New migration `20261117030000_revoke_client_truncate.sql` revokes TRUNCATE from anon/authenticated on `contracts` and `earner_payout_profiles`, with a read-only
     apply-time self-test over all five tables. `check-migrations` OK.
   - **Committed locally; not pushed, not applied** (E2E first, after Codex review).
+- Task 101: Codex diff-only review of 1b477be -> .ada/codex-report-101.md (GO)
+- Claude Task 107: `20261117030000_revoke_client_truncate.sql` **applied to E2E only** (`yqjtawffpesplqyurlpj`).
+  - CLI 2.105.0 `ExecBatch` sends a file and its history insert as one implicitly transactional batch, so the self-test failing would roll back the revokes.
+  - Dry run listed only that file; the push exited 0.
+  - A read-only check confirms anon/authenticated have no TRUNCATE on all five public tables (service_role keeps it). E2E history ends at `20261117030000`.
+  - **Production NOT applied. `1b477be` not pushed.** Report: `.ada/claude-report-107.md`.
+- Claude Task 108: **blocked before any production command.** The CLI has no production DB password (no `PG*`/`SUPABASE_DB_PASSWORD`, no `~/.pgpass`, link on E2E), and the task forbids reading 1Password. Kenji needs to provide it. Nothing applied to production; no push.
+- Claude Task 109 (Kenji chose A, 22:24 ET): `20261117030000_revoke_client_truncate.sql` **applied to production** (`fqgpzhwvvfsxswlnbbgg`), with the password via `op read` → `PGPASSWORD` only.
+  - Dry run listed only that file; the apply re-gated the same, exit 0 (self-test passed).
+  - Read-only check: anon/authenticated have no TRUNCATE on all five public tables (service_role unchanged). Production history ends at `20261117030000`.
+  - **Both projects now match. `1b477be` is still not pushed** (a push needs its own OK). Report: `.ada/claude-report-109.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
