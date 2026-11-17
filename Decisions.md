@@ -15,6 +15,16 @@ _Last updated: 2026-11-06_
 
 ## Current scope
 
+### [2026-11-16] — Who acted: a server assertion, with scoped delegation; clients lose TRUNCATE
+
+**Decision, by the owner** (Tasks 99-106; design `.ada/claude-report-105.md`, reviewed by Codex 96-100). **Status: decided, not built** — except the TRUNCATE revoke, written as `20261117030000_revoke_client_truncate.sql` and not yet applied anywhere.
+
+- **No actor is named without per-event provenance (option A, in production since `231dbc2`).** Every record row reads "a party" until the marker below exists, because no existing field proves who wrote an event: everything the server sets was client-writable while events were world-writable, and date or migration-order heuristics are not accepted as proof.
+- **The marker is `server_asserted_v1`, and it is a server assertion, not proof.** It means *inserted through TrustFlow's API with the service-role credential, after the migration that introduces it*. Stamped only for a PostgREST session (`authenticator`) carrying a service-role JWT, so dashboard, CLI, migration and self-test inserts are never stamped. That a credential was checked is an operational claim of TrustFlow's code; anyone holding the service-role key or database ownership can forge the marker. It is outside `event_hash`. Independent proof is a later step: Ed25519 signatures by a signer whose key the database cannot read.
+- **Every record screen carries one footnote**: who acted is as recorded by TrustFlow's server and is not independently verifiable. The same sentence goes into `agent-protocol.md` and Protocol §1.
+- **Delegation follows `docs/proposals/agent-first-access.md`**, with TF006 as specified in Task 105: lock order contract → delegation (`for share`), `clock_timestamp()` after the lock, owner/contract/scope/actor rebound under the lock. **Revocation guarantee:** no new event and no delegated read is admitted after a revoke commits. **Disclosed exception:** a keyed replay already in flight may return the bearer's own earlier event after a revoke commits; it discloses nothing that bearer did not write.
+- **`anon` and `authenticated` lose TRUNCATE** on `contracts` and `earner_payout_profiles`, in a small migration of its own, E2E first, after Codex review. TRUNCATE ignores RLS; nothing intends it. REFERENCES/TRIGGER defaults on all tables are a separate, later cleanup.
+
 ### [2026-11-09] — What a date-only deadline means, and what may be judged from it
 
 **Decision, by the owner.** A `deadline` is a **calendar date with no recorded

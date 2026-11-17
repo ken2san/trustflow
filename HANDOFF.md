@@ -383,6 +383,14 @@ nowhere):
     then `guest-contract-events` returning it. That means a migration, a deploy and review (`.ada/claude-report-99.md`).
   - Strict-date hardening of display/sort parsing is also a separate, later task.
 - Claude Task 101 (Codex T97 PASS on `231dbc2`): normal push `076be3b..231dbc2` (8 commits, origin/main = `231dbc2`), plus this HANDOFF line. The push deployed the frontend through Vercel; no backend deploy. `log-event`'s `50b2ae4` fail-closed lookups are pushed but **not deployed** (they ship with the next log-event rollout).
+- Claude Tasks 102-105 (design only, nothing built): smoke:prod 16/16; provenance/delegation design iterated with Codex 98-100.
+  - Current design: `.ada/claude-report-105.md`. Marker `server_asserted_v1`, stamped only for PostgREST + service-role-JWT inserts; TF006 fully specified.
+  - The read-only E2E catalog audit found **`contracts` grants TRUNCATE to anon/authenticated** (not fixed; Kenji to decide).
+- Claude Task 106 (Kenji 22:10 ET):
+  - The T105 decisions are recorded in Decisions.md (2026-11-16).
+  - New migration `20261117030000_revoke_client_truncate.sql` revokes TRUNCATE from anon/authenticated on `contracts` and `earner_payout_profiles`, with a read-only
+    apply-time self-test over all five tables. `check-migrations` OK.
+  - **Committed locally; not pushed, not applied** (E2E first, after Codex review).
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
