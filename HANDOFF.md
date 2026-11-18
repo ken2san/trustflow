@@ -402,6 +402,29 @@ nowhere):
   - Dry run listed only that file; the apply re-gated the same, exit 0 (self-test passed).
   - Read-only check: anon/authenticated have no TRUNCATE on all five public tables (service_role unchanged). Production history ends at `20261117030000`.
   - **Both projects now match. `1b477be` is still not pushed** (a push needs its own OK). Report: `.ada/claude-report-109.md`.
+- Claude Task 115 (A0): read-only catalog audit of production and E2E, identical apart from E2E-only `supabase_realtime_admin` memberships. Default ACLs found wide open; pg_graphql not installed. Report: `.ada/claude-report-A0.md`.
+- Claude Task 116: migration `20261118010000_close_client_default_privileges.sql` (close `postgres`'s public defaults + PUBLIC function EXECUTE; `earner_payout_profiles` client writes revoked; client REFERENCES/TRIGGER/MAINTAIN revoked). Self-test TF901-TF904. **Committed locally; not applied, not pushed.** Report: `.ada/claude-report-116.md`.
+- Task 105: Codex reviewed `73ef5cd` — `.ada/codex-report-105.md` (GO with changes).
+- Claude Task 117 (Codex 105 fixes; amends the unpushed `73ef5cd`):
+- Claude Task 118 (Codex 106 fixes; amends the unpushed migration commit again):
+- Claude Task 119 (Codex 107 column point; amends the unpushed migration commit again):
+  - Measured on local PG 17.6: a table-level REVOKE **does** remove the same privilege granted on columns (documented behaviour), so TF902's expected set was right.
+  - TF901 gained `has_any_column_privilege` checks (REFERENCES on every table; INSERT/UPDATE on payout profiles).
+  - Local edge cases pass: column grants planted before a fresh apply were removed and the final catalog equals Task 117's; a column grant planted after the revokes was caught with full rollback.
+  - New throwaway script `/tmp/tf117/colprobe.sql`. **Not applied to E2E/production; not pushed.** Report: `.ada/claude-report-119.md`.
+- Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
+  - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
+    TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.
+  - **The real `supabase db push` 2.105.0 is proven transactional** against the local disposable DB: a probe whose `CREATE TABLE` succeeded and whose next statement raised left no table and no history row.
+  - Local: catches proven for a planted grant (TF901), a grant-option-only change (TF902) and an extra default ACL (TF903); every failure rolled back to an identical catalog; the real apply matches Task 117's post-state; role paths unchanged.
+  - Local DB left with the migration applied (history 49). The throwaway CLI role `tf_cli_probe` was dropped.
+  - **Throwaway scripts, not in the repo:** `/tmp/tf117/` (`apply1.sh`, `dump.sh`, `dump.sql`, `reverse.sql`, `aclcmp.py`, `paths.sql`) and `/tmp/tf118/cli/` (the CLI probe workdir). Kept for re-runs: `.ada/a0-catalog-audit.py`.
+  - **Not applied to E2E/production; not pushed.** Report: `.ada/claude-report-118.md`.
+- Task 106: Codex reviewed `17345f3` — `.ada/codex-report-106.md` (GO with changes).
+  - The role-wide PUBLIC-EXECUTE revoke is kept and documented; a per-schema revoke was measured as ineffective on PG 17.6.
+  - The self-test now compares every relation, column and default ACL before and after, and probes use collision-safe random names.
+  - **Local disposable DB only:** both forced failures (self-test catch; end of file) rolled back to an identical catalog. The real apply diff showed exactly the targeted ACL changes; browser and Edge role paths were checked.
+  - **Not applied to E2E/production; not pushed.** Report: `.ada/claude-report-117.md`.
 
 - The migration now also adds `replay_guest_event` (keyed guest retry, answered
   under the lock after token/expiry and before `log-event`'s tip, version and
@@ -485,6 +508,12 @@ cost is priced in `.ada/claude-report-15.md` §3. Do not build it from this note
 ---
 
 ## Next Priority (in order)
+
+- Task 104: Codex re-reviewed the delegation and provenance plan — `.ada/codex-report-104.md` (GO with changes).
+
+- Task 103: Codex re-reviewed the delegation and provenance plan — `.ada/codex-report-103.md` (NO-GO).
+
+- Task 102: Codex reviewed the delegation and provenance implementation plan — `.ada/codex-report-102.md` (GO with changes).
 
 Referenced by name from `scripts/sim-counterparty.mjs` and two proposals, so the
 heading keeps its old wording even though the file around it changed.

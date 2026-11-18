@@ -15,6 +15,15 @@ _Last updated: 2026-11-06_
 
 ## Current scope
 
+### [2026-11-17] — Objects `postgres` creates no longer default to the client roles; payout profiles lose client writes
+
+**Decision, by the owner** (after the A0 catalog audit, `.ada/claude-report-A0.md`; revised per Codex 105). **Status:** `20261118010000_close_client_default_privileges.sql`, verified on the local disposable DB only (Tasks 117-119: exact before/after ACL comparison, column-level grants included; forced-failure rollback both with `psql -1` and with the real `supabase db push` 2.105.0 binary), **not applied** to E2E or production; it goes in before the delegations table.
+
+- Tables, sequences and functions that **`postgres`** creates in schema `public` no longer default to `anon`/`authenticated`. Every object this project's migrations create is created by `postgres`; any object a client needs is granted explicitly in its own migration.
+- **Role-wide, not public-only:** functions `postgres` creates in **any** schema no longer get EXECUTE for PUBLIC. It cannot be scoped to `public` — a per-schema revoke does not remove the built-in global PUBLIC grant (measured on PostgreSQL 17.6). Any such future function, including from a `CREATE EXTENSION` run as `postgres`, needs explicit grants.
+- **Not every new public object is closed:** defaults owned by `supabase_admin` stay open, because `postgres` cannot alter them; they apply to objects the platform role creates.
+- `earner_payout_profiles` loses client INSERT/UPDATE/DELETE (RLS and policies unchanged); every public table and view loses client REFERENCES/TRIGGER/MAINTAIN. `service_role`, and every other existing grant, are unchanged — the migration's self-test compares every public relation, column, function and default ACL before and after, as multisets with grantor and grant option (not ACLs outside `public`).
+
 ### [2026-11-16] — Who acted: a server assertion, with scoped delegation; clients lose TRUNCATE
 
 **Decision, by the owner** (Tasks 99-106; design `.ada/claude-report-105.md`, reviewed by Codex 96-100). **Status: decided, not built** — except the TRUNCATE revoke, written as `20261117030000_revoke_client_truncate.sql` and not yet applied anywhere.
