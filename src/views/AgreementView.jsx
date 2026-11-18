@@ -229,7 +229,7 @@ export default function AgreementView({
     <div className="max-w-2xl mx-auto py-10 space-y-8 animate-fade-in-up">
       <header className="space-y-2">
         {onBack && (
-          <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors mb-2">
+          <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors mb-2">
             <ArrowLeft className="w-3.5 h-3.5" /> Back
           </button>
         )}

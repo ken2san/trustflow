@@ -400,7 +400,7 @@ export default function ContractsHomeView({
             what you both agreed to gets recorded from day one.
           </p>
           {authStatus === 'anonymous' && onSignIn && (
-            <p className="text-xs text-slate-600 pt-2">
+            <p className="text-xs text-slate-400 pt-2">
               Already set one up on another device?{' '}
               <button onClick={onSignIn} className="text-indigo-400 hover:text-white underline underline-offset-4 transition-colors">
                 Sign in
