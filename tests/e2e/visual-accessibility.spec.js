@@ -3,6 +3,7 @@
 // Supabase, send mail, or use a real account.
 
 import { test, expect } from '@playwright/test';
+import { GUEST_EVENTS_ROUTE, guardFunctionCalls, askedForV2 } from './guestEvidenceStub.js';
 import AxeBuilder from '@axe-core/playwright';
 
 const OWNER_CONTRACT = {
@@ -55,15 +56,26 @@ const preflight = route => route.fulfill({
   body: '',
 });
 
+let calls = null;
+
 async function blockUnstubbedBackend(page) {
   // The app may attempt anonymous auth and runtime-snapshot persistence during
   // startup. Abort both, plus any unanticipated endpoint, so these visual tests
-  // cannot create accounts or write to the configured Supabase project.
+  // cannot create accounts or write to the configured Supabase project. An
+  // Edge Function call no stub handles is also recorded, and fails the test:
+  // a stub whose route stopped matching must not pass unnoticed.
   await page.route('**/auth/v1/**', route => route.abort());
   await page.route('**/rest/v1/**', route => route.abort());
-  await page.route('**/functions/v1/**', route => route.abort());
+  calls = await guardFunctionCalls(page);
   await page.routeWebSocket('**/realtime/v1/websocket*', () => {});
 }
+
+test.afterEach(() => {
+  if (!calls) return;
+  expect(calls.unexpected, 'Edge Function calls no stub handled').toEqual([]);
+  expect(calls.guestEventUrls.every(askedForV2), 'every record read asks for response version 2').toBe(true);
+  calls = null;
+});
 
 async function stubContracts(page, contracts) {
   await page.route('**/rest/v1/contracts*', async route => {
@@ -97,10 +109,11 @@ async function stubGuestEvidence(page) {
     });
   });
 
-  await page.route('**/functions/v1/guest-contract-events', async route => {
+  await page.route(GUEST_EVENTS_ROUTE, async route => {
     if (route.request().method() === 'OPTIONS') {
       return preflight(route);
     }
+    calls?.guestEventUrls.push(route.request().url());
     await json(route, {
       accepted_agreement: ACCEPTED,
       acceptance_identity: {
@@ -131,6 +144,8 @@ async function stubGuestEvidence(page) {
         payload: { counterparty_name: 'Guest' },
         integrity: {
           trust_model: 'server_attested',
+          canonical_version: 4,
+          canonical_version_supported: true,
           event_hash: 'abc',
           prev_event_hash: 'GENESIS',
           hash_valid: true,

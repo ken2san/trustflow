@@ -218,8 +218,8 @@ current state, live test status and the next priorities; `Protocol.md` holds wha
 the protocol does; `Decisions.md` holds why.
 
 The short version as of 2026-09-26: the DB-backed evidence core works
-end-to-end — create, invite, atomic acceptance, hash-chained server-attested
-events, agreement snapshot bound at acceptance, two different exports — and
+end-to-end — create, invite, atomic acceptance, hash-chained events written
+through the server, agreement snapshot bound at acceptance, two different exports — and
 almost nothing else in this file is built. Payment is not wired. There is no AI,
 no timestamping authority, no rating, no matching, no trust ladder on the real
 flow.

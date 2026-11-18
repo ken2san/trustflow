@@ -23,6 +23,7 @@
 
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { GUEST_EVENTS_ROUTE, guardFunctionCalls, askedForV2, toV2 } from './guestEvidenceStub.js';
 
 const json = (route, body, status = 200) => route.fulfill({
   status,
@@ -139,7 +140,11 @@ const ACCEPTED = {
 const GUEST_CONTRACT_ID = '22222222-2222-4222-8222-222222222222';
 const GUEST_INVITE_TOKEN = '33333333-3333-4333-8333-333333333333';
 
-test('a guest is given the server-verified record, not the owner document', async ({ page }) => {
+// Both shapes: version 1 is what today's function (or one rolled back) returns
+// even when version 2 is asked for, and the document must come out the same.
+for (const shape of ['v1', 'v2']) {
+test(`a guest is given the server-verified record, not the owner document (${shape} response)`, async ({ page }) => {
+  const calls = await guardFunctionCalls(page);
   await page.route('**/functions/v1/validate-invite-token', route => json(route, {
     contract_id: GUEST_CONTRACT_ID,
     project_name: ACCEPTED.project_name,
@@ -153,7 +158,7 @@ test('a guest is given the server-verified record, not the owner document', asyn
     guest_access_token: 'stub-guest-token',
   }));
 
-  await page.route('**/functions/v1/guest-contract-events', route => json(route, {
+  const v1Body = {
     accepted_agreement: ACCEPTED,
     acceptance_identity: {
       invited_recipient: 'invited@example.test',
@@ -184,6 +189,7 @@ test('a guest is given the server-verified record, not the owner document', asyn
       payload: { counterparty_name: 'Guest' },
       integrity: {
         trust_model: 'server_attested',
+        canonical_version: 4, canonical_version_supported: true,
         event_hash: 'abc', prev_event_hash: 'GENESIS',
         hash_valid: true, chain_linked: true, substance_valid: true,
         binds_whole_agreement: true,
@@ -193,7 +199,11 @@ test('a guest is given the server-verified record, not the owner document', asyn
       event_count: 1, server_attested: 1, client_asserted: 0,
       verified: true, truncated: false, payload_covered_by_hash: true,
     },
-  }));
+  };
+  await page.route(GUEST_EVENTS_ROUTE, route => {
+    calls.guestEventUrls.push(route.request().url());
+    return json(route, shape === 'v2' ? toV2(v1Body) : v1Body);
+  });
 
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto(`/?token=${GUEST_INVITE_TOKEN}`);
@@ -245,4 +255,18 @@ test('a guest is given the server-verified record, not the owner document', asyn
   expect(record.acceptance_identity.claimed_identity_verified).toBe(false);
   expect(record.events).toHaveLength(1);
   expect(record.events[0].server_verification.hash_valid).toBe(true);
+
+  // Document 2.0: built, not copied, so no version 1 overclaim reaches it.
+  expect(record.version).toBe('2.0');
+  expect(record.response_version).toBe(shape === 'v2' ? 2 : 1);
+  expect(record.events[0].server_verification).not.toHaveProperty('trust_model');
+  expect(record.events[0].actor).not.toHaveProperty('role');
+  expect(record.events[0].actor).not.toHaveProperty('label');
+  expect(record.events[0].provenance).toEqual({ writer: 'unknown', basis: 'none_recorded' });
+  expect(record.verification).not.toHaveProperty('server_attested');
+
+  expect(calls.unexpected, 'Edge Function calls no stub handled').toEqual([]);
+  expect(calls.guestEventUrls.length).toBeGreaterThan(0);
+  expect(calls.guestEventUrls.every(askedForV2)).toBe(true);
 });
+}

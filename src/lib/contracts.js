@@ -15,6 +15,7 @@ import { shownTermsDigest, SHOWN_TERMS_VERSION } from '../../supabase/functions/
 
 export { shownTermsDigest, SHOWN_TERMS_VERSION }
 import { getGuestAccessToken } from './guestSession.js'
+import { parseGuestEvidence } from './eventFormat.js'
 import { DEFAULT_CURRENCY, isSupportedCurrency } from '../../supabase/functions/_shared/money.ts'
 
 const NOT_CONFIGURED = new Error('Supabase is not configured')
@@ -241,7 +242,7 @@ export async function fetchInvite(inviteToken) {
  *
  * @returns {Promise<{ evidence: object|null, reason: string|null }>}
  *          reason is 'no_credential' | 'invalid_guest_token'
- *                  | 'guest_token_expired' | 'error'
+ *                  | 'guest_token_expired' | 'invalid_response' | 'error'
  */
 export async function fetchGuestEvidence(contractId, tokenOverride = null) {
   if (!supabase) return { evidence: null, reason: 'error' }
@@ -253,13 +254,21 @@ export async function fetchGuestEvidence(contractId, tokenOverride = null) {
   const guestToken = tokenOverride ?? getGuestAccessToken(contractId)
   if (!guestToken) return { evidence: null, reason: 'no_credential' }
 
-  const result = await supabase.functions.invoke('guest-contract-events', {
+  // Response version 2 is asked for explicitly. A function that predates it
+  // ignores the parameter and answers version 1, which this page also reads;
+  // a query parameter rather than a header, because a new header would fail
+  // that older function's CORS preflight. The installed functions-js builds
+  // the URL with `new URL(`${url}/${name}`)`, so the query survives.
+  const result = await supabase.functions.invoke('guest-contract-events?response_version=2', {
     headers: { 'x-guest-access-token': guestToken },
   })
 
   const reason = await invokeErrorReason(result)
   if (reason) return { evidence: null, reason }
   const { data } = result
+  // A body this build does not understand is refused whole, never partly
+  // shown: a row left out of the counts can hide its mismatch.
+  if (!parseGuestEvidence(data).ok) return { evidence: null, reason: 'invalid_response' }
   return { evidence: data, reason: null }
 }
 

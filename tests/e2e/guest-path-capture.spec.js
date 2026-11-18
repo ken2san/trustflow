@@ -27,6 +27,7 @@
 // Output: test-results/guest-path/ (gitignored), one set per project width.
 
 import { test, expect } from '@playwright/test';
+import { GUEST_EVENTS_ROUTE, guardFunctionCalls, askedForV2 } from './guestEvidenceStub.js';
 
 // The deal on screen. Deliberately an ordinary small job rather than a demo
 // one, because a reviewer reads the numbers as well as the layout.
@@ -67,7 +68,10 @@ const json = (route, body, status = 200) => route.fulfill({
  * assertions are its own. Converging the two is worth doing and is not this
  * change — reported rather than done (AGENTS.md, Scope Policy).
  */
+let calls = null;
+
 async function openInvitation(page) {
+  calls = await guardFunctionCalls(page);
   // No account is created for a guest, and this spec does not want one for the
   // app shell either: ensureActorIdentity falls back to a local device id when
   // signInAnonymously fails, which is all the snapshot code needs.
@@ -97,52 +101,66 @@ async function openInvitation(page) {
   await page.route('**/functions/v1/log-event', route => json(
     route, { error: 'log_event_should_not_be_called_on_acceptance' }, 500));
 
-  await page.route('**/functions/v1/guest-contract-events', route => json(route, {
-    accepted_agreement: ACCEPTED,
-    acceptance_identity: {
-      invited_recipient: INVITED,
-      claimed_identity: CLAIMED,
-      claimed_identity_verified: false,
-      authentication: 'invite_capability',
-    },
-    terms_changed_since_acceptance: [],
-    contract: {
-      id: CONTRACT_ID,
-      project_name: ACCEPTED.project_name,
-      dod: ACCEPTED.dod,
-      amount_jpy: ACCEPTED.amount,
-      currency: ACCEPTED.currency,
-      deadline: ACCEPTED.deadline,
-      state: 'TERMS_ACCEPTED',
-      performed_by: ACCEPTED.performed_by,
-      viewer_role: 'receiver',
-      earner_display_name: ACCEPTED.offered_by,
-      hirer_email: CLAIMED,
-    },
-    events: [{
-      id: '44444444-4444-4444-8444-444444444444',
-      type: 'dod.consent_recorded',
-      created_at: '2026-09-24T12:00:00.000Z',
-      actor: { id: null, role: 'guest_hirer', label: 'You' },
-      dod_hash: 'terms-hash',
-      payload: { counterparty_name: 'Guest' },
-      integrity: {
-        trust_model: 'server_attested',
-        event_hash: 'abc', prev_event_hash: 'GENESIS',
-        hash_valid: true, chain_linked: true, substance_valid: true,
-        binds_whole_agreement: true,
-      },
-    }],
-    chain: {
-      event_count: 1, server_attested: 1, client_asserted: 0,
-      verified: true, truncated: false, payload_covered_by_hash: true,
-    },
-  }));
+  await page.route(GUEST_EVENTS_ROUTE, route => {
+    calls.guestEventUrls.push(route.request().url());
+    return json(route, guestEventsBody);
+  });
 
   // The onboarding overlay is its own screen and is not what this captures.
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto(`/?token=${INVITE_TOKEN}`);
 }
+
+const guestEventsBody = {
+  accepted_agreement: ACCEPTED,
+  acceptance_identity: {
+    invited_recipient: INVITED,
+    claimed_identity: CLAIMED,
+    claimed_identity_verified: false,
+    authentication: 'invite_capability',
+  },
+  terms_changed_since_acceptance: [],
+  contract: {
+    id: CONTRACT_ID,
+    project_name: ACCEPTED.project_name,
+    dod: ACCEPTED.dod,
+    amount_jpy: ACCEPTED.amount,
+    currency: ACCEPTED.currency,
+    deadline: ACCEPTED.deadline,
+    state: 'TERMS_ACCEPTED',
+    performed_by: ACCEPTED.performed_by,
+    viewer_role: 'receiver',
+    earner_display_name: ACCEPTED.offered_by,
+    hirer_email: CLAIMED,
+  },
+  events: [{
+    id: '44444444-4444-4444-8444-444444444444',
+    type: 'dod.consent_recorded',
+    created_at: '2026-09-24T12:00:00.000Z',
+    actor: { id: null, role: 'guest_hirer', label: 'You' },
+    dod_hash: 'terms-hash',
+    payload: { counterparty_name: 'Guest' },
+    integrity: {
+      trust_model: 'server_attested',
+      canonical_version: 4, canonical_version_supported: true,
+      event_hash: 'abc', prev_event_hash: 'GENESIS',
+      hash_valid: true, chain_linked: true, substance_valid: true,
+      binds_whole_agreement: true,
+    },
+  }],
+  chain: {
+    event_count: 1, server_attested: 1, client_asserted: 0,
+    verified: true, truncated: false, payload_covered_by_hash: true,
+  },
+};
+
+test.afterEach(() => {
+  if (!calls) return;
+  // A stub that stopped matching would otherwise send this run to a live backend.
+  expect(calls.unexpected, 'Edge Function calls no stub handled').toEqual([]);
+  expect(calls.guestEventUrls.every(askedForV2), 'every record read asks for response version 2').toBe(true);
+  calls = null;
+});
 
 /**
  * One image, named so the order and the width are both obvious.

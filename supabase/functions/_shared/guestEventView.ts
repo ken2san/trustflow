@@ -194,6 +194,55 @@ export function guestVerificationNotes(): Record<string, unknown> {
   }
 }
 
+/**
+ * The same notes without the claims the version above makes and cannot back:
+ * that authorship and timing are "unaltered", that every act shares one
+ * agreement_hash (not true below v4), and that "the hashes prove the record was
+ * not altered" (a privileged operator can rewrite rows and recompute the chain).
+ * A hash that recomputes shows the recorded fields agree with it, nothing more.
+ *
+ * Used by the counterparty document now; the function switches to it with
+ * response version 2.
+ */
+export function guestVerificationNotesV2(): Record<string, unknown> {
+  return {
+    canonical_definition: 'supabase/functions/_shared/eventCanonical.ts',
+    recompute: 'sha256 over the canonical string built from each act\'s '
+      + '`canonical` block, under that block\'s own hash_version',
+    chain: `each act\'s prev_event_hash must equal the previous act\'s event_hash; the first is ${GENESIS_HASH}`,
+    independently_verifiable: [
+      'Whether each act\'s event_hash recomputes from the canonical fields given '
+        + 'for its supported format. Those fields include actor_id and created_at '
+        + 'as recorded in the row. An act whose format is not supported, or whose '
+        + 'canonical block is incomplete, cannot be checked.',
+      'Whether each prev_event_hash equals the event_hash of the act before it, '
+        + 'among the acts returned.',
+      'For each act in supported format 4: which recorded agreement_hash its '
+        + 'event_hash covers. That value may be null. Formats 1 to 3 cover the '
+        + 'recorded dod_hash instead. Whether a digest matches the terms or '
+        + 'criteria shown is a separate comparison.',
+    ],
+    not_verifiable_here: [
+      'Who wrote any act. actor_id is the value recorded in the row; no field '
+        + 'in this response establishes who actually acted.',
+      'When any act was actually written. created_at is the time recorded in '
+        + 'the row, not an independently verified time.',
+      'That the record was never rewritten. A hash that recomputes shows the '
+        + 'recorded fields agree with it; an operator with database access could '
+        + 'rewrite rows and recompute the chain.',
+      'That the statement text shown matches what was committed to. One '
+        + 'payload_hash covers the whole payload and this response carries an '
+        + 'allowlisted projection of it, so the digest cannot be reproduced from '
+        + 'what is shown.',
+      'The identity of either party. This credential is a transferable bearer '
+        + 'capability and the accepting address is self-claimed.',
+      'That the work was performed or that any payment moved.',
+      'That TrustFlow showed both parties the same history. Comparing this '
+        + 'response against the other party\'s export is the only check.',
+    ],
+  }
+}
+
 /** One shaped event, as far as `chainSummary` needs to understand it. */
 export interface ShapedEvent {
   id?: string | null

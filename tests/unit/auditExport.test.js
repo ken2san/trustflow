@@ -89,7 +89,7 @@ describe('audit document verification', () => {
     expect(truncated.events[0]._export_verification.chain_link_match).toBe(false)
   })
 
-  it('verifies a server-attested chain', async () => {
+  it('verifies a chain in the current hash format', async () => {
     const a = attestedEvent({
       id: '11111111-1111-4111-8111-111111111111', type: 'contract.initiated',
       actorId: 'earner-uuid', createdAt: '2026-09-24T12:00:00.000Z', prevHash: 'GENESIS',
@@ -102,7 +102,6 @@ describe('audit document verification', () => {
     const doc = (await build([a, b])).trustflow_audit_trail
     expect(doc.integrity_status).toBe('VERIFIED')
     expect(doc.events.every(e => e._export_verification.hash_match)).toBe(true)
-    expect(doc.events.every(e => e._export_verification.trust_model === 'server_attested')).toBe(true)
   })
 
   // Regression: created_at is hashed as 2026-09-24T12:00:00.000Z, but PostgREST
@@ -135,14 +134,27 @@ describe('audit document verification', () => {
     expect(doc.integrity_status).toBe('VERIFIED')
   })
 
-  it('does not present a legacy row as server-attested', async () => {
+  // Rank-1 provenance fix: `trust_model` was set from the hash format alone
+  // and read as who wrote the row. No row in export 2.0 carries it, whatever
+  // its format, and nothing replaces it with a writer claim.
+  it('labels no row with a writer, in any hash format', async () => {
     const legacy = legacyEvent({
       id: '55555555-5555-4555-8555-555555555555', type: 'contract.accepted',
       actorId: 'user', createdAt: '2026-03-12T12:33:16.434Z',
     })
+    const current = attestedEvent({
+      id: '55555555-5555-4555-8555-555555555556', type: 'work.submitted',
+      actorId: 'earner-uuid', createdAt: '2026-09-24T12:05:00.000Z', prevHash: 'GENESIS',
+    })
 
-    const doc = (await build([legacy])).trustflow_audit_trail
-    expect(doc.events[0]._export_verification.trust_model).toBe('client_asserted')
+    const doc = (await build([legacy, current])).trustflow_audit_trail
+    expect(doc.version).toBe('2.0')
+    for (const ev of doc.events) {
+      expect(ev._export_verification).not.toHaveProperty('trust_model')
+      expect(ev._export_verification).not.toHaveProperty('substance_attested')
+    }
+    // v1 and v2 hashes never covered the payload: false, not unknown.
+    expect(doc.events.map(e => e._export_verification.payload_hash_in_format)).toEqual([false, false])
   })
 
   it('detects an altered event', async () => {
@@ -209,6 +221,7 @@ describe('audit document verification', () => {
     const doc = (await build([v3, v4])).trustflow_audit_trail
     expect(doc.integrity_status).toBe('VERIFIED')
     expect(doc.events.map(e => e._export_verification.canonical_version)).toEqual([3, 4])
+    expect(doc.events.map(e => e._export_verification.payload_hash_in_format)).toEqual([true, true])
     // And the document says which of the two actually binds the whole deal,
     // rather than letting a reader assume the newer rule applied throughout.
     expect(doc.events.map(e => e._export_verification.binds_whole_agreement))
@@ -269,6 +282,22 @@ describe('audit document verification', () => {
     expect(instructions).toMatch(/does NOT cover payload/i)
     // And which rows bind the whole deal rather than only its criteria.
     expect(instructions).toMatch(/agreement_hash/)
+  })
+
+  it('makes no writer or time claim in its instructions, and names only fields it emits', async () => {
+    const doc = (await build([])).trustflow_audit_trail
+    const instructions = doc.verification_instructions.join(' ')
+    // The 1.1 wording: "whose actor, timestamp and hash were assigned by the server".
+    expect(instructions).not.toMatch(/assigned by the server/i)
+    expect(instructions).not.toMatch(/substance_attested/)
+    expect(instructions).toMatch(/payload_hash_in_format/)
+    expect(instructions).toMatch(/Nothing in this export establishes who wrote an event or when/)
+    // trust_model appears only to explain what earlier exports meant.
+    const mentions = doc.verification_instructions.filter(line => line.includes('trust_model'))
+    expect(mentions).toHaveLength(1)
+    expect(mentions[0]).toMatch(/Exports before version 2\.0/)
+    // A digest is recorded and compared, not proof the text never changed.
+    expect(instructions).not.toMatch(/proves the Definition of Done text was not modified/)
   })
 })
 
@@ -441,6 +470,8 @@ describe('a canonical version this build cannot verify', () => {
     expect(ev._export_verification.canonical_version).toBe(0)
     expect(ev._export_verification.canonical_version_supported).toBe(false)
     expect(ev._export_verification.hash_match).toBeNull()
+    // Payload coverage of an unknown format is unknown, not absent.
+    expect(ev._export_verification.payload_hash_in_format).toBeNull()
   })
 
   it('still infers v1 or v2 for a row with no recorded version at all', async () => {

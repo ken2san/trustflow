@@ -516,6 +516,7 @@ const App = () => {
         no_credential:        'This browser does not hold a credential for this agreement.',
         invalid_guest_token:  'This access link is not valid. It may have been replaced by a newer one.',
         guest_token_expired:  'This access link has expired.',
+        invalid_response:     'The server sent a record this page could not read (unsupported or invalid response). Nothing is shown as checked. Reload the page.',
       }[reason] ?? 'The agreement could not be loaded.');
       return;
     }

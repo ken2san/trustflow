@@ -21,36 +21,88 @@
 //
 // The honest statement is a split, and this document makes it:
 //
-//   REPRODUCIBLE HERE — each act's event_hash, the chain linking the acts, and
-//     the agreement_hash every act is bound to. Recomputable offline from this
-//     file, with no access to TrustFlow. If the verifier disagrees with the
-//     server's verdicts below, believe the verifier.
+//   REPRODUCIBLE HERE — whether each act's event_hash recomputes from the
+//     canonical fields given for its supported format, and whether the acts
+//     link. Recomputable offline from this file, with no access to TrustFlow.
+//     If the verifier disagrees with the server's results below, believe the
+//     verifier. A hash that recomputes shows the recorded fields agree with
+//     it; it does not show who wrote them, when, or that they were never
+//     rewritten.
 //   NOT REPRODUCIBLE HERE — payload_hash. Canonical v4 takes one digest over
 //     the WHOLE payload and this document carries an allowlisted projection of
 //     it, so recomputing it would fail on an untouched record as readily as on
 //     a tampered one. `substance_valid` stays the server's word.
 //
-// The server's verdicts are still carried verbatim, and still labelled as the
-// server's. What this module adds is that the reader can now check the first
-// half for themselves rather than take all of it on trust.
+// VERSION 2.0: BUILT, NOT COPIED (rank-1 provenance fix, Tasks 124-129)
+// 1.0 copied the response's actor, integrity block and verification notes
+// verbatim, so it carried `trust_model: "server_attested"`, an actor role and
+// label, and notes saying authorship and timing were "unaltered". Every
+// structure this file generates is now built from a fixed key list, from a
+// response of either version. Recorded VALUES inside allowed keys (canonical
+// fields, payload text, the accepted snapshot) are kept exactly as received.
 
-const DOCUMENT_VERSION = '1.0'
+import { CANONICAL_INPUTS, guestVerificationNotesV2 } from '../../supabase/functions/_shared/guestEventView.ts'
+import {
+  parseGuestEvidence, formatPartition, guestChainStatus,
+  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE,
+} from './eventFormat.js'
+
+const DOCUMENT_VERSION = '2.0'
+
+/** The server's per-event check results that the document carries. */
+const SERVER_VERIFICATION_KEYS = [
+  'hash_valid', 'chain_linked', 'substance_valid', 'canonical_version',
+  'canonical_version_supported', 'binds_whole_agreement', 'event_hash', 'prev_event_hash',
+]
+
+const ACCEPTANCE_IDENTITY_KEYS = [
+  'invited_recipient', 'claimed_identity', 'claimed_identity_verified',
+  'authentication', 'authentication_detail',
+]
+
+/** A JSON value copied as received, so the document cannot share references. */
+const copyJson = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)))
+
+/** Only the listed keys that are actually present; absent stays absent. */
+function pick(source, keys) {
+  const out = {}
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) out[key] = copyJson(source[key])
+  }
+  return out
+}
 
 /**
- * Why the chain carries the verdict it does.
- *
- * The server's own boolean stays authoritative and is reported verbatim; this
- * only names the reason, from the same per-event verdicts the server returned.
- * A record with nothing server-attested in it is not "unverified" — there was
- * never an attestation to check, which is a different statement.
+ * The canonical block, restricted to the inputs a hash is taken over. A key
+ * the response did not send is NOT filled with null: an absent input and a
+ * recorded null are different, and a filled block could recompute to a false
+ * mismatch or look complete when it is not. The missing keys are listed.
  */
-function chainStatusOf(events, chain) {
-  if (!chain?.server_attested) return 'NOT_SERVER_ATTESTED'
-  const verdicts = events.map(ev => ev.integrity ?? {})
-  if (verdicts.some(v => v.hash_valid === false)) return 'HASH_MISMATCH_DETECTED'
-  if (verdicts.some(v => v.substance_valid === false)) return 'PAYLOAD_MISMATCH_DETECTED'
-  if (verdicts.some(v => v.chain_linked === false)) return 'CHAIN_LINK_BROKEN'
-  return chain.verified ? 'VERIFIED' : 'NOT_VERIFIED'
+function canonicalOf(ev) {
+  if (!ev.canonical) return { canonical: null, canonical_missing: [...CANONICAL_INPUTS] }
+  const canonical = pick(ev.canonical, CANONICAL_INPUTS)
+  return {
+    canonical,
+    canonical_missing: CANONICAL_INPUTS.filter(k => !(k in canonical)),
+  }
+}
+
+/**
+ * Who an act is recorded as being by. The raw actor id is kept because the
+ * hash covers it. Nothing here names a person or a role: a v1 response's
+ * `role` could come from a client-written payload field, so it is never read,
+ * and only a v2 response's id class is carried.
+ */
+function actorOf(ev, version) {
+  const actor = ev.actor && typeof ev.actor === 'object' ? ev.actor : {}
+  const recordedClass = version >= 2 && RECORDED_ID_CLASSES.includes(actor.recorded_id_class)
+    ? actor.recorded_id_class
+    : null
+  return {
+    id: typeof actor.id === 'string' ? actor.id : null,
+    attribution: 'as_recorded_not_verified',
+    recorded_id_class: recordedClass,
+  }
 }
 
 /**
@@ -59,19 +111,26 @@ function chainStatusOf(events, chain) {
  *
  * @param {object} evidence - the response body from guest-contract-events
  * @returns {object} the document, ready to serialize
- * @throws {Error} when there is nothing to record
+ * @throws {Error} when there is nothing to record or the response is malformed
  */
 export function buildGuestRecordDocument(evidence) {
-  const events = evidence?.events ?? []
   const contract = evidence?.contract ?? null
 
   // A record with nothing in it still looks like a signed record. The owner's
   // export refuses in the same situation and for the same reason.
   if (!contract?.id) throw new Error('no agreement in this evidence response')
-  if (events.length === 0) throw new Error('no readable events for this agreement')
+  if (!Array.isArray(evidence.events) || evidence.events.length === 0) {
+    throw new Error('no readable events for this agreement')
+  }
+  // A response this build does not understand is refused whole. Leaving a
+  // malformed row out of the counts could turn its mismatch into a clean status.
+  const parsed = parseGuestEvidence(evidence)
+  if (!parsed.ok) throw new Error(`unsupported or invalid response (${parsed.reason})`)
 
-  const chain = evidence.chain ?? {}
-  const status = chainStatusOf(events, chain)
+  const { events, chain } = evidence
+  const partition = formatPartition(events)
+  const changed = evidence.terms_changed_since_acceptance
+  const identity = evidence.acceptance_identity
 
   return {
     trustflow_counterparty_record: {
@@ -80,65 +139,79 @@ export function buildGuestRecordDocument(evidence) {
       document_type: 'server_verified_record',
       generated_at:  new Date().toISOString(),
       agreement_id:  contract.id,
+      response_version: parsed.version,
 
       // Stated up front, because a reader who assumes the wrong kind of
       // document draws the wrong conclusion from it.
       what_this_document_is: [
         'A copy of the record TrustFlow holds for this agreement, as released to the counterparty.',
-        'Each act below carries a `canonical` block: every input its event_hash is computed over. From those alone a reader can recompute each hash and follow the chain offline, with no access to TrustFlow and no need to trust the verdicts in this file.',
+        'Each act below carries a `canonical` block: the inputs its event_hash is computed over, as recorded. From those a reader can recompute each hash of a supported format and follow the chain offline, with no access to TrustFlow and no need to trust the results in this file. Inputs listed in `canonical_missing` were not sent, so that act cannot be recomputed.',
+        'A hash that recomputes shows the recorded fields agree with it. It does not show who wrote an act, when it was actually written, or that the record was never rewritten.',
         'The payload digest CANNOT be reproduced from this file. One digest covers each whole payload, and the detail shown here is filtered to what this party may see, so recomputing it would not match on an untampered record any more than on a tampered one. `substance_valid` below is the server\'s word for that check, not a result a reader can repeat.',
-        'The integrity verdicts below were computed by the TrustFlow server against the complete stored rows. Where a reader can repeat a check and disagrees, the reader is right.',
-        'TrustFlow records what each party stated. It does not establish that a statement is true, who the parties are, or that any work or payment happened.',
+        'The check results below were computed by the TrustFlow server against the complete stored rows. Where a reader can repeat a check and disagrees, the reader is right.',
+        'TrustFlow keeps what was recorded as stated in each act. It does not establish who made a statement, that it is true, who the parties are, or that any work or payment happened.',
       ],
+      about_earlier_versions: EARLIER_DOCUMENTS_NOTICE,
 
       verification: {
         performed_by: 'TrustFlow server (guest-contract-events)',
-        // The server's own verdict, carried through untouched.
-        server_verdict: chain.verified ?? null,
-        status,
-        event_count:      chain.event_count ?? events.length,
-        server_attested:  chain.server_attested ?? null,
-        // Rows from before the server assigned actor, timestamp and hash. One
-        // that verifies proves only that it has not changed since it was
-        // stored, not that it says anything true.
-        client_asserted:  chain.client_asserted ?? null,
+        // The server's own boolean, carried through untouched. It covers rows
+        // in format v2 or later only; the status and the per-event results
+        // cover every row.
+        server_verdict: chain.verified,
+        status:         guestChainStatus(events, chain),
+        event_count:    events.length,
+        events_format_v2_or_later:  partition.v2OrLater,
+        events_format_below_v2:     partition.belowV2,
+        events_format_not_recognised: partition.notRecognised,
         // Whether the detail fields are covered by the hashes at all, rather
         // than merely recorded next to fields that are.
-        payload_covered_by_hash: chain.payload_covered_by_hash ?? null,
-        // If the record was cut short, the absence of an event below means
-        // nothing. Surfaced here rather than buried.
-        truncated: chain.truncated ?? false,
+        payload_covered_by_hash: typeof chain.payload_covered_by_hash === 'boolean'
+          ? chain.payload_covered_by_hash
+          : null,
+        // Also true at exactly the server's cap, so later events may or may
+        // not exist. Surfaced here rather than buried.
+        truncated: chain.truncated,
+        truncation_note: chain.truncated
+          ? 'The response reached the most events the server returns. Additional events may exist and were not checked here.'
+          : null,
       },
 
-      // What was AGREED, taken from the acceptance event rather than from the
-      // agreement row, which may legitimately have moved on since. Null for
-      // agreements accepted before the snapshot existed — absent, not
-      // reconstructed.
-      accepted_agreement: evidence.accepted_agreement ?? null,
+      // What was ACCEPTED, taken from the acceptance event rather than from the
+      // agreement row, which may legitimately have moved on since. Kept whole,
+      // as received: the snapshot is hashed as one object, so dropping a key or
+      // an unknown version would change what it is. Null for agreements
+      // accepted before the snapshot existed — absent, not reconstructed.
+      accepted_agreement: evidence.accepted_agreement === undefined
+        ? null
+        : copyJson(evidence.accepted_agreement),
+      accepted_agreement_note: 'Copied as the server returned it. This file does not check it against any hash.',
 
       // Terms on which the current row and the accepted snapshot disagree.
       // Empty when they still match; null when there is no snapshot to compare
-      // against. A non-empty list is not proof of wrongdoing, but it is the
-      // thing a reader most needs to see.
-      terms_changed_since_acceptance: evidence.terms_changed_since_acceptance ?? null,
+      // against or its version is unknown. A non-empty list is not proof of
+      // wrongdoing, but it is the thing a reader most needs to see.
+      terms_changed_since_acceptance: Array.isArray(changed) && changed.every(k => typeof k === 'string')
+        ? [...changed]
+        : null,
 
       // Who accepted, with what authority, and what they claimed. The invited
       // address and the claimed address are kept apart: an invitation can be
-      // forwarded, and the divergence is itself evidence. Neither is verified.
-      acceptance_identity: evidence.acceptance_identity ?? null,
+      // forwarded, and the divergence is itself evidence. None of it is
+      // verified, and the authentication fields are copied from the
+      // acceptance's recorded payload, which a client could write before the
+      // 2026-09-24 lockdown.
+      acceptance_identity: identity && typeof identity === 'object'
+        ? {
+            ...pick(identity, ACCEPTANCE_IDENTITY_KEYS),
+            authentication_fields_are: 'as recorded in the acceptance; not independently verified',
+          }
+        : null,
 
       // How to check the reproducible half, and what no amount of checking in
-      // this file will establish. Carried from the server response so the two
-      // documents cannot drift into saying different things; defaulted here so
-      // an older response still produces a document that states its limits.
-      independent_verification: evidence.verification ?? {
-        canonical_definition: 'supabase/functions/_shared/eventCanonical.ts',
-        recompute: 'sha256 over the canonical string built from each act\'s '
-          + '`canonical` block, under that block\'s own hash_version',
-        not_verifiable_here: [
-          'This response predates the canonical blocks, so nothing in it can be recomputed.',
-        ],
-      },
+      // this file will establish. Built here, never copied from the response:
+      // a version 1 response carries notes that claim more than a hash shows.
+      independent_verification: guestVerificationNotesV2(),
 
       // The agreement as it stands NOW. May differ from accepted_agreement.
       current_terms: {
@@ -158,19 +231,18 @@ export function buildGuestRecordDocument(evidence) {
       },
 
       events: events.map(ev => ({
-        id:         ev.id,
-        type:       ev.type,
-        created_at: ev.created_at,
-        actor:      ev.actor ?? null,
-        // Filtered to what this party may see — which is exactly why the
-        // hashes below cannot be recomputed from it.
-        payload:    ev.payload ?? null,
+        id:         ev.id ?? null,
+        type:       ev.type ?? null,
+        created_at: ev.created_at ?? null,
+        actor:      actorOf(ev, parsed.version),
+        // No event carries per-event evidence of who wrote it.
+        provenance: { writer: 'unknown', basis: 'none_recorded' },
+        // Filtered by the server to what this party may see — which is exactly
+        // why the payload digest cannot be recomputed from it. Values as received.
+        payload:    ev.payload === undefined ? null : copyJson(ev.payload),
         dod_hash:   ev.dod_hash ?? null,
-        // Every input this act's event_hash is taken over. Null on a response
-        // from before the server sent them, which is itself worth seeing: it
-        // says this act cannot be checked from this file.
-        canonical:  ev.canonical ?? null,
-        server_verification: ev.integrity ?? null,
+        ...canonicalOf(ev),
+        server_verification: pick(ev.integrity, SERVER_VERIFICATION_KEYS),
       })),
     },
   }

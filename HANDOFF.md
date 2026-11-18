@@ -444,6 +444,19 @@ nowhere):
 - Claude Task 128 (plan only, no code): fourth revision of the rank-1 plan per Codex 112. Report: `.ada/claude-report-128.md`; decisions D1-D5 are Kenji's.
   - Each rollback's real effect is stated (R1-R4), and malformed rows fail closed.
   - All 13 in-repo callers that don't send a version are migrated before the flip; stub route globs fixed.
+- Claude Task 129 (Kenji OK 10:19 ET, D1-D5 decided as recommended):
+  - **Pushed:** `7fb5925`, `117a5e9` and the docs commit `7a237f7` (normal push; this deploys the Vercel frontend). **Remote tip `7a237f7`.**
+  - **Built rank-1 commit 1, local only, NOT pushed** (frontend, both exports, public docs; plan rev 4 plus Codex 113).
+    - New `src/lib/eventFormat.js`: fail-closed shape validation; per-check results; status with only its first state renamed.
+    - The guest document 2.0 is built from fixed key lists. Owner export 2.0 has a tri-state `payload_hash_in_format`.
+    - The page asks for `?response_version=2`.
+    - New test helper `tests/e2e/guestEvidenceStub.js`. Stub globs fixed, and an unstubbed function call fails the test.
+  - **Tests:**
+    - unit: eventFormat, guestRecordExport, auditExport, cancellationClaimViews, shownTerms, eventCanonical, claimPresentation all pass
+    - stubbed E2E: agreement-record-ui, agreement-export, guest-path-capture pass
+    - visual-accessibility: 2 tests fail in both projects (`contracts home`, owner `record of agreement`), on contrast in files commit 1 does not touch (`ContractsHomeView.jsx:403`, `AgreementView.jsx:232`). Not fixed; the guest-record contrast test passes.
+  - **Live `guest-evidence.spec.js`:** its UI wording assertion was edited to match, but it was **not run** (needs a separate OK).
+  - **Not built:** commit 2 (function opt-in) and commit 3 (flip). Report: `.ada/claude-report-129.md`.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.

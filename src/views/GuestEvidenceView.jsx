@@ -7,9 +7,12 @@
 // its own; it reports what the server verified, and is deliberate about not
 // overstating it (see the footnote about payload coverage).
 
-import { ShieldCheck, ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
+import { ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
 import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts';
 import { cancellationClaimLabel, claimantOfShapedActor } from '../lib/contractStatus.js';
+import {
+  formatLabel, rowCheckState, summaryPresentation, EARLIER_DOCUMENTS_NOTICE,
+} from '../lib/eventFormat.js';
 
 const TYPE_LABELS = {
   'contract.initiated':   'Agreement created',
@@ -132,23 +135,20 @@ const PAYLOAD_LABELS = {
 const humanise = (key) => key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
 function EventRow({ event }) {
-  const attested = event.integrity.trust_model === 'server_attested';
-  // Only false is a problem. null means the row carries nothing to check,
-  // which is a different statement from "the check failed".
-  const broken = event.integrity.hash_valid === false || event.integrity.chain_linked === false;
+  // What each check on this row found, by name. The format is shown beside it
+  // as a format and nothing more: "Server-attested" used to stand here, read
+  // off the hash format alone, which says nothing about who wrote the row.
+  const check = rowCheckState(event.integrity);
   // Who wrote the row, by the same rule as the claim text: named only with
   // server-recorded per-event provenance, which no event carries today, so
-  // this is always "a party" (see SERVER_RECORDED_PROVENANCE). An unknown role
-  // is never named from its label, and only a nonempty string is rendered.
+  // this is always "a party" (see SERVER_RECORDED_PROVENANCE). The actor's
+  // label and role are not read: neither is established by the record.
   const claimant = claimantOfShapedActor(event.actor);
-  const label = typeof event.actor?.label === 'string' ? event.actor.label.trim() : '';
-  const isGuest = claimant !== null && event.actor?.role === 'guest_hirer';
-  const shownActor = claimant === null ? null : isGuest ? (label || 'you') : claimant;
 
   return (
     <li className="relative pl-8 pb-6 last:pb-0 border-l border-white/10 last:border-transparent">
       <span className={`absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full ${
-        broken ? 'bg-red-500' : attested ? 'bg-emerald-500' : 'bg-slate-500'
+        check.tone === 'mismatch' ? 'bg-red-500' : check.tone === 'matched' ? 'bg-emerald-500' : 'bg-slate-500'
       }`} />
 
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -161,12 +161,7 @@ function EventRow({ event }) {
       </div>
 
       <p className="text-xs text-slate-400 mt-1">
-        by <span className="text-slate-300">{shownActor ?? 'a party'}</span>
-        {/* The server already labels the viewer's own acts "You"; adding
-            "(you)" to that produced "by You (you)". The suffix is for an act
-            attributed to a named party that happens to be the reader. */}
-        {isGuest && label && label !== 'You'
-          && <span className="text-slate-400"> (you)</span>}
+        by <span className="text-slate-300">{claimant ?? 'a party'}</span>
       </p>
 
       {Object.keys(event.payload).length > 0 && (
@@ -183,13 +178,15 @@ function EventRow({ event }) {
       )}
 
       <p className={`mt-2 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest ${
-        broken ? 'text-red-400' : attested ? 'text-emerald-400' : 'text-amber-400'
+        check.tone === 'mismatch' ? 'text-red-400' : 'text-slate-400'
       }`}>
-        {broken
-          ? <><ShieldAlert className="w-3 h-3" />Integrity check failed</>
-          : attested
-            ? <><ShieldCheck className="w-3 h-3" />Server-attested</>
-            : <><AlertTriangle className="w-3 h-3" />Client-asserted</>}
+        {check.tone === 'mismatch'
+          ? <ShieldAlert className="w-3 h-3" />
+          : <AlertTriangle className="w-3 h-3" />}
+        {formatLabel(event.integrity)}
+      </p>
+      <p className={`mt-1 text-[11px] ${check.tone === 'mismatch' ? 'text-red-400' : 'text-slate-400'}`}>
+        {check.text}
       </p>
     </li>
   );
@@ -201,6 +198,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
       no_credential:      'This browser does not hold a credential for the agreement.',
       invalid_guest_token:'This access link is no longer valid.',
       guest_token_expired:'This access link has expired.',
+      invalid_response:   'The server sent a record this page could not read (unsupported or invalid response). Nothing is shown as checked. Reload the page.',
     }[reason] ?? 'The evidence trail could not be loaded.';
 
     return (
@@ -232,6 +230,7 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
     terms_changed_since_acceptance: changed,
   } = evidence;
 
+  const summary = summaryPresentation(evidence);
   const changedTerms = (changed ?? []).map(key => TERM_LABELS[key] ?? key);
   const acceptedTerms = accepted ? describeAgreement(accepted) : [];
 
@@ -320,47 +319,23 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
         </section>
       )}
 
+      {/* Every sentence here is computed from the per-event results over the
+          events returned (src/lib/eventFormat.js), never from the server's
+          `verified` boolean. That boolean checks only rows in hash format v2
+          or later, so wording derived from it said "the chain holds" over a
+          mismatched older row, and called an unrecognised format "tampered".
+          The earlier history of this panel is in git (Codex 2026-11-06,
+          Tasks 124-129). */}
       <div className="rounded-2xl border border-white/5 bg-white/[0.02] px-5 py-4 text-xs space-y-1">
-        <p className="text-slate-400">
-          <span className="text-slate-400">{chain.event_count}</span> event{chain.event_count === 1 ? '' : 's'} recorded
-          {chain.client_asserted > 0 && (
-            <span className="text-amber-500/70">
-              {' '}· {chain.client_asserted} predate server attestation
-            </span>
-          )}
+        <p className="text-slate-400">{summary.scope} {summary.formatLine}</p>
+        <ul className="text-slate-400 space-y-0.5">
+          {summary.checkLines.map(line => <li key={line}>{line}</li>)}
+        </ul>
+        <p className={summary.overall.tone === 'mismatch' ? 'text-rose-400' : 'text-slate-300'}>
+          {summary.overall.text}
         </p>
-        {/* "Hash chain verified" said who-knows-who had verified it, and the
-            download note below then told the reader they could not check it
-            themselves — the contradiction three blind reviews kept circling.
-            The note was simply out of date: the exported record carries a
-            `canonical` block per act precisely so a reader can recompute
-            offline (src/lib/guestRecordExport.js:88). So the fix is not to
-            soften the claim; it is to say who checked, and to stop denying
-            that the reader can. */}
-        {/* `verified` is false in two situations that must never share a
-            sentence: nothing was attested, and something was attested and
-            FAILED. The screen said "No server-attested events to verify yet"
-            for both — so a reader holding a tampered record was told there
-            was nothing to check, on the one screen whose entire purpose is
-            tamper-evidence. Found by Codex, 2026-11-06.
-
-            "every server-attested event" was also wrong when the response is
-            truncated: guest-contract-events returns at most MAX_EVENTS and
-            says so, and a check over a prefix is not a check over all. */}
-        {chain.server_attested === 0 ? (
-          <p className="text-slate-400">No server-attested events to check yet.</p>
-        ) : chain.verified ? (
-          <p className="text-emerald-400">
-            TrustFlow recomputed {chain.truncated ? 'the events shown here' : 'every server-attested event'} and
-            the chain holds{chain.truncated ? ' across them' : ''}.
-          </p>
-        ) : (
-          <p className="text-rose-400">
-            TrustFlow recomputed {chain.truncated ? 'the events shown here' : 'these events'} and
-            at least one does not match what was recorded. The entries below
-            mark which. This is what a tampered or damaged record looks like —
-            do not treat it as verified.
-          </p>
+        {summary.truncationWarning && (
+          <p className="text-amber-400">{summary.truncationWarning}</p>
         )}
       </div>
 
@@ -373,16 +348,21 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
       )}
 
       <div className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
-        <details><summary className="cursor-pointer">Details</summary><p>Each event's hash covers its type, timing, actor and the agreement it belongs to, and links
-        to the event before it.</p></details>
+        <details><summary className="cursor-pointer">Details</summary><p>Each event's hash covers
+        the fields recorded for it in its hash format — its type, recorded time, recorded actor
+        and the agreement digest it carries — and links to the event before it. A hash that
+        recomputes shows those recorded fields agree with it; it does not show who wrote them,
+        when, or that they were never rewritten.</p></details>
         {/* Stated from what the server reported, not assumed: a record containing
-            entries written before payloads were attested cannot claim otherwise. */}
+            entries in formats that do not cover the payload cannot claim otherwise. */}
         {chain.payload_covered_by_hash
-          ? <>It also covers the detail fields shown under each entry, so those are tamper-evident too.</>
+          ? <>It also covers the detail fields shown under each entry.</>
           : <>It does <span className="text-slate-400">not</span> cover the detail fields shown under
-             each entry, so those are recorded but not tamper-evident.</>}
-        {' '}TrustFlow records what each party stated; it does not establish that a statement is true.
-        {chain.truncated && ' Only the earliest events are shown.'}
+             every entry, so some of those are recorded but not covered.</>}
+        {' '}Each entry's actor is the value recorded in the row; who actually acted is not
+        established by this record. Times are as recorded and are not independently verified.
+        TrustFlow keeps what was recorded as stated; it does not establish that a statement is true.
+        <p className="mt-2">{EARLIER_DOCUMENTS_NOTICE}</p>
       </div>
 
       {/* The invitation promises the counterparty "your own copy of the

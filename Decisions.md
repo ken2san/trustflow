@@ -1,6 +1,6 @@
 # TrustFlow — Architecture Decisions
 
-_Last updated: 2026-11-06_
+_Last updated: 2026-11-18_
 
 > This file records significant design decisions and the reasoning behind them.
 > AI agents must read this before proposing changes to established patterns.
@@ -15,9 +15,19 @@ _Last updated: 2026-11-06_
 
 ## Current scope
 
+### [2026-11-18] — Event labels state the hash format, never the writer; guest response version 2
+
+**Decision, by the owner** (rank 1 of Codex 109; plan `.ada/claude-report-128.md`, reviewed by Codex 110-113; D1-D5 decided 2026-11-18). **Status:** commit 1 (frontend, both exports, public docs) built locally in Task 129, not pushed. The function's version 2 (commit 2) and the later flip (commit 3) are not built.
+
+- `trust_model` (`server_attested` / `client_asserted`) was set from `hash_version >= 2` alone, and read as authorship. Before the 2026-09-24 lockdown any client could write that format, actor and time included. It is **removed**, not aliased. Readers use `canonical_version` for the format; no field claims a writer, and `provenance` is `unknown` until a server-recorded marker exists (a separate, reviewed task).
+- **Opt-in, then flip (D1, D2):** `?response_version=2` returns version 2; a request without it gets version 1 until a release announced at least 7 days ahead (D3), then `400 response_version_required`. Old clients never parse version 2.
+- The screen states each check's true/false/null result over the returned events and never paraphrases `verified`, which covers format v2+ rows only. A response whose shape does not validate is refused whole.
+- The counterparty document (2.0) is built from fixed key lists, never copied from the response. Recorded values are kept as received; absent canonical inputs stay absent.
+- Rollback: roll forward first (D5). Rolling the function back below the opt-in release restores the version 1 overclaim on the API for every caller.
+
 ### [2026-11-17] — Objects `postgres` creates no longer default to the client roles; payout profiles lose client writes
 
-**Decision, by the owner** (after the A0 catalog audit, `.ada/claude-report-A0.md`; revised per Codex 105). **Status:** `20261118010000_close_client_default_privileges.sql`, verified on the local disposable DB only (Tasks 117-119: exact before/after ACL comparison, column-level grants included; forced-failure rollback both with `psql -1` and with the real `supabase db push` 2.105.0 binary), **not applied** to E2E or production; it goes in before the delegations table.
+**Decision, by the owner** (after the A0 catalog audit, `.ada/claude-report-A0.md`; revised per Codex 105). **Status:** `20261118010000_close_client_default_privileges.sql`, verified on the local disposable DB (Tasks 117-119: exact before/after ACL comparison, column-level grants included; forced-failure rollback both with `psql -1` and with the real `supabase db push` 2.105.0 binary), then **applied to E2E (Task 121) and production (Task 123)** on 2026-11-18.
 
 - Tables, sequences and functions that **`postgres`** creates in schema `public` no longer default to `anon`/`authenticated`. Every object this project's migrations create is created by `postgres`; any object a client needs is granted explicitly in its own migration.
 - **Role-wide, not public-only:** functions `postgres` creates in **any** schema no longer get EXECUTE for PUBLIC. It cannot be scoped to `public` — a per-schema revoke does not remove the built-in global PUBLIC grant (measured on PostgreSQL 17.6). Any such future function, including from a `CREATE EXTENSION` run as `postgres`, needs explicit grants.
@@ -947,7 +957,9 @@ that does not require moving it.
   owner's export does.
 - A chain with nothing server-attested reports `NOT_SERVER_ATTESTED`, not
   "unverified" — there was never an attestation to check, which is a different
-  statement.
+  statement. (Superseded 2026-11-18: "server-attested" meant hash format v2 or
+  later, not a proven writer; document 2.0 calls the state
+  `NO_EVENTS_FORMAT_V2_OR_LATER`.)
 
 **Consequences future work must not undo**: do not converge these two documents.
 The damaging regression is not a missing button, it is a guest handed the

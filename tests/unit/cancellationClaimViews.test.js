@@ -70,7 +70,10 @@ describe('owner rows → AgreementView', () => {
 describe('guest response → AgreementView (App\'s guest path)', () => {
   const guestEvent = (id, type, actor) => ({
     id, type, created_at: '2026-11-16T12:00:00.000Z', actor, payload: {},
-    integrity: { trust_model: 'server_attested' },
+    integrity: {
+      canonical_version: 4, canonical_version_supported: true,
+      hash_valid: true, chain_linked: true, substance_valid: true,
+    },
   })
 
   it('names nobody, and maps a missing actor without throwing', () => {
@@ -88,13 +91,16 @@ describe('guest response → AgreementView (App\'s guest path)', () => {
 describe('GuestEvidenceView', () => {
   const event = (id, type, actor) => ({
     id, type, created_at: '2026-11-16T12:00:00.000Z',
-    actor, payload: {}, integrity: { hash_valid: true, chain_linked: true, trust_model: 'server_attested' },
+    actor, payload: {}, integrity: {
+      canonical_version: 4, canonical_version_supported: true,
+      hash_valid: true, chain_linked: true, substance_valid: true,
+    },
   })
   const render = events => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, {
     evidence: {
       contract: { ...CONTRACT, viewer_role: 'receiver' },
       accepted_agreement: null,
-      chain: { event_count: events.length, client_asserted: 0, server_attested: events.length, verified: true, truncated: false },
+      chain: { event_count: events.length, verified: true, truncated: false, payload_covered_by_hash: true },
       events,
     },
   })))

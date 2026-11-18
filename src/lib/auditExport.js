@@ -23,7 +23,7 @@ import {
   isSupportedHashVersion, payloadHash, sha256Hex,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
 
-const EXPORT_VERSION = '1.1'
+const EXPORT_VERSION = '2.0'
 
 /**
  * Build and download a signed JSON audit trail for a contract.
@@ -110,15 +110,12 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
         expected_prev_hash: prevHash,
         chain_link_match:  chainLinkMatch,
         tsa_token_present: Boolean(ev.tsa_token),
-        // v1 rows were written by the browser under the previous trust model:
-        // the client chose actor_id, type and the hash. They are preserved as
-        // history, but they are not server-attested evidence. v2 rows were
-        // written by the log-event Edge Function, which derives all of those.
-        trust_model:       hashVersion >= 2 ? 'server_attested' : 'client_asserted',
-        // What the attestation covers. From v3 the payload is bound in too, so
-        // the substance of an assertion is tamper-evident and not merely
-        // recorded alongside one that is.
-        substance_attested: hashVersion >= 3,
+        // Whether this row's hash format includes a payload digest: true from
+        // supported v3, false for v1 and v2, null for a format this build does
+        // not know (its coverage is unknown, not absent). It says nothing
+        // about who wrote the row. Export 1.1 had `trust_model` here, set from
+        // the format alone, which read as authorship; it is gone.
+        payload_hash_in_format: versionSupported ? hashVersion >= 3 : null,
       },
     })
 
@@ -205,11 +202,11 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
         '2. Normalise created_at to the form it was hashed in: an ISO-8601 instant in UTC with milliseconds and a trailing Z (2026-09-24T12:52:40.016Z). A timestamp rendered any other way — for example with a +00:00 offset — produces a different digest even though it is the same instant.',
         '3. For each event, recompute SHA-256 over a JSON object with keys in this exact order. For events where _export_verification.canonical_version is 2: {id, type, contract_id, actor_id, dod_hash, created_at, prev_hash}, where prev_hash is that event\'s own prev_event_hash field (or the literal string "GENESIS" for the first event). For canonical_version 1 — events written before the chain existed — omit prev_hash entirely; those rows were hashed without it, and including it will produce a mismatch on an untampered row. Compare with event.event_hash; any mismatch indicates that event was altered.',
         '4. Separately, confirm each event\'s prev_event_hash equals the PRECEDING event\'s event_hash. A break here — even if every individual event\'s own hash still matches itself — indicates an event was deleted, reordered, or a forged event was inserted.',
-        '5. For canonical_version 4 and above, agreement_hash is the SHA-256 of the deterministically serialized agreement snapshot — project name, completion criteria, amount, currency, deadline, which side performs, and the offering party — and is covered by the event hash. Versions 1 to 3 bound only the completion criteria via dod_hash, so amount and deadline were NOT tamper-evident on those events. _export_verification.binds_whole_agreement says which applies.',
-        '6. For canonical_version 3 and above, payload_hash is the SHA-256 of the event payload serialized deterministically — object keys sorted recursively, arrays left in order, no whitespace — and is itself covered by the event hash, so the detail fields are tamper-evident. For versions 1 and 2 the hash does NOT cover payload: those detail fields were recorded but never attested, and _export_verification.substance_attested says which applies.',
-        '7. _export_verification.trust_model distinguishes server_attested events, whose actor, timestamp and hash were assigned by the server, from client_asserted ones, written under an earlier model where the browser chose all three. A client_asserted event that verifies proves only that it has not changed since it was stored, not that it says anything true.',
+        '5. In supported canonical_version 4, the event hash also covers the recorded agreement_hash, which may be null. agreement_hash is meant to be the SHA-256 of the deterministically serialized agreement snapshot — project name, completion criteria, amount, currency, deadline, which side performs, and the offering party — and whether it matches a given snapshot is a separate comparison. Versions 1 to 3 cover only the recorded dod_hash, so amount and deadline are not covered on those events. _export_verification.binds_whole_agreement says which applies; it is false for a version this build does not recognise.',
+        '6. From supported canonical_version 3, the event hash also covers the recorded payload_hash, the SHA-256 of the event payload serialized deterministically — object keys sorted recursively, arrays left in order, no whitespace. For versions 1 and 2 the hash does NOT cover payload: those detail fields were recorded but not covered. _export_verification.payload_hash_in_format says which applies: true, false, or null for a version this build does not recognise.',
+        '7. Nothing in this export establishes who wrote an event or when. actor_id and created_at are the values recorded in each row; any client could set them before 2026-09-24, and an operator with database access could rewrite rows and recompute the chain at any time. A hash that recomputes shows the recorded fields agree with it, not that they are true. Exports before version 2.0 carried _export_verification.trust_model: "server_attested" meant canonical_version 2 or later and "client_asserted" meant below 2; neither identified who wrote an event.',
         '8. tsa_token_present only means a token was returned at logging time — it has not been cryptographically verified here. To actually verify one, check its RFC 3161 signature against FreeTSA\'s public certificate. No event in this system currently carries one.',
-        '9. dod_hash proves the Definition of Done text was not modified after contract initiation',
+        '9. dod_hash is the recorded digest of the Definition of Done. Whether it matches a given text is a separate comparison; the event hash covers the digest, not the text.',
       ],
     },
   }

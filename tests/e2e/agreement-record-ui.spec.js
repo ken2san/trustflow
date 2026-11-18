@@ -10,6 +10,7 @@
 // than the record supports.
 
 import { test, expect } from '@playwright/test';
+import { GUEST_EVENTS_ROUTE, guardFunctionCalls, askedForV2, toV2 } from './guestEvidenceStub.js';
 
 const ACCEPTED = {
   snapshot_version: 1,
@@ -39,9 +40,16 @@ const json = (route, body, status = 200) => route.fulfill({
  * drifted from what was accepted.
  */
 let logEventCalls = [];
+let calls = { unexpected: [], guestEventUrls: [] };
 
-async function openTheRecord(page, { invite = {}, trail = {} } = {}) {
+/**
+ * `shape: 'v1'` answers as today's function does (and as one rolled back
+ * would), even though the page asks for version 2; `'v2'` answers in the
+ * version 2 shape; `raw` replaces the body outright.
+ */
+async function openTheRecord(page, { invite = {}, trail = {}, shape = 'v1', raw = null } = {}) {
   logEventCalls = [];
+  calls = await guardFunctionCalls(page);
 
   await page.route('**/functions/v1/validate-invite-token', route => json(route, {
     contract_id: CONTRACT_ID,
@@ -65,7 +73,7 @@ async function openTheRecord(page, { invite = {}, trail = {} } = {}) {
     return json(route, { error: 'log_event_should_not_be_called_on_acceptance' }, 500);
   });
 
-  await page.route('**/functions/v1/guest-contract-events', route => json(route, {
+  const v1Body = {
     accepted_agreement: ACCEPTED,
     acceptance_identity: {
       invited_recipient: 'invited@example.test',
@@ -96,6 +104,7 @@ async function openTheRecord(page, { invite = {}, trail = {} } = {}) {
       payload: { counterparty_name: 'Guest' },
       integrity: {
         trust_model: 'server_attested',
+        canonical_version: 4, canonical_version_supported: true,
         event_hash: 'abc', prev_event_hash: 'GENESIS',
         hash_valid: true, chain_linked: true, substance_valid: true,
         binds_whole_agreement: true,
@@ -106,7 +115,11 @@ async function openTheRecord(page, { invite = {}, trail = {} } = {}) {
       verified: true, truncated: false, payload_covered_by_hash: true,
     },
     ...trail,
-  }));
+  };
+  await page.route(GUEST_EVENTS_ROUTE, route => {
+    calls.guestEventUrls.push(route.request().url());
+    return json(route, raw ?? (shape === 'v2' ? toV2(v1Body) : v1Body));
+  });
 
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto(`/?token=${INVITE_TOKEN}`);
@@ -128,6 +141,13 @@ async function acceptAndOpen(page) {
   expect(logEventCalls, 'acceptance must not write evidence from the browser')
     .toEqual([]);
 }
+
+test.afterEach(() => {
+  // A stub that stopped matching would otherwise send this suite to a live backend.
+  expect(calls.unexpected, 'Edge Function calls no stub handled').toEqual([]);
+  expect(calls.guestEventUrls.every(askedForV2), 'every record read asks for response version 2')
+    .toBe(true);
+});
 
 // ── Before agreeing ─────────────────────────────────────────────────────────
 
@@ -204,4 +224,86 @@ test('an agreement accepted before snapshots existed shows no invented terms', a
   // Absent, not reconstructed from the current row.
   await expect(page.getByText('What was accepted')).toHaveCount(0);
   await expect(page.getByText(/no longer matches what was accepted/)).toHaveCount(0);
+});
+
+// ── Response versions (rank-1 provenance fix) ───────────────────────────────
+
+test('the record names the hash format, never a writer, from a version 1 body', async ({ page }) => {
+  await openTheRecord(page);
+  await acceptAndOpen(page);
+
+  expect(calls.guestEventUrls.length).toBeGreaterThan(0);
+  await expect(page.getByText('Hash format v4')).toBeVisible();
+  await expect(page.getByText(/Server-attested|Client-asserted|predate server attestation/)).toHaveCount(0);
+  await expect(page.getByText('No check that ran found a mismatch.')).toBeVisible();
+  await expect(page.getByText(/who actually acted is not\s+established by this record/)).toBeVisible();
+  await expect(page.getByText(/trust_model "server_attested"/)).toBeVisible();
+});
+
+test('a version 2 body reads the same way', async ({ page }) => {
+  await openTheRecord(page, { shape: 'v2' });
+  await acceptAndOpen(page);
+
+  await expect(page.getByText('What was accepted')).toBeVisible();
+  await expect(page.getByText('Hash format v4')).toBeVisible();
+  await expect(page.getByText('No check that ran found a mismatch.')).toBeVisible();
+  await expect(page.locator('ol').getByText('by a party', { exact: true })).toBeVisible();
+});
+
+test('a truncated record says more events may exist, and an old mismatch is shown', async ({ page }) => {
+  await openTheRecord(page, {
+    trail: {
+      events: [
+        {
+          id: '55555555-5555-4555-8555-555555555555', type: 'contract.initiated',
+          created_at: '2026-09-20T12:00:00.000Z', actor: { id: 'x' }, payload: {},
+          integrity: {
+            trust_model: 'client_asserted', canonical_version: 1, canonical_version_supported: true,
+            hash_valid: false, chain_linked: null, substance_valid: null,
+          },
+        },
+        {
+          id: '44444444-4444-4444-8444-444444444444', type: 'dod.consent_recorded',
+          created_at: '2026-09-24T12:00:00.000Z', actor: { id: null }, payload: {},
+          integrity: {
+            trust_model: 'server_attested', canonical_version: 4, canonical_version_supported: true,
+            hash_valid: true, chain_linked: true, substance_valid: true,
+          },
+        },
+      ],
+      chain: {
+        event_count: 2, server_attested: 1, client_asserted: 1,
+        verified: true, truncated: true, payload_covered_by_hash: false,
+      },
+    },
+  });
+  await acceptAndOpen(page);
+
+  // verified is true here (the server checks v2+ only); the screen still says.
+  await expect(page.getByText(/^1 event has a check that did not match/)).toBeVisible();
+  await expect(page.getByText(/Additional events may exist and were not checked here/)).toBeVisible();
+  await expect(page.getByText(/chain holds|tampered/)).toHaveCount(0);
+});
+
+test('a response the page cannot validate is refused, not partly shown', async ({ page }) => {
+  // Accept through the stubs first, then serve a record missing a check result.
+  await openTheRecord(page, {
+    raw: {
+      contract: { id: CONTRACT_ID, project_name: ACCEPTED.project_name },
+      events: [{
+        id: 'e1', type: 'dod.consent_recorded', created_at: '2026-09-24T12:00:00.000Z',
+        payload: {}, integrity: { canonical_version: 4, canonical_version_supported: true, chain_linked: true, substance_valid: true },
+      }],
+      chain: { event_count: 1, verified: true, truncated: false },
+    },
+  });
+  await page.getByRole('button', { name: 'Review Agreement' }).click();
+  await page.getByPlaceholder('Your name or handle').fill('Guest');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: /I Agree/ }).click();
+  await page.getByRole('button', { name: 'View the full verification detail' })
+    .click({ timeout: 15_000 });
+
+  await expect(page.getByText(/unsupported or invalid response/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/No check that ran found a mismatch/)).toHaveCount(0);
 });

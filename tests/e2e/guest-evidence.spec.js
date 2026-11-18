@@ -355,12 +355,11 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   await expect(page.getByText(/Record of agreement/i)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Agreement created')).toBeVisible();
   await expect(page.getByText('Terms accepted')).toBeVisible();
-  // Was /Hash chain verified/. That wording was the defect three blind reviews
-  // circled: it named no one as having verified, while the download note below
-  // it told the reader they could not check it themselves. The line now says
-  // who recomputed it, so the assertion follows — and it asserts the actor,
-  // which is the part that was missing, not the phrasing.
-  await expect(page.getByText(/TrustFlow recomputed every server-attested event/i)).toBeVisible();
+  // The summary states each check's result over the events returned, never a
+  // verdict paraphrased from `verified` (rank-1 provenance fix). An untouched
+  // record reads as no mismatch found, and no row is called server-attested.
+  await expect(page.getByText('No check that ran found a mismatch.')).toBeVisible();
+  await expect(page.getByText(/Server-attested/)).toHaveCount(0);
   // The trail names no one: no event carries server-recorded provenance, so
   // every entry reads "by a party", the earner's and the guest's alike
   // (Decisions.md, option A, since 231dbc2). The earner's name still shows in

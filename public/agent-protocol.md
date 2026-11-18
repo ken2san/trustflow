@@ -11,11 +11,16 @@ Audience: anyone writing a TrustFlow client — an agent, an MCP server, a
 script. This is the published specification; nothing here requires access to
 the source.
 
-What TrustFlow attests, since it decides how to read everything below: that a
-party **said** something, at a server-recorded time, in an order, bound to the
-terms as the server held them. Not that work was delivered, not that money
-moved, not who anyone really is. An acceptance is a statement by whoever held
-the invitation link, under an address they typed themselves.
+What a TrustFlow record holds, since it decides how to read everything below:
+rows of recorded fields — a type, a recorded actor, a recorded time, a
+statement — each with a hash over the fields its hash format covers, linked in
+an order. Formats v1–v3 cover the recorded `dod_hash` digest; supported v4 also
+covers the recorded `agreement_hash`. A hash that recomputes shows the recorded
+fields agree with it. It does not establish who submitted a row, when it was
+actually written, that it was never rewritten by an operator, that what it says
+is true, that work was delivered, that money moved, or who anyone really is.
+An acceptance is recorded as a statement by whoever held the invitation link,
+under an address they typed themselves.
 
 ---
 
@@ -381,6 +386,54 @@ failed or passed. The `verification.canonical_definition` value is an internal
 source path, not a public URL; this section is the public specification.
 Neither view proves identity, delivery, payment, an independent timestamp, or
 that the server showed both parties the same history.
+
+### Guest response versions
+
+`guest-contract-events` answers in one of two shapes. Ask for version 2 with
+the query parameter `?response_version=2`; a version 2 body carries the integer
+`"response_version": 2`, and a body without the field is version 1. A client
+must refuse any other `response_version` value, or a body it cannot validate,
+as an unsupported or invalid response — never read it as the nearest shape.
+Response versions are separate from the version strings of downloaded
+documents.
+
+Version 2 changes, against version 1:
+
+- `events[].integrity.trust_model` is **removed**. It was set from the hash
+  format alone (`server_attested` for `canonical_version` ≥ 2,
+  `client_asserted` below) and never identified who wrote an event. Read
+  `integrity.canonical_version` and `canonical_version_supported` instead.
+- `chain.server_attested` / `chain.client_asserted` are renamed
+  `chain.events_format_v2_or_later` / `chain.events_format_below_v2`. Same
+  counts, by `canonical_version >= 2`, including versions this build does not
+  recognise.
+- `events[].actor` is `{id, attribution: "as_recorded_not_verified",
+  recorded_id_class}`, where `recorded_id_class` is one of
+  `matches_contract_earner_id`, `guest_prefixed`, `other`, `missing`: a fact
+  about the recorded string, not a role. `role` and `label` are removed.
+- `events[].provenance` is new: `{writer: "unknown", basis: "none_recorded"}`
+  on every event. No event carries per-event evidence of who wrote it.
+- `verification` notes no longer say authorship, timing or binding are
+  "unaltered"; they say what a recomputation shows and what it does not.
+- `chain.verified`, the per-event `hash_valid`, `chain_linked` and
+  `substance_valid`, and the `canonical` blocks are unchanged.
+
+Errors are JSON `{"error": ...}`. Credential refusals (`missing_guest_token`,
+`invalid_guest_token`, `guest_token_expired`) come first and are unchanged. A
+duplicate, empty or non-`2` value is `400 invalid_response_version`; another
+integer is `400 unsupported_response_version`. A request without the
+parameter receives version 1 until a later release, announced here at least
+seven days ahead, after which it is refused with
+`400 response_version_required`. That is a deliberate interruption: a client
+reading version 1 field names from a version 2 body could misreport a record.
+
+Documents downloaded from TrustFlow before guest record 2.0 and owner export
+2.0 contain the old labels: `trust_model` `"server_attested"` and the
+`server_attested` count meant hash format v2 or later; `"client_asserted"` and
+`client_asserted` meant below v2. Neither identified who wrote an event.
+Downloaded files are unchanged, and this note cannot reach everyone who holds
+one. The counterparty document 2.0 reports `NO_EVENTS_FORMAT_V2_OR_LATER` where
+1.0 reported `NOT_SERVER_ATTESTED`; it is distinct from `NOT_VERIFIED`.
 
 ### Synthetic v4 reference vector
 
