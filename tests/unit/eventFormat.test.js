@@ -294,33 +294,46 @@ describe('coverageStatements: what the hashes cover, per format present', () => 
   const at = (version, supported = true) => ev(String(version), {
     canonical_version: version, canonical_version_supported: supported,
   })
-  const BASE = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest'
+  const BASE = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest field (which may be empty)'
+  const PREDECESSOR = 'the recorded predecessor-hash input (the GENESIS sentinel when none is recorded)'
 
-  it('v1 names its fields and says its hash does not bind a previous link, even when recorded', () => {
+  it('v1 names its fields and says its hash does not bind a predecessor hash, even when recorded', () => {
     const lines = coverageStatements([at(1)])
-    expect(lines[0]).toBe(`Format v1 hashes bind ${BASE}. They do not bind a link to a previous `
-      + 'event, even where the row records one, nor the payload, nor an agreement digest.')
+    expect(lines[0]).toBe(`Format v1 hashes bind ${BASE}. They do not bind a predecessor hash, `
+      + 'even where the row records one, nor the payload, nor an agreement digest.')
     expect(lines).toContain('Payload digest: 0 included in the hash format, 1 not included.')
   })
 
   // Codex 115: each line must stand on its own, because the formats a record
-  // does not contain are not shown.
+  // does not contain are not shown. Codex 116: a format binds recorded inputs
+  // (a predecessor hash or GENESIS, digest fields that may be empty), never a
+  // previous event's existence or a digest's match.
   for (const [version, bound, notBound] of [
-    [2, [BASE, 'the link to the previous event'], ['payload or an agreement digest']],
-    [3, [BASE, 'the link to the previous event', 'recorded payload digest'], ['an agreement digest']],
-    [4, [BASE, 'the link to the previous event', 'recorded payload digest', 'recorded agreement digest'], []],
+    [2, [BASE, PREDECESSOR], ['payload or an agreement digest']],
+    [3, [BASE, PREDECESSOR, 'recorded payload-digest field (which may be empty)'], ['an agreement digest']],
+    [4, [BASE, PREDECESSOR, 'recorded payload-digest field and the recorded agreement-digest field (either may be empty)'], []],
   ]) {
-    it(`v${version} only: the line names every field it relies on`, () => {
+    it(`v${version} only: the line names every field it relies on, as recorded inputs`, () => {
       const lines = coverageStatements([at(version)])
       expect(lines.filter(l => l.startsWith('Format v'))).toHaveLength(1)
       const line = lines[0]
       expect(line).toMatch(new RegExp(`^Format v${version} hashes bind `))
       for (const phrase of bound) expect(line).toContain(phrase)
       for (const phrase of notBound) expect(line).toMatch(new RegExp(`do not bind (the )?${phrase}`))
-      // No reference to a line that is not there.
-      expect(line).not.toMatch(/\bsame\b|\balso\b/)
+      // No reference to a line that is not there, and no claimed previous event.
+      expect(line).not.toMatch(/\bsame\b|\balso\b|link to the previous event/)
     })
   }
+
+  it('says once that links and digest matches are separate checks', () => {
+    for (const rows of [[at(1)], [at(2)], [at(4)], [at(1), at(4)]]) {
+      const lines = coverageStatements(rows)
+      expect(lines.filter(l => l.startsWith('A format binds recorded values only.'))).toHaveLength(1)
+      expect(lines.join(' ')).toMatch(/Whether a predecessor hash links to an actual previous event, or a recorded digest matches the criteria, payload or terms, is a separate check/)
+    }
+    // Nothing to qualify when no format is recognised.
+    expect(coverageStatements([at(9, false)]).join(' ')).not.toMatch(/A format binds recorded values only/)
+  })
 
   it('mixed formats: one self-contained line per format present, in order', () => {
     const lines = coverageStatements([at(4), at(1), at(2)])

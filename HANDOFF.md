@@ -471,6 +471,15 @@ nowhere):
   - Unit tests (eventFormat, guestEvidenceCoverage, guestRecordExport, cancellationClaimViews) pass, 85/85. **No E2E run.**
   - **Still blocking a verified push (Codex 115 finding 3):** the chromium `guest-path-capture` screenshot timeout and the 4 owner/home contrast failures. They need a targeted rerun and a `7a237f7` baseline, each with OK.
   - Report: `.ada/claude-report-131.md`.
+- Claude Task 132 (Kenji OK, run only): the chromium `guest-path-capture` "what the counterparty is shown" test on `b5eebd3` **passed in 6.5 s** of its 30 s budget.
+  - The final full-page screenshot took ≤0.72 s (page 1280×1521).
+  - Task 130's timeout was that run's load (~5× slower), not the longer page. No fix needed. Report: `.ada/claude-report-132.md`.
+- Claude Task 133 (Codex 116; new local commit on top of `b5eebd3`, **not pushed**):
+  - The guest document says v3/v4 bind the recorded payload-digest **field** (may be empty); its match is the separate `substance_valid`.
+  - The coverage lines say v2-v4 bind the recorded predecessor-hash input (GENESIS when none), and the digest fields are recorded and may be empty. One line says link validity and digest matches are separate checks.
+  - The stale live `guest-evidence.spec.js` coverage assertion was rewritten to the format-aware meaning. **Not run.**
+  - Unit tests: guestRecordExport, eventFormat, guestEvidenceCoverage, 81/81.
+  - **Still open before push:** the 4 contrast failures (Kenji: baseline vs two-class fix), a live `guest-evidence` run (needs OK), and Codex re-review. Report: `.ada/claude-report-133.md`.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.

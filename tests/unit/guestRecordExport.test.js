@@ -373,6 +373,38 @@ describe('check_summary: every row, beside a status with limited precedence', ()
   })
 })
 
+describe('payload digests: a bound field, not a proven match (Codex 116)', () => {
+  // Three v4 rows: a digest that matched, a digest field left empty, and one
+  // the server found not to match. The format binds the field in each case;
+  // whether it matches is substance_valid, carried exactly as given.
+  const rowWith = (id, payloadHash, substance) => ({
+    ...v1Evidence().events[0], id,
+    canonical: { ...CANONICAL, id, payload_hash: payloadHash },
+    integrity: integrity({ substance_valid: substance }),
+  })
+  const doc = () => rec(v1Evidence({
+    events: [rowWith('ok', 'ph-ok', true), rowWith('none', null, null), rowWith('bad', 'ph-bad', false)],
+    chain: { ...v1Evidence().chain, event_count: 3, server_attested: 3, verified: false },
+  }))
+
+  it('carries each recorded digest and the server\'s result unchanged', () => {
+    const d = doc()
+    expect(d.events.map(e => e.canonical.payload_hash)).toEqual(['ph-ok', null, 'ph-bad'])
+    expect(d.events.map(e => e.server_verification.substance_valid)).toEqual([true, null, false])
+    expect(d.verification.check_summary.by_check.substance_valid)
+      .toEqual({ matched: 1, did_not_match: 1, not_checked: 1 })
+    expect(d.verification.check_summary.mismatched_event_ids).toEqual(['bad'])
+    expect(d.verification.status).toBe('PAYLOAD_MISMATCH_DETECTED')
+  })
+
+  it('describes the digest as a recorded field whose match is a separate check', () => {
+    const text = JSON.stringify(doc().what_this_document_is)
+    expect(text).toMatch(/bind the recorded payload-digest field, which is intended to represent the whole stored payload but may be empty/)
+    expect(text).toMatch(/whether it matches the stored payload is a separate check, reported as `substance_valid`/)
+    expect(text).not.toMatch(/a recorded digest of each whole stored payload/)
+  })
+})
+
 describe('refusals', () => {
   it('refuses to produce a document with nothing in it', () => {
     expect(() => buildGuestRecordDocument(v1Evidence({ events: [] }))).toThrow(/no readable events/)

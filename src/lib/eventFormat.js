@@ -280,17 +280,26 @@ export const STATUS_NOTE =
 // so it reads correctly when it is the only format on the record. An earlier
 // version said "the same fields plus..." and "also covers...", which pointed at
 // lines a v2- or v4-only record never showed (Codex 115).
-const BASE_FIELDS = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest'
+const BASE_FIELDS = 'the recorded event id, type, agreement id, actor, time and '
+  + 'completion-criteria digest field (which may be empty)'
+const PREDECESSOR = 'the recorded predecessor-hash input (the GENESIS sentinel when none is recorded)'
 const COVERAGE_BY_FORMAT = {
-  1: `Format v1 hashes bind ${BASE_FIELDS}. They do not bind a link to a previous `
-    + 'event, even where the row records one, nor the payload, nor an agreement digest.',
-  2: `Format v2 hashes bind ${BASE_FIELDS}, and the link to the previous event. `
+  1: `Format v1 hashes bind ${BASE_FIELDS}. They do not bind a predecessor hash, `
+    + 'even where the row records one, nor the payload, nor an agreement digest.',
+  2: `Format v2 hashes bind ${BASE_FIELDS}, and ${PREDECESSOR}. `
     + 'They do not bind the payload or an agreement digest.',
-  3: `Format v3 hashes bind ${BASE_FIELDS}, the link to the previous event and the `
-    + 'recorded payload digest. They do not bind an agreement digest.',
-  4: `Format v4 hashes bind ${BASE_FIELDS}, the link to the previous event, the `
-    + 'recorded payload digest and the recorded agreement digest, which may be empty.',
+  3: `Format v3 hashes bind ${BASE_FIELDS}, ${PREDECESSOR}, and the recorded `
+    + 'payload-digest field (which may be empty). They do not bind an agreement digest.',
+  4: `Format v4 hashes bind ${BASE_FIELDS}, ${PREDECESSOR}, the recorded `
+    + 'payload-digest field and the recorded agreement-digest field (either may be empty).',
 }
+
+// What a format binds is an input, not a finding. Shown once beside the
+// format lines; it refers to the check counts, not to another format line
+// (Codex 116).
+const SEPARATE_CHECKS = 'A format binds recorded values only. Whether a predecessor hash links to '
+  + 'an actual previous event, or a recorded digest matches the criteria, payload or terms, '
+  + 'is a separate check, reported in the counts above.'
 
 /** How many returned events' formats bind a payload digest, do not, or are unknown. */
 function payloadBinding(events) {
@@ -338,6 +347,7 @@ export function coverageStatements(events) {
   }
   const { included, excluded, unknown } = payloadBinding(events)
   for (const version of [...supportedVersions].sort()) lines.push(COVERAGE_BY_FORMAT[version])
+  if (supportedVersions.size > 0) lines.push(SEPARATE_CHECKS)
   if (unknown > 0) {
     lines.push(`For ${plural(unknown, 'event')} in a format this build does not recognise, `
       + 'what the hash covers is unknown.')

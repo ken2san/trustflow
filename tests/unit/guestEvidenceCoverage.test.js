@@ -33,12 +33,13 @@ const render = (events, chain = {}, props = {}) => textOf(renderToStaticMarkup(R
   ...props,
 })))
 
-const BASE = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest'
+const BASE = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest field (which may be empty)'
+const PREDECESSOR = 'the recorded predecessor-hash input (the GENESIS sentinel when none is recorded)'
 
 describe('GuestEvidenceView hash coverage wording', () => {
-  it('v1 only: the hash does not bind a previous link, the payload or an agreement digest', () => {
+  it('v1 only: the hash does not bind a predecessor hash, the payload or an agreement digest', () => {
     const text = render([row('a', 1)])
-    expect(text).toContain(`Format v1 hashes bind ${BASE}. They do not bind a link to a previous event, even where the row records one, nor the payload, nor an agreement digest.`)
+    expect(text).toContain(`Format v1 hashes bind ${BASE}. They do not bind a predecessor hash, even where the row records one, nor the payload, nor an agreement digest.`)
     expect(text).toMatch(/Payload digest: 0 included in the hash format, 1 not included\./)
     expect(text).toMatch(/Hash format v1/)
   })
@@ -46,16 +47,18 @@ describe('GuestEvidenceView hash coverage wording', () => {
   // Codex 115: a record holding only one newer format must still show the
   // fields that format's sentence relies on.
   for (const [version, extra] of [
-    [2, 'and the link to the previous event'],
-    [3, 'the link to the previous event and the recorded payload digest'],
-    [4, 'the recorded payload digest and the recorded agreement digest, which may be empty'],
+    [2, `and ${PREDECESSOR}`],
+    [3, `${PREDECESSOR}, and the recorded payload-digest field (which may be empty)`],
+    [4, 'the recorded payload-digest field and the recorded agreement-digest field (either may be empty)'],
   ]) {
-    it(`v${version} only: the shown line is self-contained`, () => {
+    it(`v${version} only: the shown line is self-contained and binds recorded inputs only`, () => {
       const text = render([row('a', version)])
       expect(text).toContain(`Format v${version} hashes bind ${BASE}`)
       expect(text).toContain(extra)
-      expect(text).not.toMatch(/same recorded fields|hashes also cover/)
+      expect(text).not.toMatch(/same recorded fields|hashes also cover|link to the previous event\./)
       expect(text.match(/Format v\d hashes bind/g)).toHaveLength(1)
+      // Validity is the separate checks' job (Codex 116).
+      expect(text).toMatch(/is a separate check, reported in the counts above/)
     })
   }
 

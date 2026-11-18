@@ -371,13 +371,21 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   // detail of their acceptance, not as an attribution.
   await expect(page.getByText('ui.actual@example.test', { exact: true }).first()).toBeVisible();
 
-  // And it states what the hash covers without overstating it. These events are
-  // written under canonical v3 or later, so their formats include the payload
-  // digest; the details shown are a projection the page cannot check against
-  // it, and the view says so. It is also explicit that a record of what was
-  // stated is not a finding that it is true.
+  // And it states what the hash covers without overstating it, by the formats
+  // actually present. These events are written under canonical v3 or later, so:
+  // a v3/v4 line that binds the recorded payload-digest FIELD (a recorded input,
+  // not a proven match); no v1/v2 line; payload coverage counted per row with
+  // none excluded; the projection clause for formats that bind a digest, and not
+  // the clause for formats that do not; and the reminder that links and digest
+  // matches are separate checks (Codex 115-116). It is also explicit that a
+  // record of what was stated is not a finding that it is true.
+  await expect(page.getByText(/^Format v[34] hashes bind .*the recorded payload-digest field/).first()).toBeVisible();
+  await expect(page.getByText(/^Format v[12] hashes bind/)).toHaveCount(0);
   await expect(page.getByText(/Payload digest: \d+ included in the hash format, 0 not included\./)).toBeVisible();
-  await expect(page.getByText(/cannot check them against the committed payload digest/)).toBeVisible();
+  // Also repeated in the collapsed download explanation; the first is the visible list item.
+  await expect(page.getByText(/that digest cannot generally be checked or recomputed from the projection/).first()).toBeVisible();
+  await expect(page.getByText(/Format v1 and v2 hashes do not bind the payload/)).toHaveCount(0);
+  await expect(page.getByText(/is a separate check, reported in the counts above/)).toBeVisible();
   await expect(page.getByText(/does not establish that a statement is true/i)).toBeVisible();
 });
 
