@@ -297,9 +297,8 @@ const COVERAGE_BY_FORMAT = {
 // What a format binds is an input, not a finding. Shown once beside the
 // format lines; it refers to the check counts, not to another format line
 // (Codex 116).
-const SEPARATE_CHECKS = 'A format binds recorded values only. Whether a predecessor hash links to '
-  + 'an actual previous event, or a recorded digest matches the criteria, payload or terms, '
-  + 'is a separate check, reported in the counts above.'
+const SEPARATE_CHECKS = "A format binds recorded values only. The counts above report event-hash and predecessor-link checks and the server's payload check. "
+  + 'Comparing recorded criteria and agreement digests to their content requires separate verification and is not included in those counts.'
 
 /** How many returned events' formats bind a payload digest, do not, or are unknown. */
 function payloadBinding(events) {

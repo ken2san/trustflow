@@ -481,6 +481,7 @@ nowhere):
   - Unit tests: guestRecordExport, eventFormat, guestEvidenceCoverage, 81/81.
   - **Still open before push:** the 4 contrast failures (Kenji: baseline vs two-class fix), a live `guest-evidence` run (needs OK), and Codex re-review. Report: `.ada/claude-report-133.md`.
 - Claude Task 134 (Kenji chose the fix): contrast `text-slate-600`→`text-slate-400` (`ContractsHomeView.jsx:403`) and `text-slate-500`→`text-slate-400` (`AgreementView.jsx:232` back button). Stubbed `visual-accessibility` 6/6; local commit, not pushed. Report: `.ada/claude-report-134.md`.
+- Codex Task 118: clarify which checks the guest screen counts and which digest comparisons need separate verification; commit: this line's commit (`git log -1 -- HANDOFF.md`).
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.

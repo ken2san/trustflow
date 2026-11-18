@@ -329,7 +329,8 @@ describe('coverageStatements: what the hashes cover, per format present', () => 
     for (const rows of [[at(1)], [at(2)], [at(4)], [at(1), at(4)]]) {
       const lines = coverageStatements(rows)
       expect(lines.filter(l => l.startsWith('A format binds recorded values only.'))).toHaveLength(1)
-      expect(lines.join(' ')).toMatch(/Whether a predecessor hash links to an actual previous event, or a recorded digest matches the criteria, payload or terms, is a separate check/)
+      expect(lines.join(' ')).toMatch(/The counts above report event-hash and predecessor-link checks and the server's payload check/)
+      expect(lines.join(' ')).toMatch(/Comparing recorded criteria and agreement digests to their content requires separate verification and is not included in those counts/)
     }
     // Nothing to qualify when no format is recognised.
     expect(coverageStatements([at(9, false)]).join(' ')).not.toMatch(/A format binds recorded values only/)

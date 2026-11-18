@@ -58,7 +58,8 @@ describe('GuestEvidenceView hash coverage wording', () => {
       expect(text).not.toMatch(/same recorded fields|hashes also cover|link to the previous event\./)
       expect(text.match(/Format v\d hashes bind/g)).toHaveLength(1)
       // Validity is the separate checks' job (Codex 116).
-      expect(text).toMatch(/is a separate check, reported in the counts above/)
+      expect(text).toMatch(/The counts above report event-hash and predecessor-link checks and the server's payload check/)
+      expect(text).toMatch(/Comparing recorded criteria and agreement digests to their content requires separate verification and is not included in those counts/)
     })
   }
 

@@ -385,7 +385,7 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   // Also repeated in the collapsed download explanation; the first is the visible list item.
   await expect(page.getByText(/that digest cannot generally be checked or recomputed from the projection/).first()).toBeVisible();
   await expect(page.getByText(/Format v1 and v2 hashes do not bind the payload/)).toHaveCount(0);
-  await expect(page.getByText(/is a separate check, reported in the counts above/)).toBeVisible();
+  await expect(page.getByText(/Comparing recorded criteria and agreement digests to their content requires separate verification and is not included in those counts/)).toBeVisible();
   await expect(page.getByText(/does not establish that a statement is true/i)).toBeVisible();
 });
 
