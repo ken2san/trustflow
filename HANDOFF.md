@@ -435,6 +435,15 @@ nowhere):
   - Split `trust_model` into hash format (`canonical_version`) and authorship (`provenance: unknown` until the `server_asserted_v1` marker exists), keeping every `verified` verdict unchanged.
   - Also covers the UI badge, the owner and guest exports, `describeActor` and the protocol. No DB change.
 - Claude Task 125: `guest-evidence.spec.js` now expects the trail to read "by a party" and to carry no other byline, instead of the earner's name (stale since `231dbc2`). The spec ran alone against E2E, 13/13. Report: `.ada/claude-report-125.md`.
+- Claude Task 126 (plan only, no code): revised the rank-1 provenance plan per Codex 110 and Kenji's four decisions. Report: `.ada/claude-report-126.md`.
+  - `response_version: 2`; frontend first, function ≥24 h later; rollback is function first.
+  - Old frontend × new function is the unsafe cell.
+- Claude Task 127 (plan only, no code): third revision of the rank-1 plan per Codex 111. Report: `.ada/claude-report-127.md`; decisions D1-D4 are Kenji's.
+  - v2 is opt-in via `?response_version=2`, and requests without a version are refused after a flip, so old clients never parse v2.
+  - The guest document is built from an allowlist; summaries are computed from all row outcomes.
+- Claude Task 128 (plan only, no code): fourth revision of the rank-1 plan per Codex 112. Report: `.ada/claude-report-128.md`; decisions D1-D5 are Kenji's.
+  - Each rollback's real effect is stated (R1-R4), and malformed rows fail closed.
+  - All 13 in-repo callers that don't send a version are migrated before the flip; stub route globs fixed.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.
