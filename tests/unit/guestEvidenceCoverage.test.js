@@ -23,51 +23,66 @@ const row = (id, version, supported = true, over = {}) => ({
   },
 })
 
-const render = (events, chain = {}) => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, {
+const render = (events, chain = {}, props = {}) => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, {
   evidence: {
     contract: { id: 'c1', project_name: 'Probe', earner_display_name: 'Acme' },
     accepted_agreement: null,
     events,
     chain: { event_count: events.length, verified: true, truncated: false, ...chain },
   },
+  ...props,
 })))
 
+const BASE = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest'
+
 describe('GuestEvidenceView hash coverage wording', () => {
-  it('v1 only: no previous link, no agreement digest, payload not included', () => {
+  it('v1 only: the hash does not bind a previous link, the payload or an agreement digest', () => {
     const text = render([row('a', 1)])
-    expect(text).toMatch(/Format v1 hashes cover the recorded event id, type, agreement id, actor, time and completion-criteria digest, and record no link to a previous event\./)
-    expect(text).not.toMatch(/agreement digest/)
+    expect(text).toContain(`Format v1 hashes bind ${BASE}. They do not bind a link to a previous event, even where the row records one, nor the payload, nor an agreement digest.`)
     expect(text).toMatch(/Payload digest: 0 included in the hash format, 1 not included\./)
     expect(text).toMatch(/Hash format v1/)
   })
 
-  it('v2: adds the link, still no payload or agreement digest', () => {
-    const text = render([row('a', 2)])
-    expect(text).toMatch(/Format v2 hashes cover the same recorded fields plus a link to the previous event\./)
-    expect(text).not.toMatch(/Format v1 hashes|Format v4 hashes/)
-    expect(text).toMatch(/Payload digest: 0 included in the hash format, 1 not included\./)
+  // Codex 115: a record holding only one newer format must still show the
+  // fields that format's sentence relies on.
+  for (const [version, extra] of [
+    [2, 'and the link to the previous event'],
+    [3, 'the link to the previous event and the recorded payload digest'],
+    [4, 'the recorded payload digest and the recorded agreement digest, which may be empty'],
+  ]) {
+    it(`v${version} only: the shown line is self-contained`, () => {
+      const text = render([row('a', version)])
+      expect(text).toContain(`Format v${version} hashes bind ${BASE}`)
+      expect(text).toContain(extra)
+      expect(text).not.toMatch(/same recorded fields|hashes also cover/)
+      expect(text.match(/Format v\d hashes bind/g)).toHaveLength(1)
+    })
+  }
+
+  it('mixed v1 and v4: both lines, each complete', () => {
+    const text = render([row('a', 1), row('b', 4)])
+    expect(text.match(/Format v\d hashes bind the recorded event id/g)).toHaveLength(2)
+    expect(text).toMatch(/Payload digest: 1 included in the hash format, 1 not included\./)
   })
 
   it('unsupported format: coverage unknown, never called covered or uncovered', () => {
     const text = render([row('a', 9, false)], { verified: false })
     expect(text).toMatch(/For 1 event in a format this build does not recognise, what the hash covers is unknown\./)
     expect(text).toMatch(/Payload digest: 0 included in the hash format, 0 not included, 1 unknown\./)
+    expect(text).toMatch(/whether the payload is bound is unknown/)
     expect(text).toMatch(/Hash format v9 · not recognised by this build/)
   })
 
   it('missing coverage flag: wording comes from the rows, not from the chain boolean', () => {
-    // payload_covered_by_hash absent, and a v4 row: the old branch said some
-    // details were uncovered whenever the flag was not true.
     const text = render([row('a', 4)])
     expect(text).toMatch(/Payload digest: 1 included in the hash format, 0 not included\./)
     expect(text).not.toMatch(/recorded but not covered/)
-    expect(text).toMatch(/Format v4 hashes also cover the recorded agreement digest, which may be empty\./)
   })
 
   it('never says the shown details are covered, whatever the formats', () => {
     for (const events of [[row('a', 4)], [row('a', 1)], [row('a', 9, false)]]) {
       const text = render(events, { payload_covered_by_hash: true })
-      expect(text).toMatch(/this page cannot check them against the committed payload digest/)
+      expect(text).toMatch(/projection of the recorded payload the server returned for this party/)
       expect(text).not.toMatch(/also covers the detail fields shown/)
       expect(text).not.toMatch(/covers its type, timing, actor and the agreement/)
     }
@@ -77,4 +92,25 @@ describe('GuestEvidenceView hash coverage wording', () => {
     const noPayload = { ...row('a', 4), payload: null }
     expect(() => render([noPayload])).not.toThrow()
   })
+})
+
+describe('GuestEvidenceView download explanation (Codex 115, finding 2)', () => {
+  const withDownload = events => render(events, {}, { onExport: () => {} })
+  const download = text => text.slice(text.indexOf('A copy of what is shown here'))
+
+  for (const [name, events, expected, absent] of [
+    ['v1', [row('a', 1)], /Format v1 and v2 hashes do not bind the payload/, /cannot\s+generally be checked/],
+    ['v2', [row('a', 2)], /Format v1 and v2 hashes do not bind the payload/, /cannot\s+generally be checked/],
+    ['v4', [row('a', 4)], /cannot generally be checked or recomputed from the projection/, /do not bind the payload/],
+    ['unsupported', [row('a', 9, false)], /whether the payload is bound is unknown/, /do not bind the payload/],
+  ]) {
+    it(`${name}: says the details are a projection and what that means for this format`, () => {
+      const text = download(withDownload(events))
+      expect(text).toMatch(/A copy of what is shown here/)
+      expect(text).toMatch(/projection of the recorded payload the server returned for this party/)
+      expect(text).toMatch(expected)
+      expect(text).not.toMatch(absent)
+      expect(text).not.toMatch(/covers the whole payload/)
+    })
+  }
 })

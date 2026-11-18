@@ -11,7 +11,8 @@ import { ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
 import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts';
 import { cancellationClaimLabel, claimantOfShapedActor } from '../lib/contractStatus.js';
 import {
-  formatLabel, rowCheckState, summaryPresentation, coverageStatements, EARLIER_DOCUMENTS_NOTICE,
+  formatLabel, rowCheckState, summaryPresentation, coverageStatements, payloadProjectionNote,
+  EARLIER_DOCUMENTS_NOTICE,
 } from '../lib/eventFormat.js';
 
 const TYPE_LABELS = {
@@ -232,6 +233,9 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
 
   const summary = summaryPresentation(evidence);
   const coverage = coverageStatements(events);
+  // The same note closes the coverage list; repeated where the download is
+  // explained, because the file carries the same projection.
+  const projectionNote = payloadProjectionNote(events);
   const changedTerms = (changed ?? []).map(key => TERM_LABELS[key] ?? key);
   const acceptedTerms = accepted ? describeAgreement(accepted) : [];
 
@@ -392,11 +396,10 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
             and its hash format is one a verifier supports, you can recompute
             its hash and follow the chain yourself, without trusting the
             results in the file; the file lists any inputs that were not sent.
-            What that does not settle: whether the detail text shown under each
-            act is what was committed — the hash covers the whole payload and
-            you are shown part of it — nor who wrote an act or when, nor who
-            the people are, nor whether the work or the payment described
-            actually happened, nor that both sides were shown the same history.
+            {projectionNote} What recomputing does not settle: who wrote an act
+            or when, nor who the people are, nor whether the work or the payment
+            described actually happened, nor that both sides were shown the
+            same history.
           </p></details>
         </div>
       )}

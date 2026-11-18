@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseGuestEvidence, formatPartition, checkOutcomes, summaryPresentation,
   guestChainStatus, rowCheckState, formatLabel, coverageStatements, checkSummary,
+  payloadProjectionNote,
 } from '../../src/lib/eventFormat.js'
 
 // What a guest is told about their record, and when they are told nothing.
@@ -293,20 +294,40 @@ describe('coverageStatements: what the hashes cover, per format present', () => 
   const at = (version, supported = true) => ev(String(version), {
     canonical_version: version, canonical_version_supported: supported,
   })
+  const BASE = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest'
 
-  it('says v1 records no previous link and covers no agreement digest', () => {
+  it('v1 names its fields and says its hash does not bind a previous link, even when recorded', () => {
     const lines = coverageStatements([at(1)])
-    expect(lines[0]).toMatch(/^Format v1 hashes cover .*and record no link to a previous event\./)
-    expect(lines.join(' ')).not.toMatch(/agreement digest/)
+    expect(lines[0]).toBe(`Format v1 hashes bind ${BASE}. They do not bind a link to a previous `
+      + 'event, even where the row records one, nor the payload, nor an agreement digest.')
     expect(lines).toContain('Payload digest: 0 included in the hash format, 1 not included.')
   })
 
-  it('adds only what each present format adds', () => {
-    const lines = coverageStatements([at(2), at(4)])
-    expect(lines).toContain('Format v2 hashes cover the same recorded fields plus a link to the previous event.')
-    expect(lines).toContain('Format v4 hashes also cover the recorded agreement digest, which may be empty.')
-    expect(lines.join(' ')).not.toMatch(/Format v1|Format v3/)
-    expect(lines).toContain('Payload digest: 1 included in the hash format, 1 not included.')
+  // Codex 115: each line must stand on its own, because the formats a record
+  // does not contain are not shown.
+  for (const [version, bound, notBound] of [
+    [2, [BASE, 'the link to the previous event'], ['payload or an agreement digest']],
+    [3, [BASE, 'the link to the previous event', 'recorded payload digest'], ['an agreement digest']],
+    [4, [BASE, 'the link to the previous event', 'recorded payload digest', 'recorded agreement digest'], []],
+  ]) {
+    it(`v${version} only: the line names every field it relies on`, () => {
+      const lines = coverageStatements([at(version)])
+      expect(lines.filter(l => l.startsWith('Format v'))).toHaveLength(1)
+      const line = lines[0]
+      expect(line).toMatch(new RegExp(`^Format v${version} hashes bind `))
+      for (const phrase of bound) expect(line).toContain(phrase)
+      for (const phrase of notBound) expect(line).toMatch(new RegExp(`do not bind (the )?${phrase}`))
+      // No reference to a line that is not there.
+      expect(line).not.toMatch(/\bsame\b|\balso\b/)
+    })
+  }
+
+  it('mixed formats: one self-contained line per format present, in order', () => {
+    const lines = coverageStatements([at(4), at(1), at(2)])
+    const formatLines = lines.filter(l => l.startsWith('Format v'))
+    expect(formatLines.map(l => l.slice(0, 9))).toEqual(['Format v1', 'Format v2', 'Format v4'])
+    for (const l of formatLines) expect(l).toContain(BASE)
+    expect(lines).toContain('Payload digest: 1 included in the hash format, 2 not included.')
   })
 
   it('calls an unrecognised format\'s coverage unknown, not absent', () => {
@@ -314,11 +335,27 @@ describe('coverageStatements: what the hashes cover, per format present', () => 
     expect(lines).toContain('For 2 events in a format this build does not recognise, what the hash covers is unknown.')
     expect(lines).toContain('Payload digest: 1 included in the hash format, 0 not included, 2 unknown.')
   })
+})
 
-  it('always says the shown details are a projection this page cannot check', () => {
-    for (const rows of [[at(4)], [at(1)], [at(9, false)], []]) {
-      expect(coverageStatements(rows).at(-1)).toMatch(/cannot check them against the committed payload digest/)
+describe('payloadProjectionNote: what can be said about the shown details', () => {
+  const at = (version, supported = true) => ev(String(version), {
+    canonical_version: version, canonical_version_supported: supported,
+  })
+
+  it('never says a hash covers the whole payload, and never promises a mismatch', () => {
+    for (const rows of [[at(1)], [at(2)], [at(4)], [at(9, false)], [at(1), at(4), at(9, false)]]) {
+      const note = payloadProjectionNote(rows)
+      expect(note).toMatch(/^The details shown under each entry are the projection of the recorded payload/)
+      expect(note).not.toMatch(/covers the whole payload|would not match/)
     }
+  })
+
+  it('says what applies to the formats present, and only that', () => {
+    expect(payloadProjectionNote([at(4)])).toMatch(/cannot\s+generally be checked or recomputed from the projection/)
+    expect(payloadProjectionNote([at(4)])).not.toMatch(/do not bind the payload|unknown/)
+    expect(payloadProjectionNote([at(2)])).toMatch(/Format v1 and v2 hashes do not bind the payload/)
+    expect(payloadProjectionNote([at(2)])).not.toMatch(/cannot\s+generally be checked/)
+    expect(payloadProjectionNote([at(9, false)])).toMatch(/whether the payload is bound is unknown/)
   })
 })
 

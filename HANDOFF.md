@@ -465,6 +465,12 @@ nowhere):
   - New tests: `tests/unit/publishedResponseVersion.test.js`, `tests/unit/guestEvidenceCoverage.test.js`.
   - **Results:** unit all pass. Stubbed E2E 35 passed / 5 failed: the 4 known contrast failures, plus `guest-path-capture` chromium hitting its 30 s budget at the final full-page screenshot in a ~5x slower run.
   - Report: `.ada/claude-report-130.md`.
+- Claude Task 131 (Codex 115 findings 1-2; new local commit on top of `ae05838`, **not pushed**):
+  - Each hash-format coverage sentence is self-contained (names every field it binds and what it does not). v1 "does not bind" a previous link.
+  - One format-aware `payloadProjectionNote` replaces "the hash covers the whole payload" on the screen and in the download explanation. The guest document no longer promises a digest mismatch.
+  - Unit tests (eventFormat, guestEvidenceCoverage, guestRecordExport, cancellationClaimViews) pass, 85/85. **No E2E run.**
+  - **Still blocking a verified push (Codex 115 finding 3):** the chromium `guest-path-capture` screenshot timeout and the 4 owner/home contrast failures. They need a targeted rerun and a `7a237f7` baseline, each with OK.
+  - Report: `.ada/claude-report-131.md`.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.

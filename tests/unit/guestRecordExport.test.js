@@ -119,7 +119,10 @@ describe('the counterparty record document', () => {
     expect(text).toMatch(/recompute the hash of a supported format and follow the chain offline/)
     expect(text).toMatch(/whose block is null, or whose `canonical_missing` lists inputs that were not sent, cannot be recomputed/)
     expect(text).toMatch(/copy of the projection the server returned for this party, not filtered again here/)
-    expect(text).toMatch(/payload digest CANNOT be reproduced/)
+    expect(text).toMatch(/payload digest cannot generally be checked from this file/)
+    // A projection may equal the stored payload: no promised mismatch (Codex 115).
+    expect(text).toMatch(/a reader cannot generally establish from it whether the digest matches/)
+    expect(text).not.toMatch(/would not match/)
     expect(text).toMatch(/substance_valid.*server's word/)
     expect(text).toMatch(/does not show who wrote an act, when it was actually written, or that the record was never rewritten/)
   })

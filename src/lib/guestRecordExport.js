@@ -28,10 +28,11 @@
 //     verifier. A hash that recomputes shows the recorded fields agree with
 //     it; it does not show who wrote them, when, or that they were never
 //     rewritten.
-//   NOT REPRODUCIBLE HERE — payload_hash. Canonical v4 takes one digest over
-//     the WHOLE payload and this document carries an allowlisted projection of
-//     it, so recomputing it would fail on an untouched record as readily as on
-//     a tampered one. `substance_valid` stays the server's word.
+//   NOT GENERALLY CHECKABLE HERE — payload_hash. Formats v3 and v4 take one
+//     digest over the WHOLE stored payload and this document carries the
+//     server's projection of it, which may or may not equal it, so a reader
+//     cannot generally establish a match from it. `substance_valid` stays the
+//     server's word.
 //
 // VERSION 2.0: BUILT, NOT COPIED (rank-1 provenance fix, Tasks 124-129)
 // 1.0 copied the response's actor, integrity block and verification notes
@@ -147,7 +148,7 @@ export function buildGuestRecordDocument(evidence) {
         'A copy of the record TrustFlow holds for this agreement, as released to the counterparty.',
         'Where an act below carries a complete `canonical` block, it holds the inputs its event_hash is computed over, as recorded, and a reader can recompute the hash of a supported format and follow the chain offline, with no access to TrustFlow and no need to trust the results in this file. An act whose block is null, or whose `canonical_missing` lists inputs that were not sent, cannot be recomputed from this file.',
         'A hash that recomputes shows the recorded fields agree with it. It does not show who wrote an act, when it was actually written, or that the record was never rewritten.',
-        'The payload digest CANNOT be reproduced from this file. One digest covers each whole payload, and the detail here is a copy of the projection the server returned for this party, not filtered again here, so recomputing the digest would not match on an untampered record any more than on a tampered one. `substance_valid` below is the server\'s word for that check, not a result a reader can repeat.',
+        'The payload digest cannot generally be checked from this file. Formats v3 and v4 bind a recorded digest of each whole stored payload; formats v1 and v2 do not bind the payload at all. The detail here is a copy of the projection the server returned for this party, not filtered again here, and it may or may not equal the stored payload, so a reader cannot generally establish from it whether the digest matches. `substance_valid` below is the server\'s word for that check, not a result a reader can repeat.',
         'The check results below were computed by the TrustFlow server against the complete stored rows. Where a reader can repeat a check and disagrees, the reader is right.',
         'TrustFlow keeps what was recorded as stated in each act. It does not establish who made a statement, that it is true, who the parties are, or that any work or payment happened.',
       ],

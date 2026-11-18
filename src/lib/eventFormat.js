@@ -276,12 +276,52 @@ export const STATUS_NOTE =
   + 'beside checks that did not run. It is not a complete integrity '
   + 'guarantee. check_summary reports every event\'s checks independently.'
 
+// Each sentence names every field its format binds, and what it does not,
+// so it reads correctly when it is the only format on the record. An earlier
+// version said "the same fields plus..." and "also covers...", which pointed at
+// lines a v2- or v4-only record never showed (Codex 115).
+const BASE_FIELDS = 'the recorded event id, type, agreement id, actor, time and completion-criteria digest'
 const COVERAGE_BY_FORMAT = {
-  1: 'Format v1 hashes cover the recorded event id, type, agreement id, actor, time and '
-    + 'completion-criteria digest, and record no link to a previous event.',
-  2: 'Format v2 hashes cover the same recorded fields plus a link to the previous event.',
-  3: 'Format v3 hashes also cover the recorded payload digest.',
-  4: 'Format v4 hashes also cover the recorded agreement digest, which may be empty.',
+  1: `Format v1 hashes bind ${BASE_FIELDS}. They do not bind a link to a previous `
+    + 'event, even where the row records one, nor the payload, nor an agreement digest.',
+  2: `Format v2 hashes bind ${BASE_FIELDS}, and the link to the previous event. `
+    + 'They do not bind the payload or an agreement digest.',
+  3: `Format v3 hashes bind ${BASE_FIELDS}, the link to the previous event and the `
+    + 'recorded payload digest. They do not bind an agreement digest.',
+  4: `Format v4 hashes bind ${BASE_FIELDS}, the link to the previous event, the `
+    + 'recorded payload digest and the recorded agreement digest, which may be empty.',
+}
+
+/** How many returned events' formats bind a payload digest, do not, or are unknown. */
+function payloadBinding(events) {
+  const out = { included: 0, excluded: 0, unknown: 0 }
+  for (const ev of events) {
+    const { canonical_version: version, canonical_version_supported: supported } = ev.integrity
+    if (!supported || !COVERAGE_BY_FORMAT[version]) out.unknown++
+    else if (version >= 3) out.included++
+    else out.excluded++
+  }
+  return out
+}
+
+/**
+ * What the details shown under each entry are, and what can be said about them
+ * from here, by the formats present. They are the projection of the payload
+ * the server returned for this party. A digest bound by v3/v4 cannot generally
+ * be checked from that projection, which may or may not equal the full payload;
+ * v1/v2 hashes do not bind the payload at all.
+ */
+export function payloadProjectionNote(events) {
+  const { included, excluded, unknown } = payloadBinding(events)
+  const parts = ['The details shown under each entry are the projection of the recorded payload '
+    + 'the server returned for this party.']
+  if (included > 0) {
+    parts.push('Where a format binds a recorded payload digest (v3, v4), that digest cannot '
+      + 'generally be checked or recomputed from the projection; the payload check here is the server\'s.')
+  }
+  if (excluded > 0) parts.push('Format v1 and v2 hashes do not bind the payload, so those details are recorded but not covered by a hash.')
+  if (unknown > 0) parts.push('For a format this build does not recognise, whether the payload is bound is unknown.')
+  return parts.join(' ')
 }
 
 /**
@@ -292,27 +332,20 @@ const COVERAGE_BY_FORMAT = {
 export function coverageStatements(events) {
   const lines = []
   const supportedVersions = new Set()
-  let unknown = 0
-  let payloadIncluded = 0
-  let payloadExcluded = 0
   for (const ev of events) {
     const { canonical_version: version, canonical_version_supported: supported } = ev.integrity
-    if (!supported || !COVERAGE_BY_FORMAT[version]) { unknown++; continue }
-    supportedVersions.add(version)
-    if (version >= 3) payloadIncluded++
-    else payloadExcluded++
+    if (supported && COVERAGE_BY_FORMAT[version]) supportedVersions.add(version)
   }
+  const { included, excluded, unknown } = payloadBinding(events)
   for (const version of [...supportedVersions].sort()) lines.push(COVERAGE_BY_FORMAT[version])
   if (unknown > 0) {
     lines.push(`For ${plural(unknown, 'event')} in a format this build does not recognise, `
       + 'what the hash covers is unknown.')
   }
-  lines.push(`Payload digest: ${payloadIncluded} included in the hash format, `
-    + `${payloadExcluded} not included`
+  lines.push(`Payload digest: ${included} included in the hash format, `
+    + `${excluded} not included`
     + (unknown > 0 ? `, ${unknown} unknown.` : '.'))
-  lines.push('The details shown under each entry are the projection of the payload '
-    + 'the server returned for this party, so this page cannot check them against '
-    + 'the committed payload digest; the payload check above is the server\'s.')
+  lines.push(payloadProjectionNote(events))
   return lines
 }
 
