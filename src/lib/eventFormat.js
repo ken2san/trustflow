@@ -73,6 +73,11 @@ export function parseGuestEvidence(body) {
     if ('canonical' in ev && ev.canonical !== null && !isPlainObject(ev.canonical)) {
       return bad(`${at}.canonical`)
     }
+    // Rendered as key/value detail; anything but an object (or none) is not
+    // a payload this page knows how to show.
+    if ('payload' in ev && ev.payload !== null && !isPlainObject(ev.payload)) {
+      return bad(`${at}.payload`)
+    }
   }
   return { ok: true, version }
 }
@@ -98,13 +103,25 @@ export function formatPartition(events) {
 /**
  * Why a check returned null for one event. Null is the server saying it did
  * not or could not check, which is never a failure and never a pass.
+ *
+ * A reason is named only when the row's own fields establish it: the format
+ * for an unrecognised version or one whose hash excludes the payload, and an
+ * explicitly null recorded value for a missing hash, link or payload digest.
+ * Otherwise the reason is not stated, so a response whose fields disagree
+ * with its null cannot be read as "no hash recorded" while a hash is present.
  */
 function nullReason(kind, ev) {
   const { canonical_version: version, canonical_version_supported: supported } = ev.integrity
-  if (kind === 'chain_linked') return 'no_previous_link_recorded'
+  const recordedNull = (block, key) => isPlainObject(block) && key in block && block[key] === null
+  if (kind === 'chain_linked') {
+    return recordedNull(ev.integrity, 'prev_event_hash') ? 'no_previous_link_recorded' : 'reason_not_stated'
+  }
   if (!supported) return 'format_not_recognised'
-  if (kind === 'hash_valid') return 'no_hash_recorded'
-  return version < 3 ? 'format_excludes_payload' : 'no_payload_hash_recorded'
+  if (kind === 'hash_valid') {
+    return recordedNull(ev.integrity, 'event_hash') ? 'no_hash_recorded' : 'reason_not_stated'
+  }
+  if (version < 3) return 'format_excludes_payload'
+  return recordedNull(ev.canonical, 'payload_hash') ? 'no_payload_hash_recorded' : 'reason_not_stated'
 }
 
 const CHECKS = [
@@ -119,6 +136,7 @@ const REASON_TEXT = {
   no_previous_link_recorded: 'with no previous link recorded',
   format_excludes_payload:   'in a format whose hash does not cover the payload',
   no_payload_hash_recorded:  'with no payload digest recorded',
+  reason_not_stated:         'for a reason the response does not establish',
 }
 
 /** Per-check counts over the returned events, with the reason for each null. */
@@ -224,6 +242,78 @@ export function summaryPresentation(evidence) {
     : null
 
   return { scope, formatLine, checkLines, overall, truncationWarning }
+}
+
+/**
+ * Every row's check results, independent of the status below. The status keeps
+ * the 1.0 precedence, so a record with no event in format v2 or later reports
+ * that before any mismatch is examined, and VERIFIED is the server's boolean
+ * over v2+ rows only. A reader of the document needs the mismatches in every
+ * row whatever the status says (Codex 114, blocking 3).
+ */
+export function checkSummary(events) {
+  const outcomes = checkOutcomes(events)
+  const mismatched = events.filter(ev => TRI_STATE_CHECKS.some(k => ev.integrity[k] === false))
+  const counts = {}
+  for (const c of outcomes) {
+    counts[c.key] = { matched: c.matched, did_not_match: c.mismatched, not_checked: c.notChecked }
+  }
+  return {
+    scope: 'every event returned, in any hash format',
+    any_mismatch: mismatched.length > 0,
+    mismatched_event_ids: mismatched.map(ev => ev.id ?? null),
+    checks_not_run: outcomes.reduce((n, c) => n + c.notChecked, 0),
+    by_check: counts,
+  }
+}
+
+/** What the status does and does not cover, stated in the document beside it. */
+export const STATUS_NOTE =
+  'status keeps the order of earlier documents: NO_EVENTS_FORMAT_V2_OR_LATER is '
+  + 'reported before any mismatch is examined, then a hash, payload or link '
+  + 'mismatch in any event, then the server\'s verdict. That verdict, and so '
+  + 'VERIFIED, covers events in hash format v2 or later only, and can stand '
+  + 'beside checks that did not run. It is not a complete integrity '
+  + 'guarantee. check_summary reports every event\'s checks independently.'
+
+const COVERAGE_BY_FORMAT = {
+  1: 'Format v1 hashes cover the recorded event id, type, agreement id, actor, time and '
+    + 'completion-criteria digest, and record no link to a previous event.',
+  2: 'Format v2 hashes cover the same recorded fields plus a link to the previous event.',
+  3: 'Format v3 hashes also cover the recorded payload digest.',
+  4: 'Format v4 hashes also cover the recorded agreement digest, which may be empty.',
+}
+
+/**
+ * What the hashes of the returned events cover, by the formats actually
+ * present. Statements are about recorded inputs and the server's check; none
+ * says a value is true, who wrote it, or that it was never rewritten.
+ */
+export function coverageStatements(events) {
+  const lines = []
+  const supportedVersions = new Set()
+  let unknown = 0
+  let payloadIncluded = 0
+  let payloadExcluded = 0
+  for (const ev of events) {
+    const { canonical_version: version, canonical_version_supported: supported } = ev.integrity
+    if (!supported || !COVERAGE_BY_FORMAT[version]) { unknown++; continue }
+    supportedVersions.add(version)
+    if (version >= 3) payloadIncluded++
+    else payloadExcluded++
+  }
+  for (const version of [...supportedVersions].sort()) lines.push(COVERAGE_BY_FORMAT[version])
+  if (unknown > 0) {
+    lines.push(`For ${plural(unknown, 'event')} in a format this build does not recognise, `
+      + 'what the hash covers is unknown.')
+  }
+  lines.push(`Payload digest: ${payloadIncluded} included in the hash format, `
+    + `${payloadExcluded} not included`
+    + (unknown > 0 ? `, ${unknown} unknown.` : '.'))
+  lines.push('The details shown under each entry are the projection of the payload '
+    + 'the server returned for this party, so this page cannot check them against '
+    + 'the committed payload digest; the payload check above is the server\'s.')
+  return lines
 }
 
 /**

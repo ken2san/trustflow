@@ -372,9 +372,12 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   await expect(page.getByText('ui.actual@example.test', { exact: true }).first()).toBeVisible();
 
   // And it states what the hash covers without overstating it. These events are
-  // written under canonical v3 or later, so the detail fields are covered — and the view
-  // is explicit that a record of what was stated is not a finding that it is true.
-  await expect(page.getByText(/also covers the detail fields/i)).toBeVisible();
+  // written under canonical v3 or later, so their formats include the payload
+  // digest; the details shown are a projection the page cannot check against
+  // it, and the view says so. It is also explicit that a record of what was
+  // stated is not a finding that it is true.
+  await expect(page.getByText(/Payload digest: \d+ included in the hash format, 0 not included\./)).toBeVisible();
+  await expect(page.getByText(/cannot check them against the committed payload digest/)).toBeVisible();
   await expect(page.getByText(/does not establish that a statement is true/i)).toBeVisible();
 });
 

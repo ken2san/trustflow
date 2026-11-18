@@ -11,7 +11,7 @@ import { ShieldAlert, Clock, AlertTriangle, Download } from 'lucide-react';
 import { formatMinor, DEFAULT_CURRENCY } from '../../supabase/functions/_shared/money.ts';
 import { cancellationClaimLabel, claimantOfShapedActor } from '../lib/contractStatus.js';
 import {
-  formatLabel, rowCheckState, summaryPresentation, EARLIER_DOCUMENTS_NOTICE,
+  formatLabel, rowCheckState, summaryPresentation, coverageStatements, EARLIER_DOCUMENTS_NOTICE,
 } from '../lib/eventFormat.js';
 
 const TYPE_LABELS = {
@@ -164,9 +164,9 @@ function EventRow({ event }) {
         by <span className="text-slate-300">{claimant ?? 'a party'}</span>
       </p>
 
-      {Object.keys(event.payload).length > 0 && (
+      {Object.keys(event.payload ?? {}).length > 0 && (
         <dl className="mt-2 text-[11px] text-slate-400 space-y-0.5">
-          {Object.entries(event.payload).map(([key, value]) => (
+          {Object.entries(event.payload ?? {}).map(([key, value]) => (
             <div key={key} className="flex gap-2">
               <dt className="text-slate-400">{PAYLOAD_LABELS[key] ?? humanise(key)}</dt>
               <dd className="text-slate-400">
@@ -224,13 +224,14 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
   }
 
   const {
-    contract, events, chain,
+    contract, events,
     accepted_agreement: accepted,
     acceptance_identity: identity,
     terms_changed_since_acceptance: changed,
   } = evidence;
 
   const summary = summaryPresentation(evidence);
+  const coverage = coverageStatements(events);
   const changedTerms = (changed ?? []).map(key => TERM_LABELS[key] ?? key);
   const acceptedTerms = accepted ? describeAgreement(accepted) : [];
 
@@ -348,17 +349,19 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
       )}
 
       <div className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
-        <details><summary className="cursor-pointer">Details</summary><p>Each event's hash covers
-        the fields recorded for it in its hash format — its type, recorded time, recorded actor
-        and the agreement digest it carries — and links to the event before it. A hash that
-        recomputes shows those recorded fields agree with it; it does not show who wrote them,
-        when, or that they were never rewritten.</p></details>
-        {/* Stated from what the server reported, not assumed: a record containing
-            entries in formats that do not cover the payload cannot claim otherwise. */}
-        {chain.payload_covered_by_hash
-          ? <>It also covers the detail fields shown under each entry.</>
-          : <>It does <span className="text-slate-400">not</span> cover the detail fields shown under
-             every entry, so some of those are recorded but not covered.</>}
+        {/* Stated per hash format actually present, and about recorded inputs
+            and the server's check only. The earlier text said every hash
+            covered the agreement digest and a previous link (false below v4
+            and for v1), and that a true `payload_covered_by_hash` covered the
+            details SHOWN, which are a projection this page cannot check
+            (Codex 114). Coverage of an unrecognised format is unknown. */}
+        <ul className="space-y-0.5 mb-1">
+          {coverage.map(line => <li key={line}>{line}</li>)}
+        </ul>
+        <details><summary className="cursor-pointer">Details</summary>
+          <p>A hash that recomputes shows the recorded fields agree with it; it does not
+          show who wrote them, when, or that they were never rewritten.</p>
+        </details>
         {' '}Each entry's actor is the value recorded in the row; who actually acted is not
         established by this record. Times are as recorded and are not independently verified.
         TrustFlow keeps what was recorded as stated; it does not establish that a statement is true.
@@ -385,14 +388,15 @@ export default function GuestEvidenceView({ evidence, reason, onBack, onExport }
               on a screen whose last finding was exactly this. */}
           <details className="text-xs text-slate-400"><summary className="cursor-pointer">Details</summary><p>
             A copy of what is shown here, as a file you keep. Reading it needs
-            nothing from TrustFlow — and neither does checking it: each act
-            carries every input its hash was taken over, so you can recompute
-            the hashes and follow the chain yourself, without trusting the
-            verdicts in the file. What that does not settle: whether the detail
-            text shown under each act is what was committed — the hash covers
-            the whole payload and you are shown part of it — nor who the people
-            are, nor whether the work or the payment described actually
-            happened, nor that both sides were shown the same history.
+            nothing from TrustFlow. Where an act's canonical block is complete
+            and its hash format is one a verifier supports, you can recompute
+            its hash and follow the chain yourself, without trusting the
+            results in the file; the file lists any inputs that were not sent.
+            What that does not settle: whether the detail text shown under each
+            act is what was committed — the hash covers the whole payload and
+            you are shown part of it — nor who wrote an act or when, nor who
+            the people are, nor whether the work or the payment described
+            actually happened, nor that both sides were shown the same history.
           </p></details>
         </div>
       )}

@@ -457,6 +457,14 @@ nowhere):
     - visual-accessibility: 2 tests fail in both projects (`contracts home`, owner `record of agreement`), on contrast in files commit 1 does not touch (`ContractsHomeView.jsx:403`, `AgreementView.jsx:232`). Not fixed; the guest-record contrast test passes.
   - **Live `guest-evidence.spec.js`:** its UI wording assertion was edited to match, but it was **not run** (needs a separate OK).
   - **Not built:** commit 2 (function opt-in) and commit 3 (flip). Report: `.ada/claude-report-129.md`.
+- Claude Task 130 (Codex 114 fixes on commit 1; new local commit on top of `b4cbd52`, **not pushed**):
+  - The public docs now say response version 2, its errors and the flip are **planned, not deployed**; the deployed function returns v1 even with `?response_version=2`.
+  - The guest screen's hash wording is per format present, and payload coverage is per row.
+  - The guest document gains an all-row `verification.check_summary` and a `status_note` (status order unchanged).
+  - Null reasons are named only when established; payloads are validated; owner instructions 3-4 assign no cause; the snapshot absent-vs-null notes are distinct.
+  - New tests: `tests/unit/publishedResponseVersion.test.js`, `tests/unit/guestEvidenceCoverage.test.js`.
+  - **Results:** unit all pass. Stubbed E2E 35 passed / 5 failed: the 4 known contrast failures, plus `guest-path-capture` chromium hitting its 30 s budget at the final full-page screenshot in a ~5x slower run.
+  - Report: `.ada/claude-report-130.md`.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.

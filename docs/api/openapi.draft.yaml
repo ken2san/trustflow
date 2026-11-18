@@ -425,13 +425,17 @@ paths:
         - name: response_version
           in: query
           required: false
+          x-trustflow-status: planned
           description: |
-            `2` asks for response version 2 (see "Guest response versions" in
+            PLANNED, not deployed: the deployed function ignores this
+            parameter and returns unversioned version 1. Once shipped, `2`
+            asks for response version 2 (see "Guest response versions" in
             public/agent-protocol.md). Absent: version 1 until a later,
             announced release, then `400 response_version_required`. A
-            duplicate, empty or non-`2` value is `400 invalid_response_version`;
-            another integer is `400 unsupported_response_version`. Credential
-            refusals are checked first and are unchanged.
+            duplicate, empty or non-`2` value will be
+            `400 invalid_response_version`; another integer
+            `400 unsupported_response_version`. Credential refusals are
+            checked first and are unchanged.
           schema:
             type: integer
             enum: [2]
@@ -1423,18 +1427,24 @@ components:
         response_version:
           type: integer
           enum: [2]
-          description: Present only in version 2 bodies. Absent means version 1. A client must refuse any other value.
+          description: PLANNED, not deployed. Present only in version 2 bodies. Absent means version 1. A client must refuse any other value.
         chain:
           type: object
           properties:
             event_count:
               type: integer
+            server_attested:
+              type: integer
+              description: Version 1 (deployed). Events with canonical_version >= 2. Names the hash format only, not who wrote an event. Removed in version 2.
+            client_asserted:
+              type: integer
+              description: Version 1 (deployed). Events with canonical_version < 2. Removed in version 2.
             events_format_v2_or_later:
               type: integer
-              description: Version 2. Events with canonical_version >= 2, including unrecognised versions. Was `server_attested` in version 1, which named the format and never the writer.
+              description: PLANNED (version 2). Events with canonical_version >= 2, including unrecognised versions. Was `server_attested` in version 1, which named the format and never the writer.
             events_format_below_v2:
               type: integer
-              description: Version 2. Events with canonical_version < 2. Was `client_asserted` in version 1.
+              description: PLANNED (version 2). Events with canonical_version < 2. Was `client_asserted` in version 1.
             verified:
               type: boolean
               description: True only if every row carrying the material to be checked checks out. Rows with nothing to verify do not count as verified.

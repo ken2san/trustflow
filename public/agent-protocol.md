@@ -389,15 +389,31 @@ that the server showed both parties the same history.
 
 ### Guest response versions
 
-`guest-contract-events` answers in one of two shapes. Ask for version 2 with
-the query parameter `?response_version=2`; a version 2 body carries the integer
+**Status: version 2 is planned and not yet deployed.** The deployed
+`guest-contract-events` returns version 1 only. It ignores
+`?response_version=2` and answers that request with the same unversioned
+version 1 body, with no `response_version` field. Nothing below about version 2,
+its error codes or the later flip describes the current API; this section will
+say when the function release ships.
+
+**Until then, read version 1 with care.** Its `events[].integrity.trust_model`
+says `"server_attested"` for every event with `canonical_version` ≥ 2 and
+`"client_asserted"` below, and `chain.server_attested` / `chain.client_asserted`
+count the same thing. Those values name the hash format only. They do not
+identify who wrote an event: before 2026-09-24 any client could write that
+format, actor and time included. Version 1's `actor.role` and `actor.label`
+are derived from the recorded actor id and recorded payload fields, and are not
+verified either.
+
+Planned shape: a client will ask for version 2 with the query parameter
+`?response_version=2`; a version 2 body will carry the integer
 `"response_version": 2`, and a body without the field is version 1. A client
 must refuse any other `response_version` value, or a body it cannot validate,
 as an unsupported or invalid response — never read it as the nearest shape.
 Response versions are separate from the version strings of downloaded
 documents.
 
-Version 2 changes, against version 1:
+Planned version 2 changes, against version 1:
 
 - `events[].integrity.trust_model` is **removed**. It was set from the hash
   format alone (`server_attested` for `canonical_version` ≥ 2,
@@ -418,14 +434,16 @@ Version 2 changes, against version 1:
 - `chain.verified`, the per-event `hash_valid`, `chain_linked` and
   `substance_valid`, and the `canonical` blocks are unchanged.
 
-Errors are JSON `{"error": ...}`. Credential refusals (`missing_guest_token`,
+Planned errors, none of which the deployed function returns yet: errors are
+JSON `{"error": ...}`. Credential refusals (`missing_guest_token`,
 `invalid_guest_token`, `guest_token_expired`) come first and are unchanged. A
-duplicate, empty or non-`2` value is `400 invalid_response_version`; another
-integer is `400 unsupported_response_version`. A request without the
-parameter receives version 1 until a later release, announced here at least
-seven days ahead, after which it is refused with
-`400 response_version_required`. That is a deliberate interruption: a client
-reading version 1 field names from a version 2 body could misreport a record.
+duplicate, empty or non-`2` value will be `400 invalid_response_version`;
+another integer `400 unsupported_response_version`. After version 2 ships, a
+request without the parameter will keep receiving version 1 until a later
+release, announced here at least seven days ahead, after which it will be
+refused with `400 response_version_required`. That is a deliberate
+interruption: a client reading version 1 field names from a version 2 body
+could misreport a record.
 
 Documents downloaded from TrustFlow before guest record 2.0 and owner export
 2.0 contain the old labels: `trust_model` `"server_attested"` and the

@@ -86,12 +86,13 @@ Use **one** `Authorization: Bearer ...` header:
 4. **Record payment statements:** the receiver may use `payment.reported`;
    the performer may use `payment.acknowledged` or `payment.disputed` on the
    same `log-event` endpoint. TrustFlow does not process or verify payment.
-5. **Read evidence:** a guest uses
-   `POST /functions/v1/guest-contract-events?response_version=2` with the guest
-   header; no contract ID is needed. Requests without `response_version` get
-   the older version 1 shape for now and will later be refused; see "Guest
-   response versions" in the agent protocol. It returns a shaped record of up
-   to 500 oldest events; `chain.truncated` flags that the cap was reached
+5. **Read evidence:** a guest uses `POST /functions/v1/guest-contract-events`
+   with the guest header; no contract ID is needed. The deployed function
+   returns response version 1 only, and ignores `?response_version=2`; a
+   version 2 shape and a later refusal of unversioned requests are planned,
+   not deployed (see "Guest response versions" in the agent protocol). In
+   version 1, `trust_model: "server_attested"` names the hash format, not who
+   wrote an event. It returns a shaped record of up to 500 oldest events; `chain.truncated` flags that the cap was reached
    (including exactly 500, so more events may or may not exist) and there is no
    guest pagination. An owner can use `GET /rest/v1/events`
    with `contract_id=eq.<CONTRACT_ID>` and its account session; access is

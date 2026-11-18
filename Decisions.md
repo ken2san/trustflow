@@ -17,7 +17,7 @@ _Last updated: 2026-11-18_
 
 ### [2026-11-18] — Event labels state the hash format, never the writer; guest response version 2
 
-**Decision, by the owner** (rank 1 of Codex 109; plan `.ada/claude-report-128.md`, reviewed by Codex 110-113; D1-D5 decided 2026-11-18). **Status:** commit 1 (frontend, both exports, public docs) built locally in Task 129, not pushed. The function's version 2 (commit 2) and the later flip (commit 3) are not built.
+**Decision, by the owner** (rank 1 of Codex 109; plan `.ada/claude-report-128.md`, reviewed by Codex 110-113; D1-D5 decided 2026-11-18). **Status:** commit 1 (frontend, both exports, public docs) built locally in Tasks 129-130 (Codex 114 fixes), not pushed. The public docs describe response version 2 as planned, not deployed. The function's version 2 (commit 2) and the later flip (commit 3) are not built.
 
 - `trust_model` (`server_attested` / `client_asserted`) was set from `hash_version >= 2` alone, and read as authorship. Before the 2026-09-24 lockdown any client could write that format, actor and time included. It is **removed**, not aliased. Readers use `canonical_version` for the format; no field claims a writer, and `provenance` is `unknown` until a server-recorded marker exists (a separate, reviewed task).
 - **Opt-in, then flip (D1, D2):** `?response_version=2` returns version 2; a request without it gets version 1 until a release announced at least 7 days ahead (D3), then `400 response_version_required`. Old clients never parse version 2.

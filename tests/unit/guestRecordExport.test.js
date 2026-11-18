@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildGuestRecordDocument } from '../../src/lib/guestRecordExport.js'
 import { CANONICAL_INPUTS } from '../../supabase/functions/_shared/guestEventView.ts'
+import { stableStringify, sha256Hex } from '../../supabase/functions/_shared/eventCanonical.ts'
 
 // What these tests guard is mostly what the document CLAIMS. A copy that
 // overstated the server's checks, or quietly dropped the fact that it was
@@ -113,7 +114,11 @@ describe('the counterparty record document', () => {
 
   it('splits what the reader can recompute from what they cannot', () => {
     const text = JSON.stringify(rec(v1Evidence()).what_this_document_is)
-    expect(text).toMatch(/recompute each hash of a supported format and follow the chain offline/)
+    // Conditional: a null or incomplete canonical block cannot be recomputed.
+    expect(text).toMatch(/Where an act below carries a complete `canonical` block/)
+    expect(text).toMatch(/recompute the hash of a supported format and follow the chain offline/)
+    expect(text).toMatch(/whose block is null, or whose `canonical_missing` lists inputs that were not sent, cannot be recomputed/)
+    expect(text).toMatch(/copy of the projection the server returned for this party, not filtered again here/)
     expect(text).toMatch(/payload digest CANNOT be reproduced/)
     expect(text).toMatch(/substance_valid.*server's word/)
     expect(text).toMatch(/does not show who wrote an act, when it was actually written, or that the record was never rewritten/)
@@ -229,7 +234,26 @@ describe('recorded values are kept as received', () => {
     expect(doc.accepted_agreement).toEqual(snapshot)
     expect(doc.accepted_agreement).not.toBe(snapshot)
     expect(doc.accepted_agreement_note).toMatch(/does not check it against any hash/)
-    expect(rec(v1Evidence({ accepted_agreement: null })).accepted_agreement).toBeNull()
+  })
+
+  it('recomputes to the same digest as the snapshot it was given, unknown version included', async () => {
+    // The byte claim, checked: the agreement digest is taken over the stable
+    // serialization of the whole snapshot, so the copy must hash identically.
+    const snapshot = { snapshot_version: 7, amount: 1, dod: ['a', 'b'], novel_term: { nested: ['x', null] } }
+    const doc = rec(v1Evidence({ accepted_agreement: snapshot }))
+    expect(await sha256Hex(stableStringify(doc.accepted_agreement)))
+      .toBe(await sha256Hex(stableStringify(snapshot)))
+  })
+
+  it('tells a record with no snapshot from a response without the field', () => {
+    const none = rec(v1Evidence({ accepted_agreement: null }))
+    expect(none.accepted_agreement).toBeNull()
+    expect(none.accepted_agreement_note).toMatch(/The record has no accepted snapshot/)
+    const body = v1Evidence()
+    delete body.accepted_agreement
+    const absent = rec(body)
+    expect(absent.accepted_agreement).toBeNull()
+    expect(absent.accepted_agreement_note).toMatch(/did not include an accepted snapshot field/)
   })
 
   it('keeps the authentication record raw and says it is not verified', () => {
@@ -302,6 +326,47 @@ describe('verification', () => {
     expect(v.truncated).toBe(true)
     expect(v.truncation_note).toMatch(/Additional events may exist and were not checked here/)
     expect(rec(v1Evidence()).verification.truncation_note).toBeNull()
+  })
+})
+
+describe('check_summary: every row, beside a status with limited precedence', () => {
+  const withRows = (rows, chain = {}) => rec(v1Evidence({
+    events: rows.map((i, n) => ({ ...v1Evidence().events[0], id: `e${n}`, integrity: i })),
+    chain: { ...v1Evidence().chain, ...chain },
+  })).verification
+
+  it('reports a v1-only mismatch the status does not reach', () => {
+    const v = withRows([integrity({ canonical_version: 1, hash_valid: false, chain_linked: null, substance_valid: null })],
+      { verified: false })
+    expect(v.status).toBe('NO_EVENTS_FORMAT_V2_OR_LATER')
+    expect(v.check_summary.any_mismatch).toBe(true)
+    expect(v.check_summary.mismatched_event_ids).toEqual(['e0'])
+  })
+
+  it('reports a v1 mismatch beside a v2 row that passed', () => {
+    const v = withRows([
+      integrity({ canonical_version: 1, hash_valid: false, chain_linked: null, substance_valid: null }),
+      integrity(),
+    ], { verified: true })
+    expect(v.server_verdict).toBe(true)
+    expect(v.check_summary.any_mismatch).toBe(true)
+    expect(v.check_summary.mismatched_event_ids).toEqual(['e0'])
+    expect(v.check_summary.by_check.hash_valid).toEqual({ matched: 1, did_not_match: 1, not_checked: 0 })
+  })
+
+  it('reports a payload-only mismatch', () => {
+    const v = withRows([integrity({ substance_valid: false })], { verified: false })
+    expect(v.status).toBe('PAYLOAD_MISMATCH_DETECTED')
+    expect(v.check_summary.by_check.substance_valid.did_not_match).toBe(1)
+  })
+
+  it('shows checks that did not run next to VERIFIED, and says VERIFIED is not complete', () => {
+    const v = withRows([integrity({ substance_valid: null }), integrity({ chain_linked: null })], { verified: true })
+    expect(v.status).toBe('VERIFIED')
+    expect(v.check_summary.any_mismatch).toBe(false)
+    expect(v.check_summary.checks_not_run).toBe(2)
+    expect(v.status_note).toMatch(/NO_EVENTS_FORMAT_V2_OR_LATER is reported before any mismatch is examined/)
+    expect(v.status_note).toMatch(/It is not a complete integrity guarantee/)
   })
 })
 

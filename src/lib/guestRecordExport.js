@@ -43,8 +43,8 @@
 
 import { CANONICAL_INPUTS, guestVerificationNotesV2 } from '../../supabase/functions/_shared/guestEventView.ts'
 import {
-  parseGuestEvidence, formatPartition, guestChainStatus,
-  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE,
+  parseGuestEvidence, formatPartition, guestChainStatus, checkSummary,
+  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE, STATUS_NOTE,
 } from './eventFormat.js'
 
 const DOCUMENT_VERSION = '2.0'
@@ -145,9 +145,9 @@ export function buildGuestRecordDocument(evidence) {
       // document draws the wrong conclusion from it.
       what_this_document_is: [
         'A copy of the record TrustFlow holds for this agreement, as released to the counterparty.',
-        'Each act below carries a `canonical` block: the inputs its event_hash is computed over, as recorded. From those a reader can recompute each hash of a supported format and follow the chain offline, with no access to TrustFlow and no need to trust the results in this file. Inputs listed in `canonical_missing` were not sent, so that act cannot be recomputed.',
+        'Where an act below carries a complete `canonical` block, it holds the inputs its event_hash is computed over, as recorded, and a reader can recompute the hash of a supported format and follow the chain offline, with no access to TrustFlow and no need to trust the results in this file. An act whose block is null, or whose `canonical_missing` lists inputs that were not sent, cannot be recomputed from this file.',
         'A hash that recomputes shows the recorded fields agree with it. It does not show who wrote an act, when it was actually written, or that the record was never rewritten.',
-        'The payload digest CANNOT be reproduced from this file. One digest covers each whole payload, and the detail shown here is filtered to what this party may see, so recomputing it would not match on an untampered record any more than on a tampered one. `substance_valid` below is the server\'s word for that check, not a result a reader can repeat.',
+        'The payload digest CANNOT be reproduced from this file. One digest covers each whole payload, and the detail here is a copy of the projection the server returned for this party, not filtered again here, so recomputing the digest would not match on an untampered record any more than on a tampered one. `substance_valid` below is the server\'s word for that check, not a result a reader can repeat.',
         'The check results below were computed by the TrustFlow server against the complete stored rows. Where a reader can repeat a check and disagrees, the reader is right.',
         'TrustFlow keeps what was recorded as stated in each act. It does not establish who made a statement, that it is true, who the parties are, or that any work or payment happened.',
       ],
@@ -160,6 +160,11 @@ export function buildGuestRecordDocument(evidence) {
         // cover every row.
         server_verdict: chain.verified,
         status:         guestChainStatus(events, chain),
+        status_note:    STATUS_NOTE,
+        // Every row's results, independent of the status's precedence: a
+        // mismatch in an older-format row is here even when the status
+        // reports NO_EVENTS_FORMAT_V2_OR_LATER or VERIFIED.
+        check_summary:  checkSummary(events),
         event_count:    events.length,
         events_format_v2_or_later:  partition.v2OrLater,
         events_format_below_v2:     partition.belowV2,
@@ -180,12 +185,17 @@ export function buildGuestRecordDocument(evidence) {
       // What was ACCEPTED, taken from the acceptance event rather than from the
       // agreement row, which may legitimately have moved on since. Kept whole,
       // as received: the snapshot is hashed as one object, so dropping a key or
-      // an unknown version would change what it is. Null for agreements
-      // accepted before the snapshot existed — absent, not reconstructed.
+      // an unknown version would change what it is. Null here can mean either
+      // that the record has no snapshot or that the response did not include
+      // the field; the note says which, rather than collapsing the two.
       accepted_agreement: evidence.accepted_agreement === undefined
         ? null
         : copyJson(evidence.accepted_agreement),
-      accepted_agreement_note: 'Copied as the server returned it. This file does not check it against any hash.',
+      accepted_agreement_note: !('accepted_agreement' in evidence)
+        ? 'The response did not include an accepted snapshot field. Nothing was reconstructed.'
+        : evidence.accepted_agreement === null
+          ? 'The record has no accepted snapshot (an agreement accepted before snapshots existed). Nothing was reconstructed.'
+          : 'Copied as the server returned it. This file does not check it against any hash.',
 
       // Terms on which the current row and the accepted snapshot disagree.
       // Empty when they still match; null when there is no snapshot to compare
@@ -237,8 +247,10 @@ export function buildGuestRecordDocument(evidence) {
         actor:      actorOf(ev, parsed.version),
         // No event carries per-event evidence of who wrote it.
         provenance: { writer: 'unknown', basis: 'none_recorded' },
-        // Filtered by the server to what this party may see — which is exactly
-        // why the payload digest cannot be recomputed from it. Values as received.
+        // A copy of the projection the server already returned for this party
+        // (the server is the disclosure boundary; nothing is filtered again
+        // here) — which is exactly why the payload digest cannot be recomputed
+        // from it. Values as received.
         payload:    ev.payload === undefined ? null : copyJson(ev.payload),
         dod_hash:   ev.dod_hash ?? null,
         ...canonicalOf(ev),

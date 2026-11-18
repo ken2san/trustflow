@@ -298,6 +298,10 @@ describe('audit document verification', () => {
     expect(mentions[0]).toMatch(/Exports before version 2\.0/)
     // A digest is recorded and compared, not proof the text never changed.
     expect(instructions).not.toMatch(/proves the Definition of Done text was not modified/)
+    // A mismatch or a broken link is reported without assigning a cause.
+    expect(instructions).not.toMatch(/indicates that event was altered|indicates an event was deleted/)
+    expect(instructions).toMatch(/cannot say why — alteration, damage and a recording error look the same/)
+    expect(instructions).toMatch(/and so can a recording error/)
   })
 })
 

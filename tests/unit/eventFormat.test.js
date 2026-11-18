@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseGuestEvidence, formatPartition, checkOutcomes, summaryPresentation,
-  guestChainStatus, rowCheckState, formatLabel,
+  guestChainStatus, rowCheckState, formatLabel, coverageStatements, checkSummary,
 } from '../../src/lib/eventFormat.js'
 
 // What a guest is told about their record, and when they are told nothing.
@@ -80,6 +80,13 @@ describe('parseGuestEvidence: a response is understood whole or refused', () => 
     expect(parseGuestEvidence(evidence([{ ...ev('a'), canonical: null }])).ok).toBe(true)
   })
 
+  it('refuses a payload that is not an object, and accepts none or null', () => {
+    expect(parseGuestEvidence(evidence([{ ...ev('a'), payload: 'text' }])).reason).toBe('events[0].payload')
+    expect(parseGuestEvidence(evidence([{ ...ev('a'), payload: ['x'] }])).reason).toBe('events[0].payload')
+    expect(parseGuestEvidence(evidence([{ ...ev('a'), payload: null }])).ok).toBe(true)
+    expect(parseGuestEvidence(evidence([ev('a')])).ok).toBe(true)
+  })
+
   it('accepts a well-formed record with no events', () => {
     expect(parseGuestEvidence(evidence([])).ok).toBe(true)
   })
@@ -143,16 +150,33 @@ describe('summaryPresentation: every sentence from the row results', () => {
     expect(s.overall).toEqual({ tone: 'none', text: 'No check that ran found a mismatch. 3 checks could not run.' })
   })
 
-  it('separates the reasons a check returned null', () => {
+  it('names a null reason only when the row\'s own fields establish it', () => {
     const s = summaryPresentation(evidence([
-      ev('g', { canonical_version: 1, hash_valid: null, chain_linked: null, substance_valid: null }),
+      ev('g', { canonical_version: 1, hash_valid: null, chain_linked: null, substance_valid: null,
+        event_hash: null, prev_event_hash: null }),
       ev('v2', { canonical_version: 2, chain_linked: true, substance_valid: null }),
-      ev('v4', { substance_valid: null }),
+      { ...ev('v4', { substance_valid: null }), canonical: { payload_hash: null } },
     ]))
     expect(s.checkLines[0]).toMatch(/1 not checked \(1 with no hash recorded\)/)
     expect(s.checkLines[1]).toMatch(/1 not checked \(1 with no previous link recorded\)/)
     expect(s.checkLines[2]).toMatch(
       /3 not checked \(2 in a format whose hash does not cover the payload, 1 with no payload digest recorded\)/)
+  })
+
+  it('does not invent a reason the response contradicts', () => {
+    // A hash, a link and a payload digest are all present, yet each check is
+    // null: shape-valid but inconsistent. "No hash recorded" would be false.
+    const s = summaryPresentation(evidence([{
+      ...ev('x', { hash_valid: null, chain_linked: null, substance_valid: null,
+        event_hash: 'abc', prev_event_hash: 'def' }),
+      canonical: { payload_hash: 'ph' },
+    }]))
+    for (const line of s.checkLines) {
+      expect(line).toMatch(/1 not checked \(1 for a reason the response does not establish\)/)
+    }
+    // Fields absent altogether establish nothing either.
+    const bare = summaryPresentation(evidence([ev('y', { hash_valid: null })]))
+    expect(bare.checkLines[0]).toMatch(/for a reason the response does not establish/)
   })
 
   it('reports a failure among events with no v2-or-later format at all', () => {
@@ -262,5 +286,72 @@ describe('guestChainStatus matches the 1.0 status, renaming only its first state
   it('puts zero v2-or-later rows ahead of any failure, as 1.0 did', () => {
     const rows = [v1Row(1, false, null, false)]
     expect(guestChainStatus(rows, v1Chain(rows, false, false))).toBe('NO_EVENTS_FORMAT_V2_OR_LATER')
+  })
+})
+
+describe('coverageStatements: what the hashes cover, per format present', () => {
+  const at = (version, supported = true) => ev(String(version), {
+    canonical_version: version, canonical_version_supported: supported,
+  })
+
+  it('says v1 records no previous link and covers no agreement digest', () => {
+    const lines = coverageStatements([at(1)])
+    expect(lines[0]).toMatch(/^Format v1 hashes cover .*and record no link to a previous event\./)
+    expect(lines.join(' ')).not.toMatch(/agreement digest/)
+    expect(lines).toContain('Payload digest: 0 included in the hash format, 1 not included.')
+  })
+
+  it('adds only what each present format adds', () => {
+    const lines = coverageStatements([at(2), at(4)])
+    expect(lines).toContain('Format v2 hashes cover the same recorded fields plus a link to the previous event.')
+    expect(lines).toContain('Format v4 hashes also cover the recorded agreement digest, which may be empty.')
+    expect(lines.join(' ')).not.toMatch(/Format v1|Format v3/)
+    expect(lines).toContain('Payload digest: 1 included in the hash format, 1 not included.')
+  })
+
+  it('calls an unrecognised format\'s coverage unknown, not absent', () => {
+    const lines = coverageStatements([at(4), at(9, false), at(0, false)])
+    expect(lines).toContain('For 2 events in a format this build does not recognise, what the hash covers is unknown.')
+    expect(lines).toContain('Payload digest: 1 included in the hash format, 0 not included, 2 unknown.')
+  })
+
+  it('always says the shown details are a projection this page cannot check', () => {
+    for (const rows of [[at(4)], [at(1)], [at(9, false)], []]) {
+      expect(coverageStatements(rows).at(-1)).toMatch(/cannot check them against the committed payload digest/)
+    }
+  })
+})
+
+describe('checkSummary: every row, whatever the status says', () => {
+  const rows = (...specs) => specs.map(([id, over]) => ev(id, over))
+
+  it('reports a v1-only mismatch the status puts behind NO_EVENTS_FORMAT_V2_OR_LATER', () => {
+    const events = rows(['old', { canonical_version: 1, hash_valid: false, chain_linked: null, substance_valid: null }])
+    expect(guestChainStatus(events, { verified: false })).toBe('NO_EVENTS_FORMAT_V2_OR_LATER')
+    const c = checkSummary(events)
+    expect(c.any_mismatch).toBe(true)
+    expect(c.mismatched_event_ids).toEqual(['old'])
+    expect(c.by_check.hash_valid).toEqual({ matched: 0, did_not_match: 1, not_checked: 0 })
+  })
+
+  it('reports a v1 mismatch beside a passing v2 row the server verified', () => {
+    const events = rows(['old', { canonical_version: 1, hash_valid: false, chain_linked: null, substance_valid: null }], ['new', {}])
+    const c = checkSummary(events)
+    expect(c.any_mismatch).toBe(true)
+    expect(c.mismatched_event_ids).toEqual(['old'])
+  })
+
+  it('reports a payload-only mismatch', () => {
+    const c = checkSummary(rows(['p', { substance_valid: false }]))
+    expect(c.any_mismatch).toBe(true)
+    expect(c.by_check.substance_valid.did_not_match).toBe(1)
+    expect(c.by_check.hash_valid.did_not_match).toBe(0)
+  })
+
+  it('counts checks that did not run, without calling them mismatches', () => {
+    const c = checkSummary(rows(['u', { canonical_version: 9, canonical_version_supported: false,
+      hash_valid: null, chain_linked: null, substance_valid: null }]))
+    expect(c.any_mismatch).toBe(false)
+    expect(c.checks_not_run).toBe(3)
   })
 })
