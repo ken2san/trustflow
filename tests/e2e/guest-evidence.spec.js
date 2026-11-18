@@ -361,16 +361,15 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   // who recomputed it, so the assertion follows — and it asserts the actor,
   // which is the part that was missing, not the phrasing.
   await expect(page.getByText(/TrustFlow recomputed every server-attested event/i)).toBeVisible();
-  // The trail says who acted, in readable terms rather than raw ids. The name
-  // also appears in the header ("… — with UI Flow Earner") and again on each
-  // trail entry ("by UI Flow Earner"), so this is scoped to the trail list. It
-  // previously matched both and failed strict mode; the assertion was wrong
-  // rather than the page.
-  await expect(page.locator('ol').getByText('UI Flow Earner', { exact: true }).first())
-    .toBeVisible();
-  // And the guest's own entry is attributed to them. The address shows twice —
-  // as the actor label and as the allowlisted counterparty_email detail — so
-  // this asserts presence rather than uniqueness.
+  // The trail names no one: no event carries server-recorded provenance, so
+  // every entry reads "by a party", the earner's and the guest's alike
+  // (Decisions.md, option A, since 231dbc2). The earner's name still shows in
+  // the header ("… — with UI Flow Earner"); that is the contract, not a claim
+  // about who wrote an event, so this is scoped to the trail list.
+  await expect(page.locator('ol').getByText('by a party', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('ol').getByText(/^by (?!a party$)/)).toHaveCount(0);
+  // The guest's address is recorded as the allowlisted counterparty_email
+  // detail of their acceptance, not as an attribution.
   await expect(page.getByText('ui.actual@example.test', { exact: true }).first()).toBeVisible();
 
   // And it states what the hash covers without overstating it. These events are

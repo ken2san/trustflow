@@ -412,6 +412,29 @@ nowhere):
   - TF901 gained `has_any_column_privilege` checks (REFERENCES on every table; INSERT/UPDATE on payout profiles).
   - Local edge cases pass: column grants planted before a fresh apply were removed and the final catalog equals Task 117's; a column grant planted after the revokes was caught with full rollback.
   - New throwaway script `/tmp/tf117/colprobe.sql`. **Not applied to E2E/production; not pushed.** Report: `.ada/claude-report-119.md`.
+- Claude Task 120 (E2E apply of `20261118010000`): **blocked before any DB command.**
+  - Task 107 got the E2E DB password only via `op read`. This task forbids that, and there are no `PG*`/`SUPABASE_*` env vars and no `~/.pgpass`.
+  - CLI confirmed as `/opt/homebrew/bin/supabase` 2.105.0.
+  - Nothing applied, no push, no production command, no tools created. Options A/B/C are in `.ada/claude-report-120.md`.
+- Claude Task 121 (Kenji approved one `op read`): `20261118010000_close_client_default_privileges.sql` **applied to E2E only** (`yqjtawffpesplqyurlpj`), CLI 2.105.0.
+  - The dry run listed only that file; the push exited 0 (self-test TF901-905 passed).
+  - Read-only post-check: all PASS. The A0 before/after diff shows only the targeted grant and default-ACL changes. E2E history ends at `20261118010000`.
+  - Throwaway files, not in the repo: `/tmp/tf121/` (`post.py`, `a0-before.txt`, `a0-after.txt`).
+  - **Production NOT applied. `7fb5925` not pushed** (each needs Kenji's OK). Report: `.ada/claude-report-121.md`.
+- Claude Task 122: ran only the live guest/event/agreement E2E specs against E2E after `20261118010000`: `guest-evidence`, `guest-credential`, `event-ingestion` and `agreement-binding` (chromium, `--workers=1`). **41 passed, 1 failed.**
+  - The failure is `guest-evidence.spec.js:296` (line 370 expects "UI Flow Earner" in the trail). This is a **stale assertion** from `231dbc2`, after which every trail row reads "by a party". It's unrelated to the revokes, and every earlier read/accept step in that test passed.
+  - The test fix is open, as a separate task. No code was changed, no production, no push.
+  - HANDOFF is uncommitted (a commit runs the test gate). Log: `/tmp/tf122-run.txt`. Report: `.ada/claude-report-122.md`.
+- Claude Task 123 (Kenji approved 2026-11-18 09:21 ET): `20261118010000_close_client_default_privileges.sql` **applied to production** (`fqgpzhwvvfsxswlnbbgg`), CLI 2.105.0, one `op read` → `PGPASSWORD` only.
+  - The dry run listed only that file; the push exited 0 (self-test passed).
+  - Read-only post-check: 7/7 PASS. The A0 before→after diff is identical to E2E's. The after-states match apart from E2E-only realtime memberships.
+  - `smoke:prod` 16/16 ok. **Both projects now have the migration.**
+  - Rollback SQL (not run) is in the report; the pre-state is in `/tmp/tf123/a0-before.txt`.
+  - **`7fb5925` still not pushed** (needs Kenji's OK). HANDOFF is uncommitted (test gate). Report: `.ada/claude-report-123.md`.
+- Claude Task 124 (plan only, no code): planned the rank-1 provenance fix (Codex T109). Report: `.ada/claude-report-124.md`.
+  - Split `trust_model` into hash format (`canonical_version`) and authorship (`provenance: unknown` until the `server_asserted_v1` marker exists), keeping every `verified` verdict unchanged.
+  - Also covers the UI badge, the owner and guest exports, `describeActor` and the protocol. No DB change.
+- Claude Task 125: `guest-evidence.spec.js` now expects the trail to read "by a party" and to carry no other byline, instead of the earner's name (stale since `231dbc2`). The spec ran alone against E2E, 13/13. Report: `.ada/claude-report-125.md`.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.
