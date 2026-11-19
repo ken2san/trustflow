@@ -21,6 +21,14 @@ vi.mock('../../src/lib/guestSession.js', () => ({ getGuestAccessToken: vi.fn(() 
 const { deleteDraftContract } = await import('../../src/lib/contracts.js')
 
 describe('deleteDraftContract', () => {
+  it('maps a grant retention refusal to an actionable error', async () => {
+    response = { error: { code: 'TF007', message: 'grant refusal' }, count: null }
+    expect(await deleteDraftContract('c1')).toEqual({
+      deleted: false,
+      error: { code: 'TF007', message: 'This draft has credential grants and must be retained, even after they expire or are revoked.' },
+      reason: 'has_grants',
+    })
+  })
   it('reports the evidence refusal as a reason, not an error', async () => {
     response = { error: { code: 'TF004', message: 'contract … carries evidence' }, count: null }
     expect(await deleteDraftContract('c1')).toEqual({

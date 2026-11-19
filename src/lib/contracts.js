@@ -395,6 +395,11 @@ export async function deleteDraftContract(contractId) {
   // TF004 is the race's refusal, not a failure of the request. Named so the
   // caller can say "it has evidence now" rather than "something went wrong".
   if (error?.code === 'TF004') return { deleted: false, error: null, reason: 'has_evidence' }
+  if (error?.code === 'TF007') return {
+    deleted: false,
+    error: { code: 'TF007', message: 'This draft has credential grants and must be retained, even after they expire or are revoked.' },
+    reason: 'has_grants',
+  }
   if (error) return { deleted: false, error }
   return { deleted: (count ?? 0) > 0, error: null, reason: null }
 }
