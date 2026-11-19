@@ -14,6 +14,12 @@ it. Keep the line above accurate or that check becomes theatre.
 `Decisions.md` is the source of truth for decisions. If this file disagrees with
 it, this file is wrong.
 
+**Rule (Kenji, 2026-11-18, `Decisions.md`):** the first deal runs through bot
+simulations, with bots acting as the parties. "We can't design without real deals
+or real users" is wrong. Never use it as a reason to wait, or to defer design,
+the entry path or the roadmap. Older lines here that say otherwise are marked
+superseded.
+
 ---
 
 ## What TrustFlow is
@@ -482,6 +488,26 @@ nowhere):
   - **Still open before push:** the 4 contrast failures (Kenji: baseline vs two-class fix), a live `guest-evidence` run (needs OK), and Codex re-review. Report: `.ada/claude-report-133.md`.
 - Claude Task 134 (Kenji chose the fix): contrast `text-slate-600`→`text-slate-400` (`ContractsHomeView.jsx:403`) and `text-slate-500`→`text-slate-400` (`AgreementView.jsx:232` back button). Stubbed `visual-accessibility` 6/6; local commit, not pushed. Report: `.ada/claude-report-134.md`.
 - Codex Task 118: clarify which checks the guest screen counts and which digest comparisons need separate verification; commit: this line's commit (`git log -1 -- HANDOFF.md`).
+- Claude Task 136 (Kenji OK, run only): live `guest-evidence.spec.js` against E2E (`yqjtawffpesplqyurlpj`) on `eee0889`, chromium, `--workers=1`, run once: **13 passed, 0 failed** (1.3 min). No DB password, no code change, no push. Log: `/tmp/tf136-run.txt`. Report: `.ada/claude-report-136.md`.
+- Claude Task 137 (Kenji OK 16:20 ET): normal push `7a237f7..eee0889` (6 commits `b4cbd52`..`eee0889`) to origin/main, exit 0. Vercel status right after: pending ("deploying"). Report: `.ada/claude-report-137.md`.
+- Claude Task 138 (review only): light review of Codex's production-flow spine plan `.ada/codex-report-120.md`. Agree with the order and with step 1 first; ship AI2Human first, keep the guest bearer as a supervised pilot, and recommend a guest-derived delegation as the AI2AI issuer. Report: `.ada/claude-report-138.md`.
+- Claude Task 139 (light review of `75a1c3f` `docs/entry-contract.md`): **fix-first**, 2 blockers. (1) Persist the counterpart account on the deal at acceptance, so post-acceptance grants have a binding. (2) The issuer account must not be the deal owner (otherwise the owner can be their own counterpart). Report: `.ada/claude-report-139.md`.
+- Codex Task 122: defined the first-deal entry contract, including Kenji's counterpart-account issuer choice, in `docs/entry-contract.md`; design only, pending cross-review. Report: `.ada/codex-report-122.md`.
+- Claude Task 140: `Roadmap.md` rebuilt from this file as the canonical roadmap (spine: entry path first; payment parked). Uncommitted. Report: `.ada/claude-report-140.md`.
+- Claude Task 141: design reset. Draft `docs/minimum-usable-design.md` (minimum, trunk state, contradictions, work breakdown); "Next Priority" replaced; scoped-key note superseded. Step-2 code on hold. Uncommitted. Report: `.ada/claude-report-141.md`.
+- Claude Task 142: recorded the rule that the first deal runs through bot simulations and that design never waits for real deals (`Decisions.md` 2026-11-18). Older wait-for-real-users lines are marked superseded, and `Roadmap.md` and `docs/minimum-usable-design.md` are reworded. Docs only, uncommitted. Report: `.ada/claude-report-142.md`.
+- Claude Task 143: recorded Kenji's C1-C3 and the issuance-UI decision (`Decisions.md` 2026-11-19); `docs/minimum-usable-design.md` marks them resolved and piece 4 required; the agent-first-access proposal and `codex-report-121` hash line are marked superseded. Docs only, uncommitted. Report: `.ada/claude-report-143.md`.
+- Codex Task 124: reviewed the minimum design and set the dated baseline in `docs/schedule.md`; M1 2026-12-01, M2 2026-12-02, M3 2026-12-10, M4 2026-12-11. C5 create-path conflict remains explicit; Task 123 code stays on hold. Report: `.ada/codex-report-124.md`.
+- Codex Task 125: C5 requires server-side create and closing direct inserts; C3 applies to RLS email matching, no `issuer_assurance`, credential ID inside v5 hash. Baseline rev 2 is in `docs/schedule.md`; a minimum-design follow-up patch failed and was not retried, leaving stale sections to correct. Task 123 code remains on hold. Report: `.ada/codex-report-125.md`.
+- Claude Task 144: reconciled `docs/minimum-usable-design.md` with schedule rev 2 (Codex 125's failed patch). The breakdown follows the schedule IDs with the resolver kept as 4a, the C3 email paragraph is corrected (RLS included), and proposals (a)-(c) are added as PROPOSED, pending Kenji. Mismatch: the schedule gives resolver + append 1d total. Docs only, uncommitted. Report: `.ada/claude-report-144.md`.
+- Claude Task 145: recorded Kenji's (a)-(c) (`Decisions.md` 2026-11-19): (b) grant evidence kept, and a draft with any grant cannot be deleted; (c) v5 fixed order + `hash_version` + domain separator; (a) creation snapshot deferred. `docs/schedule.md` is now baseline rev 3: row 4 is 2d, M1 2026-12-04, M2 12-07, M3 12-15, M4 12-16 (+1 working day vs rev 2). Design and Roadmap updated. Docs only, uncommitted. Report: `.ada/claude-report-145.md`.
+- Claude Task 146: recorded Kenji's whole-design sign-off (`Decisions.md` 2026-11-19): design CONFIRMED, execution authorized in schedule rev 3 order. Row 0 started 11-19 (Codex Task 126), on schedule (0 days). The account-deletion FK and pre-acceptance snapshot risks stay open. Docs only, uncommitted. Report: `.ada/claude-report-146.md`.
+- Codex Task 128: added repeatable local two-session race tests and SQL owner/privilege/refusal tests; SQL, 775 unit tests and build passed. REST/GraphQL endpoint bypass coverage and parts of the full race matrix remain; row 1 is not complete. Report: `.ada/codex-report-128.md`.
+- Codex Task 127: row 1 implementation and local tests are uncommitted; issuance remains off. Grant retention and locked delete refusal are implemented; additional race coverage and Claude light review remain. No E2E or production changes. Report: `.ada/codex-report-127.md`.
+- Claude Task 147: row 0 light review of Codex T126; row 0 closed 2026-11-19 (on schedule). The v5 preimage is marked open for row 3 (13-key candidate = proposal only; C2 payload-vs-top-level open), and the row 1 input is the T126 must-fix list. Corrected: no RLS policy compares `hirer_email` today (`20261011212432`). Docs only, uncommitted. Report: `.ada/claude-report-147.md`.
+- Claude Task 150 (Kenji OK 2026-11-19 12:16 ET): row 1 **closed locally, pending Codex review of T149/T150**. Production `GET /auth/v1/settings` (once, anon key only): `mailer_autoconfirm=false`, so C3 holds in both projects. 30-day expiry cap and the email-confirmation precondition recorded in `docs/entry-contract.md` §2/Principals and `Decisions.md` 2026-11-19. Local commits on main, **not pushed**: `6942691` (row 1 code/tests) + the docs commit after it. `make check` 778 tests, SQL fixture + inventory, races 6/6 pass. Not applied to E2E or production (separate OK). **Deferred (branch, later):** TF007 red toast vs TF004 info toast; race-suite portability (tied to `trustflow-localdb`); `revoked_at` bounds (`>= created_at`, `<= now`) in the evidence trigger; contract-state check on issuance (rows 4/11). `supabase/.branches/` is a CLI artifact, not committed. Report: `.ada/claude-report-150.md`.
+- Claude Task 149 (row 1 should-fixes, local only, uncommitted, not applied anywhere): **done:** (1) apply-time self-test TF911-TF914 in the credential migration (table/column/PUBLIC/service_role grants, RLS, `counterpart_account_id`, the three RPCs, issuance owner's UPDATE on `auth.users`, side-door scan of functions/views/rules, pg_graphql definer check), each fault injection caught; (4) `expires_at` ≤ 30 days in table CHECK, RPC and edge handler, strict ISO instant → 400 and canonical UTC to the RPC; (5) `tests/sql/entry_agent_credentials_inventory.sql`, read-only, PASS locally and on E2E; immutability errcode renamed TF006→TF008. **E2E read-only:** `postgres` holds UPDATE on `auth.users` (should-fix 2 closed), `mailer_autoconfirm=false` (should-fix 3 closed for E2E; **production unchecked**, Kenji to be asked), pg_graphql absent. `make check` 778 tests, SQL fixture, races 6/6 pass. **Left:** Codex review, production autoconfirm answer, local commit, E2E apply. Report: `.ada/claude-report-149.md`.
+- Claude Task 148 (read-only review of row 1 so far, Codex T127+T128): no blocker. Grant evidence (no delete/rewrite, one-way revoke) and TF007 under the contract lock hold; C3 uses only the verified account email. Row 1 is **not done**. It still needs: privilege self-test inside the migration, read-only E2E catalog checks (`auth.users` lock privilege, email autoconfirm off, client-executable SECURITY DEFINER functions/views), and an expiry cap. REST/GraphQL bypass is provable in SQL via effective privileges. `make check` 775/775. Report: `.ada/claude-report-148.md`.
 - Task 107: Codex reviewed `63acb67` — `.ada/codex-report-107.md` (GO with changes).
   - The self-test snapshot is now a temp view with grantor and grant option, compared as multisets (`EXCEPT ALL`), with public function ACLs included.
     TF903 checks the global function default exactly (built-in `acldefault` minus only PUBLIC EXECUTE). Limits stated: nothing outside `public` is compared.
@@ -572,65 +598,52 @@ Two weaknesses, recorded rather than softened:
    carries `_auth_method: account_session` and names the owner. That is honest
    and permanent.
 
-**A first-party scoped API key is deferred until there are outside users.** Its
-cost is priced in `.ada/claude-report-15.md` §3. Do not build it from this note.
+~~A first-party scoped API key is deferred until there are outside users.~~
+**Superseded by the 2026-11-18 spine** (and by the rule that nothing waits for
+outside users): per-deal scoped, revocable agent
+credentials are the entry path (`docs/entry-contract.md`,
+`docs/minimum-usable-design.md`). The refresh token above stays only until they ship.
 
 ---
 
 ## Next Priority (in order)
 
-- Task 104: Codex re-reviewed the delegation and provenance plan — `.ada/codex-report-104.md` (GO with changes).
-
-- Task 103: Codex re-reviewed the delegation and provenance plan — `.ada/codex-report-103.md` (NO-GO).
-
-- Task 102: Codex reviewed the delegation and provenance implementation plan — `.ada/codex-report-102.md` (GO with changes).
-
 Referenced by name from `scripts/sim-counterparty.mjs` and two proposals, so the
-heading keeps its old wording even though the file around it changed.
+heading keeps its old wording.
 
-1. **An acting counterparty on the real guest path, without a real second
-   human.** Nobody has driven this product as an independent party who does not
-   know how it is built. `sim:counterparty` has two hand-written policies, so it
-   only walks branches someone anticipated.
+**Design reset (Kenji, 2026-11-18) — complete.** The design was confirmed and execution
+authorized on 2026-11-19 09:59 ET (`Decisions.md`). Canonical roadmap: `Roadmap.md`.
 
-   **The owner's decision, so it stops being re-asked:** waiting on another
-   person's availability costs the development loop far more than it buys. He
-   has hired testers before; the value against the cost was poor and the
-   findings needed heavy distillation anyway. A real person may be used when
-   there is something only they can answer. **A real person is never a required
-   gate, and "when do we do the second-human test" is the wrong question.**
+1. **Execute `docs/schedule.md` baseline rev 3 in row order** (M1 2026-12-04, M2 12-07,
+   M3 12-15, M4 12-16). Fill the Actual column as rows start and finish.
+2. **Where we are (2026-11-19):** row 0 (design/security cross-review) **finished** as planned
+   (Codex T126, Claude T147 light review). **On schedule, 0 days late.** **Row 1 started 2026-11-19**: the store was reworked locally; additional race coverage and Claude light review remain. See `.ada/codex-report-127.md`.
+   The v5 preimage is still open (row 3): Codex's 13-key candidate is a proposal, not adopted.
+3. Production releases (rows 9, 14) still need Kenji's separate OK.
 
-2. **The first non-JPY acceptance in production has still never happened.**
-   Open since Task 10. The mandatory-digest branch and
-   `_shown_terms_check {version: 2}` are exercised on E2E in every two-agent
-   run; production has never written one. The smoke does not create a contract
-   or accept an invitation, so the first real one is worth inspecting by hand.
+**Step-2 code** (uncommitted: `supabase/functions/manage-entry-agent-credential/`,
+`supabase/migrations/20261118214020_entry_agent_credentials.sql`, `tests/sql/`,
+`tests/unit/entryCredentialHandler.test.js`, plus the draft-delete mapping) is reworked locally in row 1. It is not deployed or applied to E2E or production.
 
-3. **Cancellation is underspecified, and the shape of the gap is known.**
-   A `contract.cancelled` event leaves the projection untouched, so an accepted
-   agreement keeps displaying as live. Reviewed by Claude and Codex in Task 12
-   and judged **NOT CRITICAL** under the one criterion that mattered — no
-   irrecoverable evidence loss, no wrong payment forced — so it is deliberately
-   left alone. **Re-examine if an operating mode is ever built that pays from
-   displayed state alone.** The withdraw-before-acceptance half is still
-   unspecified: an invitation stays acceptable until it expires, and acceptance
-   does not consult cancellation events.
+**Still open** (not decided by the sign-off): account deletion blocked by the grant
+issuer FK; pre-acceptance delegated events have no accepted snapshot.
 
-4. **`App.jsx` decomposition.** It is still the largest file by far and holds
-   most of the view switching. A refactor of working code, so it waits behind
-   anything that changes what the record says.
-
-5. **An MCP server over the published protocol.** The prerequisite that was
-   missing — a specification an outside client can read — now exists.
-
-6. **Act on the visual-review findings** that remain from the blind-review
-   passes.
+The previous list (counterparty sim, first non-JPY production acceptance,
+cancellation, `App.jsx`, MCP, blind-review findings) is now under "Later" in
+`Roadmap.md`. One owner decision from it still stands: **a real second person is
+never a required gate**; AI drives the counterparty.
 
 ---
 
 ## Open decisions
 
 - **`hirer_email` is compared case-sensitively and stored as typed.**
+  _(Correction, Task 147: per migration source, `20261011212432` replaced
+  `party_read_contract_events` with an owner-only policy, so the RLS `=` below is
+  historical. What remains is how `hirer_email` is stored and compared elsewhere.)_
+  _(2026-11-19, C3: the entry path's invited-email match is `lower(btrim())`; see
+  `Decisions.md`. Whether C3 also covers the `hirer_email` / RLS `=` comparison below is
+  not decided; raised in `.ada/claude-report-143.md`.)_
   `validate-invite-token` only trims it; GoTrue lowercases the JWT email claim,
   so `Bob@Corp.com` does not match `party_read_contract_events`' `=`. Latent
   today because guests read through their token rather than an account.
@@ -727,6 +740,8 @@ so this note is the correction.
 
 **What none of them establish:** that two independently motivated parties get
 through a deal. Every judgement in them is a hard-coded assertion.
+That is a limit to state, not a gate: the first deal runs through bot simulations,
+and design does not wait for real parties (`Decisions.md` 2026-11-18).
 
 ---
 

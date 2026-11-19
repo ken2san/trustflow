@@ -15,6 +15,44 @@ _Last updated: 2026-11-18_
 
 ## Current scope
 
+### [2026-11-19] — Agent grants expire within 30 days; the counterpart path requires email confirmation
+
+**Decision, by the owner** (Kenji, 2026-11-19 12:16 ET, trunk; Tasks 149–150). **Status:** built locally in row 1, not applied anywhere.
+
+- **30-day technical cap on `expires_at`.** A grant's expiry must be later than its issuance and no more than 30 days after it. This is a security default, not a product term: a longer delegation is a new grant, never an open-ended one. Three layers enforce it: the table CHECK, `issue_entry_agent_credential` (against the clock re-read after the locks) and the `manage-entry-agent-credential` HTTP layer. The HTTP layer also accepts only a strict ISO-8601 instant and forwards it as canonical UTC, so a malformed timestamp is a 400, never a 500. The issuance UI (row 6) offers no longer expiry.
+- **Precondition of the counterpart path: GoTrue email confirmation is required (`mailer_autoconfirm` off).** C3 trusts `auth.users.email` only when `email_confirmed_at` is set. That means proof of control only while sign-ups must confirm their address; with autoconfirm on, anyone could sign up as the invited address. Checked read-only through the public `GET /auth/v1/settings`: **E2E `mailer_autoconfirm=false`** (Task 149), **production `mailer_autoconfirm=false`** (Task 150). Turning autoconfirm on in either project breaks C3 there and must be treated as an auth change. Accounts the service role creates as confirmed are inside the trust boundary; such bot fixtures do not prove the OTP path.
+
+### [2026-11-19] — Whole minimum-usable design signed off; execution authorized in schedule order
+
+**Decision, by the owner** (Kenji, 2026-11-19 09:59 ET, "全体のOKは出す"; Task 146). `docs/minimum-usable-design.md`, with C1–C3, C5 and (a)–(c), is **confirmed**. `docs/schedule.md` baseline rev 3 (M1 2026-12-04) is the baseline for measuring delay. **Execution is authorized in schedule order.** Row 0 (design/security cross-review) starts 2026-11-19. The held step-2 code is reworked per the design in row 1, not before. Each production release still needs Kenji's separate OK. Payment stays parked. The first deal runs as a bot simulation.
+
+**Still OPEN, not decided by this sign-off** (from `.ada/claude-report-145.md`):
+- **Account deletion blocked by the grant issuer FK.** `entry_agent_credentials.issuer_id` references `auth.users` with no `ON DELETE`, so an issuer's account cannot be deleted while a grant exists. The (b) delete rule covers drafts only.
+- **Pre-acceptance delegated events have no accepted snapshot.** A delegated v5 event written on a draft before acceptance binds who wrote it, but not the terms at that moment. (a) = later leaves this gap open.
+
+### [2026-11-19] — Grant evidence is kept and blocks draft deletion; v5 preimage is fixed; creation snapshot deferred
+
+**Decision, by the owner** (Kenji, 2026-11-19 09:56 ET, agreeing with `.ada/claude-report-144.md`; proposals (a)–(c) from Codex T125, Task 145). These are **decided, no longer proposed**. **Status:** not built.
+
+- **(b) Trunk, built now: grant evidence survives.** Revoking a grant or deleting a draft never deletes or rewrites the grant's nonsecret id, issuer account and kind, deal, scopes, issuance, expiry or revocation time. **Delete rule:** a draft that has any grant, revoked or expired included, cannot be deleted. No grant outlives its deal. The grant FK to `contracts` is not changed to cascade or set null. Records always win over tidiness.
+- **(c) Trunk, built now: the v5 preimage is fixed before the first v5 write.** It has a fixed key order, an explicit `hash_version`, and a domain separator inside the hashed object. The nonsecret credential id and issuer kind are inside it (C2). Existing v1–v4 rows are unchanged.
+- **(a) Later: no immutable creation snapshot or event for now.** The reason: what TrustFlow attests is the agreement as accepted, and the acceptance snapshot already fixes those terms in the hash. A creation snapshot would only preserve the terms first offered. Adding it later loses that only for deals created before it ships.
+- **Schedule:** row 4 (resolver + owner AI write path) was under-sized by about 1 working day. It is re-planned as baseline rev 3, with M1 = 2026-12-04 (`docs/schedule.md`).
+
+### [2026-11-19] — Entry design: contract governs, credential inside the hash, email match normalised, issuance UI in the minimum
+
+**Decision, by the owner** (Kenji, 2026-11-19 09:33 ET; open points C1–C3 of `docs/minimum-usable-design.md`, Task 143). **Status:** decided, not built.
+
+- **C1 — `docs/entry-contract.md` governs delegation.** `docs/proposals/agent-first-access.md` and the 2026-11-16 line "Delegation follows `docs/proposals/agent-first-access.md`" are superseded for delegation: no account-wide keys, no always-granted `read`, no `create_agreement` scope, no `issuer_assurance` unless the entry contract adds it. TF006's lock order, revocation guarantee and disclosed replay exception from 2026-11-16 are restated by the entry contract and stand.
+- **C2 — the credential id goes inside the event hash.** Each delegated event binds the nonsecret credential id and issuer kind into its canonical payload under a new canonical version, with verifiers in both exports and `eventFormat.js`. Record correctness is never traded for speed. Existing rows and their hash versions stay unchanged. This supersedes, for authority binding, `codex-report-121`'s "unchanged verifiable hash inputs" and any reading of 2026-11-16's "outside `event_hash`" as covering the credential reference.
+- **C3 — the invited email match ignores case and surrounding whitespace:** `lower(btrim(...))` on both sides. HANDOFF's "compared case-sensitively" open decision is closed for this match.
+- **The minimal issuance UI is part of the minimum:** issue (scopes, expiry), show the secret once, list, revoke.
+- **C5 (2026-11-19):** build server-side deal creation and close direct client insert paths at cutover; authority checks and recording happen on the server. C3 applies to all relevant email matches, including RLS `hirer_email` checks, using `lower(btrim())` _(factual note, Task 147: per migration source no RLS policy compares `hirer_email` today; `20261011212432` made events owner-only)_; it does not make a self-claimed email proof of authority. No `issuer_assurance` column. C2 binds the credential ID and issuer kind inside v5; exact proposed inputs are in `docs/minimum-usable-design.md`.
+
+### [2026-11-18] — The first deal runs through bot simulations; design does not wait for real deals
+
+**Decision, by the owner** (Kenji, stated for the third time; Task 142). The first real deal is run with bots acting as the parties. "We can't design without real deals (or real users)" is **wrong** and must not be used as a reason to wait, or to defer design, the entry path or the roadmap. Where a decision needs evidence of how parties behave, produce it with bot-driven parties (`sim:two-agents`, `sim:counterparty`, AI-driven counterparties), not by waiting. Older entries that make design wait on a real transaction, a real second party or a real invitation are superseded on that point and marked below. Payment stays parked; nothing is based on old payment specs.
+
 ### [2026-11-18] — Event labels state the hash format, never the writer; guest response version 2
 
 **Decision, by the owner** (rank 1 of Codex 109; plan `.ada/claude-report-128.md`, reviewed by Codex 110-113; D1-D5 decided 2026-11-18). **Status:** commit 1 (frontend, both exports, public docs) built locally in Tasks 129-130 (Codex 114 fixes), not pushed. The public docs describe response version 2 as planned, not deployed. The function's version 2 (commit 2) and the later flip (commit 3) are not built.
@@ -39,9 +77,9 @@ _Last updated: 2026-11-18_
 **Decision, by the owner** (Tasks 99-106; design `.ada/claude-report-105.md`, reviewed by Codex 96-100). **Status: decided, not built** — except the TRUNCATE revoke, written as `20261117030000_revoke_client_truncate.sql` and not yet applied anywhere.
 
 - **No actor is named without per-event provenance (option A, in production since `231dbc2`).** Every record row reads "a party" until the marker below exists, because no existing field proves who wrote an event: everything the server sets was client-writable while events were world-writable, and date or migration-order heuristics are not accepted as proof.
-- **The marker is `server_asserted_v1`, and it is a server assertion, not proof.** It means *inserted through TrustFlow's API with the service-role credential, after the migration that introduces it*. Stamped only for a PostgREST session (`authenticator`) carrying a service-role JWT, so dashboard, CLI, migration and self-test inserts are never stamped. That a credential was checked is an operational claim of TrustFlow's code; anyone holding the service-role key or database ownership can forge the marker. It is outside `event_hash`. Independent proof is a later step: Ed25519 signatures by a signer whose key the database cannot read.
+- **The marker is `server_asserted_v1`, and it is a server assertion, not proof.** It means *inserted through TrustFlow's API with the service-role credential, after the migration that introduces it*. Stamped only for a PostgREST session (`authenticator`) carrying a service-role JWT, so dashboard, CLI, migration and self-test inserts are never stamped. That a credential was checked is an operational claim of TrustFlow's code; anyone holding the service-role key or database ownership can forge the marker. It is outside `event_hash`. _(2026-11-19, C2: this does not cover authority binding — a delegated event's credential id goes inside the hash.)_ Independent proof is a later step: Ed25519 signatures by a signer whose key the database cannot read.
 - **Every record screen carries one footnote**: who acted is as recorded by TrustFlow's server and is not independently verifiable. The same sentence goes into `agent-protocol.md` and Protocol §1.
-- **Delegation follows `docs/proposals/agent-first-access.md`**, with TF006 as specified in Task 105: lock order contract → delegation (`for share`), `clock_timestamp()` after the lock, owner/contract/scope/actor rebound under the lock. **Revocation guarantee:** no new event and no delegated read is admitted after a revoke commits. **Disclosed exception:** a keyed replay already in flight may return the bearer's own earlier event after a revoke commits; it discloses nothing that bearer did not write.
+- _(Superseded 2026-11-19, C1: `docs/entry-contract.md` governs delegation, not the proposal below.)_ **Delegation follows `docs/proposals/agent-first-access.md`**, with TF006 as specified in Task 105: lock order contract → delegation (`for share`), `clock_timestamp()` after the lock, owner/contract/scope/actor rebound under the lock. **Revocation guarantee:** no new event and no delegated read is admitted after a revoke commits. **Disclosed exception:** a keyed replay already in flight may return the bearer's own earlier event after a revoke commits; it discloses nothing that bearer did not write.
 - **`anon` and `authenticated` lose TRUNCATE** on `contracts` and `earner_payout_profiles`, in a small migration of its own, E2E first, after Codex review. TRUNCATE ignores RLS; nothing intends it. REFERENCES/TRIGGER defaults on all tables are a separate, later cleanup.
 
 ### [2026-11-09] — What a date-only deadline means, and what may be judged from it
@@ -328,6 +366,8 @@ occurs to them at acceptance time with no prior commitment. Required stays
 required. Revisit this if a real workflow shows up where the sender genuinely
 cannot know who will open the link (e.g. a QR code posted somewhere, forwarded
 through an unknown chain) — that shape does not exist yet.
+_(Superseded on the trigger, 2026-11-18: that shape is a design question, not
+something to wait for real users to show.)_
 
 ---
 
@@ -390,6 +430,8 @@ counterparty who was sent a link, opened it, and had not yet accepted gets a
 offer was made. **Revisit when a real second party is confused by it** — which
 is Next Priority #1, and is the first time this will be observed rather than
 reasoned about.
+_(Superseded on the trigger, 2026-11-18: this is observed with bot-driven
+parties, not by waiting for a real second party.)_
 
 **The question that made withdrawal expensive is still unanswered**, and is why
 it was not simply built: the correct split is hard delete where nothing was
@@ -476,7 +518,9 @@ that came out of review and are part of the design rather than footnotes to it:
 **Not scheduled.** The frequency is unmeasured — the invited-vs-claimed mismatch
 holds on 723 of production's 859 accepted contracts, but all of that is QA data,
 so the real rate is unknown. Build B2 the first time a real invitation goes to
-the wrong person. Until then the manual path is to leave the agreement alone and
+the wrong person. _(Superseded on the trigger, 2026-11-18: whether B2 is needed
+is a design call, made with bot-driven parties if evidence is wanted, not
+deferred until a real mistake happens.)_ Until then the manual path is to leave the agreement alone and
 send a new invitation; deleting the draft remains available for the case where
 nothing was shared at all, and is simply no longer the recommended answer to a
 wrong address.
@@ -645,6 +689,11 @@ design decision, not a specification.
 > real transaction → real friction → inspect the existing model → decide whether
 > the friction is specific or general → make the smallest justified
 > generalisation
+
+_(Superseded in part, 2026-11-18: the "real transaction" in this method may be,
+and for the first deal is, a bot simulation. It is not a reason to wait for real
+deals or to defer design. The rest — inspect the existing model, generalise only
+as far as justified — stands.)_
 
 The certified-translation job is simply the first concrete case showing that
 real-world performance may unfold across several events rather than one digital

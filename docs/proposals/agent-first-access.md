@@ -1,5 +1,7 @@
 # Agent-first access: delegated authority, evidence semantics, and one MCP server
 
+> **Superseded for delegation (2026-11-19, `Decisions.md`, C1):** `docs/entry-contract.md` governs delegation. Kept as history; do not build from it.
+
 Design only, 2026-11-08. No implementation, nothing deployed. Every statement
 about today's behaviour is cited to a file and line, or to a read-only query
 whose text is in the session that produced this document.

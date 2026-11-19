@@ -1,0 +1,43 @@
+# Minimum-usable entry schedule
+
+**Baseline set 2026-11-19 (rev 3).** **Execution authorized 2026-11-19 09:59 ET** (Kenji signed off the whole design and this baseline; `Decisions.md`). Rows run in schedule order. The held step-2 code is reworked per the design in row 1, not before. Planned dates are Monday–Friday; **Actual** remains blank. Codex builds, Claude light-reviews. Rev 2 replaced rev 1 because Kenji decided C5. **Rev 3 replaces rev 2 because row 4 (resolver + owner AI write path) was under-sized: 1d for two 1d pieces. Row 4 is now 2d. Every later row, and M1–M4, moves by 1 working day** (Kenji, 2026-11-19, `Decisions.md`); the trunk's record and authority correctness take precedence over the dates. A spill moves dependent milestones. No real user or second human is a gate: the first deal is bot-simulated. Payment is parked.
+
+| Milestone | Rev 2 | Rev 3 | Delay vs rev 2 |
+|---|---|---|---|
+| M1 — Phase 1 E2E with bots | 2026-12-03 | **2026-12-04** | +1 working day |
+| M2 — Phase 1 production, separately approved | 2026-12-04 | **2026-12-07** | +1 working day (+3 calendar, weekend) |
+| M3 — Phase 2 E2E with bots | 2026-12-14 | **2026-12-15** | +1 working day |
+| M4 — Phase 2 production, separately approved | 2026-12-15 | **2026-12-16** | +1 working day |
+
+Rows 0–3 are unchanged. The shift is the minimum the dependencies allow under rev 2's assumption of one builder doing one row at a time. Rows 5 and 8 depend on 4, and the later rows follow in sequence. Row 6 depends only on row 1 and could run in parallel, but only with a second builder.
+
+| ID | Work and dependency | Owner | Size | Planned start | Planned finish | Actual |
+|---|---|---|---|---|---|---|
+| 0 | Design/security cross-review: C5 creation boundary; v5 preimage per (c) and grant retention/delete rule per (b), both decided 2026-11-19; held step-2 code is not touched in this row; it is reworked per the design in row 1, not before. | Codex; Claude light review | 1d | 2026-11-19 | 2026-11-19 | started 2026-11-19, finished 2026-11-19 (Codex T126 + Claude T147 light review) |
+| 1 | One-deal issue/list/revoke store: C1–C3, verified counterpart binding, grants and direct-mutation denial; grant rows never deleted and draft delete refused when grants exist (b); issuance stays off. **Input: the must-fix list in `.ada/codex-report-126.md` §3–4** (clock re-read after the user-row lock, immutable grant evidence, locked distinct delete refusal, issuance default-off, counterpart/invite-generation binding, scope/expiry validation). Depends 0. | Codex; Claude light review | 1d | 2026-11-20 | 2026-11-20 | started 2026-11-19, finished 2026-11-19 (local commit `6942691`, not pushed or applied; pending Codex review of T149/T150; E2E apply needs its own OK) |
+| 2 | C5: owner-session server-side create with server validation and recording; switch client, revoke direct table/column insert and test REST/RPC/GraphQL bypasses and mixed rollout. Depends 0. | Codex; Claude light review | 2d | 2026-11-23 | 2026-11-24 | |
+| 3 | v5 canonical (fixed key order, `hash_version`, domain separator; (c)) and all guest/owner readers, exports, standalone verifier and reference vectors; legacy v1–v4 and mixed deployments remain valid. **Readers before v5 writes.** **Opens with the v5 preimage, not yet pass** (domain/`hash_version` spelling, payload-vs-top-level representation; Codex T126 candidate needs independent review before first v5 write). Depends 0. | Codex; Claude light review | 1d | 2026-11-25 | 2026-11-25 | |
+| 4 | Owner delegated append + resolver (rev 3: resolver 1d + append 1d): credential/issuer inside v5, locked scope/expiry/revoke checks, grant-bound replay, no fallback. Depends 1, 3. | Codex; Claude light review | 2d | 2026-11-26 | 2026-11-27 | |
+| 5 | Delegated owner read with revocation boundary; guest projection/export carries v5 inputs. C3 normalized RLS checks, with no self-claimed-email authorization. Depends 1, 3–4. | Codex; Claude light review | 1d | 2026-11-30 | 2026-11-30 | |
+| 6 | Minimal owner UI: scoped issuance, secret shown once, list/revoke. Depends 1. | Codex; Claude light review | 1d | 2026-12-01 | 2026-12-01 | |
+| 7 | Agent instructions and deterministic bot onboarding/E2E bootstrap; distinguish fixture auth from production sign-up, without weakening CAPTCHA. Depends 2, 4–6. | Codex; Claude light review | 1d | 2026-12-02 | 2026-12-02 | |
+| 8 | Phase 1 bot E2E: create through server, issue, read/write, guest accept/read, both exports and v5 recompute; test no direct insert, expiry, revoke/replay races and mixed releases. Depends 1–7. | Codex; Claude light review | 2d | 2026-12-03 | 2026-12-04 | |
+| M1 | **Phase 1 AI2Human usable on E2E with bots** after 8 and record/security blockers close. | Codex; Claude light review | milestone | 2026-12-04 | 2026-12-04 | |
+| 9 | Phase 1 production release with reviewed artifacts, rollout/rollback and smoke. **Requires Kenji's separate OK.** Depends M1. | Codex; Claude light review; Kenji OK | 1d | 2026-12-07 | 2026-12-07 | |
+| M2 | **Phase 1 production release**, contingent on 9. | Codex; Kenji OK | milestone | 2026-12-07 | 2026-12-07 | |
+| 10 | Counterpart authenticated invite entry and minimal issuance UI; C3 verified-email match, invite possession, distinct owner and invite generation. Depends M1, 1, 6–7. | Codex; Claude light review | 1d | 2026-12-08 | 2026-12-08 | |
+| 11 | Counterpart AI one-shot acceptance: under lock recheck account, invite, grant, shown terms and owner distinction; atomically consume invite, persist counterpart account, v5 acceptance and snapshot; no bearer fallback. Depends 3–4, 10. | Codex; Claude light review | 2d | 2026-12-09 | 2026-12-10 | |
+| 12 | Counterpart delegated read/append/revoke and guest evidence; correctly handle v1 provenance labels and grant/invite generation boundaries. Depends 5, 10–11. | Codex; Claude light review | 1d | 2026-12-11 | 2026-12-11 | |
+| 13 | Phase 2 bot E2E: full deal, both exports, legacy/v5 recomputation, no-fallback/expiry/revoke/replay races. Depends 10–12. | Codex; Claude light review | 2d | 2026-12-14 | 2026-12-15 | |
+| M3 | **Phase 2 AI2AI usable on E2E with bots** after 13 and record/security blockers close. | Codex; Claude light review | milestone | 2026-12-15 | 2026-12-15 | |
+| 14 | Phase 2 production release with reviewed rollout, rollback and smoke. **Requires Kenji's separate OK.** Depends M2 and M3. | Codex; Claude light review; Kenji OK | 1d | 2026-12-16 | 2026-12-16 | |
+| M4 | **Phase 2 production release**, contingent on 14. | Codex; Kenji OK | milestone | 2026-12-16 | 2026-12-16 | |
+
+## Gates and non-rollbackable decisions
+
+- C5 is decided: server-only creation at cutover, including table/column privileges and exposed RPC/GraphQL paths; the trusted service role remains inside the boundary. Keep old clients compatible only during migration; no direct client insert side door remains at completion. Server-generated deal/invite and all checks are tested before release.
+- Decided 2026-11-19 (`Decisions.md`): **(b)** grant evidence is never deleted or rewritten, and a draft with any grant cannot be deleted (no cascade or set-null FK); **(c)** v5 has a fixed key order, `hash_version` and a domain separator inside the preimage, with credential id and issuer kind inside; **(a)** the creation snapshot/event is deferred, because the acceptance snapshot fixes the agreed terms. Before the first v5 write, independently review the exact preimage and null/missing rules. Decision or implementation delays are recorded against the baseline.
+- Canonical v5 ID/kind binding is a server assertion, not proof of an agent's independent identity or time. Preserve historical hashes; once a v5 row exists, rolling readers back to an incompatible version is not safe. V5 readers and mixed-version safeguards precede writers.
+- C3 applies to `hirer_email` RLS checks as well as invited-email comparison _(per migration source no `hirer_email` RLS check exists today, see design C3 correction)_; verify case/whitespace and authorization boundaries. Normalization must not turn a self-claimed address into proof of authority.
+- Bot sign-up setup must work on E2E without waiting for humans or bypassing production security. A fixture may prove the transaction flow but must not be presented as proof that the production CAPTCHA/OTP onboarding path was exercised.
+- Each auth, access-control and record change receives independent review. Production release targets are estimates, not authorization; both require Kenji's separate approval. No real users or real deals gate design or E2E.
