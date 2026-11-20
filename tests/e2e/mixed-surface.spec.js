@@ -69,7 +69,7 @@ function tomorrow() {
  * the minor unit is right or wrong.
  */
 async function offer(request, { currency, amountMinor, label }) {
-  const { token, userId } = await getEarnerSession(request);
+  const { token } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 

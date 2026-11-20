@@ -313,7 +313,7 @@ test('a client still cannot write state directly', async ({ request }) => {
 // answers, and neither can do both.
 
 async function agreementWhere(request, performedBy) {
-  const { token, userId } = await getEarnerSession(request);
+  const { token } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 

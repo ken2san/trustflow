@@ -89,7 +89,7 @@ async function ownerEventSet(request, token, contractId) {
 
 /** A fresh agreement, accepted through the real invite path. */
 async function acceptedContract(request) {
-  const { token, userId } = await testEarner(request);
+  const { token } = await testEarner(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 

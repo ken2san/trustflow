@@ -61,7 +61,7 @@ const signInVerifiedEarner = getEarnerSession;
 
 /** Creates a contract the way the app does: business columns only. */
 async function createFixtureContract(request, overrides = {}) {
-  const { token, userId } = await signInVerifiedEarner(request);
+  const { token } = await signInVerifiedEarner(request);
   const { status, body } = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
     body: createEntryArgs({ invited_hirer_email: 'invited.client@example.test', currency: 'JPY', ...TERMS, ...overrides }),

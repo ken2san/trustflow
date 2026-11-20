@@ -49,4 +49,13 @@ begin
      or not has_any_column_privilege((select pg_get_userbyid(proowner) from pg_proc where oid=f),'auth.users','UPDATE') then
     raise exception 'create_entry_contract privilege self-test failed';
   end if;
+  -- The SECURITY DEFINER returns the entire new row. Fail the target apply if
+  -- authenticated cannot directly select any column in that returned shape.
+  if exists (
+    select 1 from pg_attribute a
+    where a.attrelid = 'public.contracts'::regclass and a.attnum > 0 and not a.attisdropped
+      and not has_column_privilege('authenticated', 'public.contracts', a.attname, 'SELECT')
+  ) then
+    raise exception 'create_entry_contract returns a column authenticated cannot select';
+  end if;
 end $$;

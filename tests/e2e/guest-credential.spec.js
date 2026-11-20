@@ -76,7 +76,7 @@ async function ownerEventSet(request, token, contractId) {
 
 /** An agreement the guest performs, accepted through the real invite path. */
 async function guestPerformedAgreement(request) {
-  const { token, userId } = await testEarner(request);
+  const { token } = await testEarner(request);
 
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,

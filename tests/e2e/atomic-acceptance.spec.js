@@ -58,7 +58,7 @@ const TERMS = {
 
 /** An unaccepted contract with a live invitation. */
 async function invited(request, overrides = {}) {
-  const { token, userId } = await getEarnerSession(request);
+  const { token } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
     body: createEntryArgs({ ...TERMS, ...overrides, earner_display_name: 'Acme Translations', invited_hirer_email: 'invited@example.test' }),

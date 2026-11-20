@@ -14,6 +14,10 @@ trap cleanup EXIT
 psql_local() { docker exec -i "$container" psql -X -qAt -U postgres -d "$db" -v ON_ERROR_STOP=1; }
 docker exec "$container" createdb -U postgres "$db"
 docker exec "$container" pg_dump -U postgres -d postgres --schema-only --no-owner --no-privileges | psql_local >"$logdir/schema"
+# --no-privileges drops every grant. Restore the one the migration's apply-time
+# assertion requires, as on both hosted projects (A0 audit: authenticated holds
+# table-level SELECT on contracts). The assertion itself is untouched.
+psql_local <<< "grant select on public.contracts to authenticated"
 psql_local < supabase/migrations/20261118214020_entry_agent_credentials.sql
 psql_local < supabase/migrations/20261120090000_create_entry_contract.sql
 owner=11111111-1111-4111-8111-111111111111

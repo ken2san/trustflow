@@ -297,7 +297,7 @@ test('internal event fields are omitted and payloads are allowlisted', async ({ 
 // ── The Hirer-facing view, end to end in the browser ────────────────────────
 
 test('a guest accepts an invite and can then read the record in the UI', async ({ page, request }) => {
-  const { token, userId } = await signInEarner(request);
+  const { token } = await signInEarner(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 
@@ -426,7 +426,7 @@ test('a guest who navigates away can still reach the agreement they accepted', a
   //
   // Found by a blind counterparty asked to accept and then look for its own
   // record. The first blind run declined, so it never reached this.
-  const { token, userId } = await signInEarner(request);
+  const { token } = await signInEarner(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 
@@ -487,7 +487,7 @@ test('declining records nothing and leaves the invitation usable', async ({ page
   // an act on the agreement, so nothing is written; the screen has to say so,
   // and the invitation has to still work, because reconsidering is the common
   // case and the link is the only way back.
-  const { token, userId } = await signInEarner(request);
+  const { token } = await signInEarner(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 

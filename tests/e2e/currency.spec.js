@@ -129,8 +129,8 @@ test('a CAD contract carrying a yen amount is refused outright', async ({ reques
       earner_display_name: 'Acme Translations',
     },
   });
-  expect(created.status).toBe(400);
-  expect(JSON.stringify(created.body)).toContain('contracts_amount_jpy_mirror_check');
+  expect(created.status).toBe(403);
+  expect(created.body?.code).toBe('42501');
 });
 
 // B-pending: after B direct INSERT must be refused regardless of constraint.
@@ -144,8 +144,8 @@ test('a currency nobody agreed to is refused by the database, not just the form'
       earner_display_name: 'Acme Translations',
     },
   });
-  expect(created.status).toBe(400);
-  expect(JSON.stringify(created.body)).toContain('contracts_currency_check');
+  expect(created.status).toBe(403);
+  expect(created.body?.code).toBe('42501');
 });
 
 // ── What the counterparty is shown ──────────────────────────────────────────
@@ -226,7 +226,7 @@ test('a JPY writer that sends only amount_minor gets the mirror filled', async (
   // The other half of the normalization contract: the client stopped writing
   // amount_jpy (the server owns the mirror in both directions), so this is the
   // path every current JPY creation takes.
-  const { token, userId } = await getEarnerSession(request);
+  const { token } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 
@@ -261,18 +261,13 @@ test('two disagreeing amounts are refused rather than resolved', async ({ reques
       earner_display_name: 'Acme Translations',
     },
   });
-  expect(created.status).toBe(400);
-  expect(JSON.stringify(created.body)).toContain('contracts_amount_jpy_mirror_check');
+  expect(created.status).toBe(403);
+  expect(created.body?.code).toBe('42501');
 });
 
-// Time-bounded rollout test: direct INSERT closes in B; after B assert refusal.
-test('a writer that only knows amount_jpy still creates a JPY contract', async ({ request }) => {
-  // The break this guards: `amount_minor` is NOT NULL with no default, so
-  // every browser on a bundle from before 2026-11-08 — which sends amount_jpy
-  // alone — would have failed with 23502 the moment the first migration
-  // committed, and gone on failing until the person reloaded. The server fills
-  // the new column from the old one instead (20261108160000's
-  // contracts_fill_amount_minor).
+// B-pending: the old client insert must be denied after the cutover.
+test('a legacy amount_jpy-only direct insert is denied after B', async ({ request }) => {
+  // A cached old client must fail at the privilege boundary after B.
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
     token,
@@ -286,9 +281,8 @@ test('a writer that only knows amount_jpy still creates a JPY contract', async (
       earner_display_name: 'Acme Translations',
     },
   });
-  expect(created.status, `legacy insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  expect(created.body[0].amount_minor).toBe(45000);
-  expect(created.body[0].amount_jpy).toBe(45000);
+  expect(created.status).toBe(403);
+  expect(created.body?.code).toBe('42501');
 });
 
 // B-pending: after B direct INSERT must be refused regardless of constraint.
@@ -304,8 +298,8 @@ test('a contract with no amount at all is still refused, not defaulted to zero',
       earner_display_name: 'Acme Translations',
     },
   });
-  expect(created.status).toBe(400);
-  expect(JSON.stringify(created.body)).toContain('amount_minor');
+  expect(created.status).toBe(403);
+  expect(created.body?.code).toBe('42501');
 });
 
 test('accepting a CAD agreement against the v1 terms digest is refused', async ({ request }) => {
@@ -356,7 +350,7 @@ test('a JPY acceptance with no digest at all is still accepted', async ({ reques
   // accepted by a client that predates the whole mechanism. v1 does cover the
   // amount of a yen contract, and nothing here makes the digest mandatory for
   // one.
-  const { token, userId } = await getEarnerSession(request);
+  const { token } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 
@@ -386,7 +380,7 @@ test('a JPY acceptance with no digest at all is still accepted', async ({ reques
 test('a JPY agreement still accepts the v1 terms digest', async ({ request }) => {
   // The compatibility half: v1 does cover the amount of a yen contract, so a
   // guest on an older bundle is not refused for being one deploy behind.
-  const { token, userId } = await getEarnerSession(request);
+  const { token } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
 
