@@ -1,7 +1,7 @@
 # TrustFlow Roadmap
 
 _The canonical roadmap. Rebuilt 2026-11-18; maintained by 棟梁 (Kenji, 2026-11-20).
-Last updated **2026-11-20 13:05 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 159 / Codex 143._
+Last updated **2026-11-20 13:20 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 161 / Codex 144._
 
 `HANDOFF.md` holds the current state and `Decisions.md` holds the reasons. If this file
 disagrees with either of them, this file is wrong. The longer product-strategy text that
@@ -48,10 +48,10 @@ ahead of the planned start.** Revised estimate 3–4 working days (Codex T131), 
 
 | Row 2 step | Status |
 |---|---|
-| Stage A: migration `20261120090000` adds RPC `create_entry_contract` (additive; direct INSERT still open), client and all writers switched, E2E specs converted | Built locally (T134–T137), **uncommitted** |
+| Stage A: migration `20261120090000` adds RPC `create_entry_contract` (additive; direct INSERT still open), client and all writers switched, E2E specs converted | **Committed locally 6371d87** (11-20). Not pushed; migration A not applied to any target |
 | Stage A local tests: SQL suite, 2-session races, legacy-vs-RPC hash parity, row 1 races | PASS (Claude T154/T155); harness hardened after Codex T138/T139 blocks (T156/T157) |
-| Codex final re-review, then one local commit (no push) | **Done 12:29 ET: stage A committed locally 6371d87** (make check 779/779 twice; tests made load-safe in Codex T142). Not pushed, migration A not applied. Before-B fixes built by Codex T143 (12:36 ET: apply-time SELECT assertion in migration A, currency B-pending cases require 403/42501). Claude T159 (13:05 ET) Docker-verifying + local commit |
-| Before-B fixes: `currency.spec` B-pending asserts; explicit projection instead of `to_jsonb(c)` | Open |
+| Codex final re-review, then local commit (no push) | **Done.** 6371d87 (12:29 ET, make check 779 x2, tests load-safe via Codex T142) |
+| Before-B fixes: `currency.spec` B-pending asserts; apply-time SELECT assertion on returned columns (chosen instead of explicit projection, output/hash unchanged) | **Committed locally d2e4b9f** (Codex T143, Claude T159–T161: SQL, races 9/9, harness, make check 779, lint 0). Codex T144 review: no code blocker. Open: split currency spec into A-stage vs post-B cases (Codex T146); recheck target grants/RLS and catalog drift at apply |
 | E2E rehearsal incl. the 5 converted scripts (Kenji chose to run them there) | Needs Kenji's OK |
 | Migration B: close direct client INSERT (no rollback after it, only forward fix) | Needs Kenji's OK |
 

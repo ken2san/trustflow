@@ -644,14 +644,11 @@ authorized on 2026-11-19 09:59 ET (`Decisions.md`). Canonical roadmap: `Roadmap.
 
 1. **Execute `docs/schedule.md` baseline rev 3 in row order** (M1 2026-12-04, M2 12-07,
    M3 12-15, M4 12-16). Fill the Actual column as rows start and finish.
-2. **Where we are (2026-11-19):** row 0 (design/security cross-review) **finished** as planned
-   (Codex T126, Claude T147 light review). **On schedule, 0 days late.** **Row 1 started 2026-11-19**: the store was reworked locally; additional race coverage and Claude light review remain. See `.ada/codex-report-127.md`.
+2. **Where we are (2026-11-20):** row 0 finished and row 1 was verified (T129/T152). Row 2 stage A is locally committed in `6371d87`, with before-B changes in `d2e4b9f`; neither is pushed and migration A is not applied. Row 2 remains in progress; see `docs/schedule.md`.
    The v5 preimage is still open (row 3): Codex's 13-key candidate is a proposal, not adopted.
 3. Production releases (rows 9, 14) still need Kenji's separate OK.
 
-**Step-2 code** (uncommitted: `supabase/functions/manage-entry-agent-credential/`,
-`supabase/migrations/20261118214020_entry_agent_credentials.sql`, `tests/sql/`,
-`tests/unit/entryCredentialHandler.test.js`, plus the draft-delete mapping) is reworked locally in row 1. It is not deployed or applied to E2E or production.
+**Step-2 code** was locally committed and row 1 verified; its migration and credential function are not applied or deployed to E2E or production.
 
 **Still open** (not decided by the sign-off): account deletion blocked by the grant
 issuer FK; pre-acceptance delegated events have no accepted snapshot.
@@ -862,6 +859,8 @@ Kept as constraints, not stories.
 
 - Codex Task 141: BLOCKED, no commit. T158 fault-harness source closes T140; focused record tests passed 59/59 three times, but full `make check` failed 778/779 on eventFormat 5000 ms timeout. T158 receipt assertion failure lacked output and remains unexplained. Report: `.ada/codex-report-141.md`. Apply and verify migration A before pushing/deploying the RPC frontend.
 
-- Codex Task 142: scoped the matrix timeout to 30 seconds without removing cases; receipt tamper failures now include child exit/signal/code/stdout/stderr. Focused suite 59/59 and two consecutive `make check` runs 779/779 + build passed. Stage A local commit follows; migration A must be applied and verified on the target before pushing/deploying the RPC frontend. Report: `.ada/codex-report-142.md`.
+- Codex Task 142 (historical): scoped the matrix timeout to 30 seconds without removing cases; receipt tamper failures now include child exit/signal/code/stdout/stderr. Focused suite 59/59 and two consecutive `make check` runs 779/779 + build passed. Stage A was subsequently committed as `6371d87`; migration A must be applied and verified on the target before pushing/deploying the RPC frontend. Report: `.ada/codex-report-142.md`.
 
-- Codex Task 143: uncommitted before-B changes: migration A apply-time effective SELECT check for every returned contracts column and currency direct INSERT tests expecting B's 403/42501. `make check` 779/779 + build passed; SQL/fault and post-B HTTP tests remain unrun. Migration A before frontend deployment; report `.ada/codex-report-143.md`.
+- Codex Task 143 (historical): before-B changes (migration A apply-time SELECT check and currency direct INSERT tests expecting B's 403/42501) were subsequently committed as `d2e4b9f`. SQL/fault checks were later reported by Claude; post-B HTTP tests remain unrun. Migration A before frontend deployment; report `.ada/codex-report-143.md`.
+
+- Codex Task 146: currency stage selection uses explicit tags. A: `npx playwright test tests/e2e/currency.spec.js --project=chromium --grep-invert '@post-b'`; after B: `npx playwright test tests/e2e/currency.spec.js --project=chromium --grep '@post-b'`. The post-B set includes a valid direct INSERT denial. Independent SQL constraint coverage remains required. Neither command was run in T146; report `.ada/codex-report-146.md`.

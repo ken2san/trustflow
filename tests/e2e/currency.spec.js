@@ -23,6 +23,10 @@
 //
 // Requires a verified Earner:
 //   TF_TEST_EARNER_EMAIL / TF_TEST_EARNER_PASSWORD
+// A-stage: npx playwright test tests/e2e/currency.spec.js --project=chromium --grep-invert '@post-b'
+// After B: npx playwright test tests/e2e/currency.spec.js --project=chromium --grep '@post-b'
+// These commands select distinct cases; neither claims the other stage ran.
+// Independent SQL constraint coverage must remain in place.
 
 import { test, expect } from '@playwright/test';
 import { getEarnerSession } from './earnerSession.js';
@@ -118,7 +122,7 @@ test('a CAD contract is stored in cents, with no yen column', async ({ request }
 });
 
 // B-pending: after B direct INSERT must be refused regardless of constraint.
-test('a CAD contract carrying a yen amount is refused outright', async ({ request }) => {
+test('@post-b a CAD contract carrying a yen amount is refused outright', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
     token,
@@ -134,7 +138,7 @@ test('a CAD contract carrying a yen amount is refused outright', async ({ reques
 });
 
 // B-pending: after B direct INSERT must be refused regardless of constraint.
-test('a currency nobody agreed to is refused by the database, not just the form', async ({ request }) => {
+test('@post-b a currency nobody agreed to is refused by the database, not just the form', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
     token,
@@ -249,7 +253,7 @@ test('a JPY writer that sends only amount_minor gets the mirror filled', async (
 });
 
 // B-pending: after B direct INSERT must be refused regardless of constraint.
-test('two disagreeing amounts are refused rather than resolved', async ({ request }) => {
+test('@post-b two disagreeing amounts are refused rather than resolved', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
     token,
@@ -266,7 +270,7 @@ test('two disagreeing amounts are refused rather than resolved', async ({ reques
 });
 
 // B-pending: the old client insert must be denied after the cutover.
-test('a legacy amount_jpy-only direct insert is denied after B', async ({ request }) => {
+test('@post-b a legacy amount_jpy-only direct insert is denied after B', async ({ request }) => {
   // A cached old client must fail at the privilege boundary after B.
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
@@ -286,7 +290,7 @@ test('a legacy amount_jpy-only direct insert is denied after B', async ({ reques
 });
 
 // B-pending: after B direct INSERT must be refused regardless of constraint.
-test('a contract with no amount at all is still refused, not defaulted to zero', async ({ request }) => {
+test('@post-b a contract with no amount at all is still refused, not defaulted to zero', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
     token,
@@ -297,6 +301,17 @@ test('a contract with no amount at all is still refused, not defaulted to zero',
       earner_user_id: userId,
       earner_display_name: 'Acme Translations',
     },
+  });
+  expect(created.status).toBe(403);
+  expect(created.body?.code).toBe('42501');
+});
+
+test('@post-b a valid direct contract insert is denied', async ({ request }) => {
+  const { token, userId } = await getEarnerSession(request);
+  const created = await api(request, '/rest/v1/contracts', {
+    token,
+    body: { ...TERMS, earner_user_id: userId, earner_display_name: 'Acme Translations',
+      invited_hirer_email: 'invited@example.test', performed_by: 'creator' },
   });
   expect(created.status).toBe(403);
   expect(created.body?.code).toBe('42501');
