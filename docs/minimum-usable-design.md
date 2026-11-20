@@ -35,15 +35,15 @@ Phase 2 is the same, plus: the counterpart signs up with the invited email, issu
 | # | Step | State | Where |
 |---|---|---|---|
 | 1 | Sign-up (verified email) | **Built** | `src/lib/earnerAuth.js` (anonymous sign-in, then email OTP); CAPTCHA on in production |
-| 2 | Issue scoped, revocable agent credential | **Partial, in progress (schedule row 1, started 2026-11-19)**: store + issue/list/revoke RPCs and function reworked per the design, uncommitted and not applied anywhere, gated off (`ENTRY_CREDENTIAL_ISSUANCE`). Expiry capped at 30 days. No UI (row 6) | `supabase/migrations/20261118214020_entry_agent_credentials.sql`, `supabase/functions/manage-entry-agent-credential/` |
+| 2 | Issue scoped, revocable agent credential | **Store built (schedule row 1, built 2026-11-19, verified 2026-11-20)**: store + issue/list/revoke RPCs and function, committed locally (`6942691`), not pushed or applied anywhere, gated off (`ENTRY_CREDENTIAL_ISSUANCE`). Expiry capped at 30 days. No UI (row 6) | `supabase/migrations/20261118214020_entry_agent_credentials.sql`, `supabase/functions/manage-entry-agent-credential/` |
 | 3 | Create the deal | **Partial**: owner human currently inserts under RLS; C5 server-only path and closure of direct inserts are **not built** | `src/lib/contracts.js:39` `createContract`; `docs/entry-contract.md:15` |
 | 4 | Invite the counterpart | **Built** (server-issued token, 72 h, shared out of band) | `contracts.js` `inviteUrlFor`; `validate-invite-token` |
 | 5a | Accept (human guest) | **Built** (atomic acceptance + snapshot, guest capability) | `validate-invite-token`, Decisions 2026-09-28 |
-| 5b | Accept (counterpart AI) | **Missing** (`counterpart_account_id` column exists in the uncommitted row 1 migration only) | step 4 |
+| 5b | Accept (counterpart AI) | **Missing** (`counterpart_account_id` column exists in the row 1 migration, committed locally, not applied) | step 4 |
 | 6a | Record events (owner session / guest token) | **Built** | `log-event`, `append_guest_event` (Task 58) |
 | 6b | Record events (delegated) | **Missing** | `log-event` accepts only a JWT or a guest token |
 | 7a | Read (delegated) | **Missing** | no endpoint takes a credential |
-| 8 | Revoke | Guest reissue **built**; agent credential revoke **partial, in progress** (row 1, uncommitted) | `reissue-guest-access`; row 1 RPC |
+| 8 | Revoke | Guest reissue **built**; agent credential revoke **built in the row 1 store** (committed locally, not applied; no consumer enforces it until rows 4/5) | `reissue-guest-access`; row 1 RPC |
 | 9 | Export / verify | **Built** (owner + guest, format-aware wording pushed `eee0889`) | `src/lib/auditExport.js`, `guestRecordExport.js`, `eventFormat.js` |
 | 10 | Agent-facing instructions | **Partial**: protocol published, delegated calls absent | `public/agent-protocol.md`, `public/llms.txt` |
 
