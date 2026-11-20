@@ -78,23 +78,25 @@ async function ownerEventSet(request, token, contractId) {
 async function guestPerformedAgreement(request) {
   const { token, userId } = await testEarner(request);
 
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Guest Credential Suite',
-      project_name: 'Guest credential probe',
-      dod: ['deliver the probe'],
-      amount_jpy: 1000,
-      amount_minor: 1000,
-      currency: 'JPY',
-      performed_by: 'counterparty',
-      invited_hirer_email: 'guest.credential@example.test',
+      p_deadline: null,
+
+      p_earner_display_name: 'Guest Credential Suite',
+      p_project_name: 'Guest credential probe',
+      p_dod: ['deliver the probe'],
+
+      p_amount_minor: 1000,
+      p_currency: 'JPY',
+      p_performed_by: 'counterparty',
+      p_invited_hirer_email: 'guest.credential@example.test',
     },
   });
-  expect(created.status, `contract insert failed: ${created.status} ${errorCode(created.body)}`).toBe(201);
-  const contract = created.body[0];
+  expect(created.status, `contract insert failed: ${created.status} ${errorCode(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   const accept = await api(request, '/functions/v1/validate-invite-token', {
     body: {

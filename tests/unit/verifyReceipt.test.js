@@ -13,9 +13,11 @@ const dir = mkdtempSync(path.join(tmpdir(), 'tf-receipt-'))
 /** Run the verifier on a file. Returns { ok, out }. */
 function runVerifier(file) {
   try {
-    return { ok: true, out: execFileSync('node', [VERIFIER, file], { encoding: 'utf8' }) }
+    const out = execFileSync('node', [VERIFIER, file], { encoding: 'utf8' })
+    return { ok: true, out, diagnostic: `exit=0\nstdout:\n${out}` }
   } catch (e) {
-    return { ok: false, out: `${e.stdout ?? ''}${e.stderr ?? ''}` }
+    const out = `${e.stdout ?? ''}${e.stderr ?? ''}`
+    return { ok: false, out, diagnostic: `exit=${e.status ?? 'unknown'} signal=${e.signal ?? 'none'} code=${e.code ?? 'none'}\nerror: ${e.message}\nstdout:\n${e.stdout ?? ''}\nstderr:\n${e.stderr ?? ''}` }
   }
 }
 
@@ -67,10 +69,10 @@ describe('tampering is detected', () => {
 
   for (const [label, mutate] of cases) {
     it(`rejects: ${label}`, () => {
-      const { ok, out } = runTampered(label, mutate)
-      expect(out).toContain('FAIL')
-      expect(out).not.toContain('RECEIPT VERIFIED')
-      expect(ok).toBe(false)
+      const { ok, out, diagnostic } = runTampered(label, mutate)
+      expect(out, diagnostic).toContain('FAIL')
+      expect(out, diagnostic).not.toContain('RECEIPT VERIFIED')
+      expect(ok, diagnostic).toBe(false)
     })
   }
 })

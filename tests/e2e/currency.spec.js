@@ -47,6 +47,13 @@ async function api(request, path, { method = 'POST', token, guestToken, body, pr
 // round thousand would read the same whether the unit were right or wrong.
 const CAD_MINOR = 1250;
 
+// Build only the eight accepted RPC parameters; never forward owner-controlled fields.
+function createEntryArgs(t) {
+  return { p_project_name: t.project_name, p_dod: t.dod, p_amount_minor: t.amount_minor,
+    p_currency: t.currency, p_deadline: t.deadline ?? null, p_invited_hirer_email: t.invited_hirer_email,
+    p_performed_by: t.performed_by ?? 'creator', p_earner_display_name: t.earner_display_name ?? null };
+}
+
 const TERMS = {
   project_name: 'Translation quoted in Canadian dollars',
   dod: ['translate the document', 'return a stamped PDF'],
@@ -55,20 +62,31 @@ const TERMS = {
   deadline: '2026-12-31',
 };
 
+test('RPC refuses invalid creation terms', async ({ request }) => {
+  const { token } = await getEarnerSession(request);
+  const valid = createEntryArgs({ ...TERMS, earner_display_name: 'Owner', invited_hirer_email: 'invited@example.test' });
+  for (const [field, value] of [
+    ['project_name', ''], ['dod', []], ['amount_minor', 0], ['currency', 'CHF'],
+    ['deadline', '2000-01-01'], ['invited_hirer_email', 'bad'],
+    ['performed_by', 'other'], ['earner_display_name', 'x'.repeat(201)],
+  ]) {
+    const result = await api(request, '/rest/v1/rpc/create_entry_contract', {
+      token, body: { ...valid, [`p_${field}`]: value },
+    });
+    expect(result.status, field).toBe(200);
+    expect(result.body).toMatchObject({ status: 'invalid_terms', field });
+  }
+});
+
 async function createCadContract(request, overrides = {}) {
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
-    body: {
-      ...TERMS, ...overrides,
-      earner_user_id: userId,
-      earner_display_name: 'Acme Translations',
-      invited_hirer_email: 'invited@example.test',
-    },
+    body: createEntryArgs({ ...TERMS, ...overrides, earner_display_name: 'Acme Translations', invited_hirer_email: 'invited@example.test' }),
   });
-  expect(created.status, `CAD insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  return { contract: created.body[0], token, userId };
+  expect(created.status, `CAD insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  return { contract: created.body.contract, token, userId };
 }
 
 /**
@@ -99,6 +117,7 @@ test('a CAD contract is stored in cents, with no yen column', async ({ request }
   expect(contract.amount_jpy).toBeNull();
 });
 
+// B-pending: after B direct INSERT must be refused regardless of constraint.
 test('a CAD contract carrying a yen amount is refused outright', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
@@ -114,6 +133,7 @@ test('a CAD contract carrying a yen amount is refused outright', async ({ reques
   expect(JSON.stringify(created.body)).toContain('contracts_amount_jpy_mirror_check');
 });
 
+// B-pending: after B direct INSERT must be refused regardless of constraint.
 test('a currency nobody agreed to is refused by the database, not just the form', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
@@ -207,23 +227,28 @@ test('a JPY writer that sends only amount_minor gets the mirror filled', async (
   // amount_jpy (the server owns the mirror in both directions), so this is the
   // path every current JPY creation takes.
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      project_name: 'Mirror fill probe',
-      dod: ['deliverable'],
-      amount_minor: 45000,
-      currency: 'JPY',
-      earner_user_id: userId,
-      earner_display_name: 'Acme Translations',
+      p_performed_by: 'creator',
+      p_invited_hirer_email: 'invited@example.test',
+      p_deadline: null,
+      p_project_name: 'Mirror fill probe',
+      p_dod: ['deliverable'],
+      p_amount_minor: 45000,
+      p_currency: 'JPY',
+
+      p_earner_display_name: 'Acme Translations',
     },
   });
-  expect(created.status, `insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  expect(created.body[0].amount_minor).toBe(45000);
-  expect(created.body[0].amount_jpy).toBe(45000);
+  expect(created.status, `insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  expect(created.body.contract.amount_minor).toBe(45000);
+  expect(created.body.contract.amount_jpy).toBe(45000);
 });
 
+// B-pending: after B direct INSERT must be refused regardless of constraint.
 test('two disagreeing amounts are refused rather than resolved', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
@@ -240,6 +265,7 @@ test('two disagreeing amounts are refused rather than resolved', async ({ reques
   expect(JSON.stringify(created.body)).toContain('contracts_amount_jpy_mirror_check');
 });
 
+// Time-bounded rollout test: direct INSERT closes in B; after B assert refusal.
 test('a writer that only knows amount_jpy still creates a JPY contract', async ({ request }) => {
   // The break this guards: `amount_minor` is NOT NULL with no default, so
   // every browser on a bundle from before 2026-11-08 — which sends amount_jpy
@@ -265,6 +291,7 @@ test('a writer that only knows amount_jpy still creates a JPY contract', async (
   expect(created.body[0].amount_jpy).toBe(45000);
 });
 
+// B-pending: after B direct INSERT must be refused regardless of constraint.
 test('a contract with no amount at all is still refused, not defaulted to zero', async ({ request }) => {
   const { token, userId } = await getEarnerSession(request);
   const created = await api(request, '/rest/v1/contracts', {
@@ -330,23 +357,26 @@ test('a JPY acceptance with no digest at all is still accepted', async ({ reques
   // amount of a yen contract, and nothing here makes the digest mandatory for
   // one.
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      project_name: 'Yen no-digest probe',
-      dod: ['deliverable'],
-      amount_minor: 20000, currency: 'JPY',
-      earner_user_id: userId,
-      earner_display_name: 'Acme Translations',
-      invited_hirer_email: 'invited@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+      p_project_name: 'Yen no-digest probe',
+      p_dod: ['deliverable'],
+      p_amount_minor: 20000, p_currency: 'JPY',
+
+      p_earner_display_name: 'Acme Translations',
+      p_invited_hirer_email: 'invited@example.test',
     },
   });
-  expect(created.status).toBe(201);
+  expect(created.status).toBe(200);
+  expect(created.body.status).toBe('created');
 
   const accepted = await api(request, '/functions/v1/validate-invite-token', {
     body: {
-      invite_token: created.body[0].invite_token, accept: true,
+      invite_token: created.body.contract.invite_token, accept: true,
       hirer_email: 'invited@example.test', counterparty_name: 'Guest',
     },
   });
@@ -357,21 +387,23 @@ test('a JPY agreement still accepts the v1 terms digest', async ({ request }) =>
   // The compatibility half: v1 does cover the amount of a yen contract, so a
   // guest on an older bundle is not refused for being one deploy behind.
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      project_name: 'Yen v1 digest probe',
-      dod: ['deliverable'],
-      amount_jpy: 20000, amount_minor: 20000, currency: 'JPY',
-      deadline: '2026-12-31',
-      earner_user_id: userId,
-      earner_display_name: 'Acme Translations',
-      invited_hirer_email: 'invited@example.test',
+      p_performed_by: 'creator',
+      p_project_name: 'Yen v1 digest probe',
+      p_dod: ['deliverable'],
+      p_amount_minor: 20000, p_currency: 'JPY',
+      p_deadline: '2026-12-31',
+
+      p_earner_display_name: 'Acme Translations',
+      p_invited_hirer_email: 'invited@example.test',
     },
   });
-  expect(created.status).toBe(201);
-  const contract = created.body[0];
+  expect(created.status).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   const digest = await shownTermsDigest(contract, 1);
   const accepted = await api(request, '/functions/v1/validate-invite-token', {

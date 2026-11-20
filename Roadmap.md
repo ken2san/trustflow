@@ -1,7 +1,7 @@
 # TrustFlow Roadmap
 
-_The canonical roadmap. Rebuilt 2026-11-18 from `HANDOFF.md`, `docs/entry-contract.md`
-and `.ada/codex-report-121.md`._
+_The canonical roadmap. Rebuilt 2026-11-18; maintained by 棟梁 (Kenji, 2026-11-20).
+Last updated **2026-11-20 12:27 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 158 / Codex 141._
 
 `HANDOFF.md` holds the current state and `Decisions.md` holds the reasons. If this file
 disagrees with either of them, this file is wrong. The longer product-strategy text that
@@ -34,23 +34,37 @@ entry path never wait for real deals or real users (`Decisions.md` 2026-11-18).
   frontend, both exports, public docs). Live `guest-evidence` passed 13/13 on E2E at
   `eee0889` (Task 136) and was pushed to origin/main (Task 137).
 - **Entry contract** `docs/entry-contract.md`: `75a1c3f`, plus the `918d25c` fix for both
-  Task 139 blockers. **Committed locally, not pushed.**
+  Task 139 blockers. Pushed with `122bac2` (Task 153).
+- **Schedule row 0, design cross-review:** done 2026-11-19 (Codex T126 + Claude T147).
+- **Schedule row 1, one-deal credential store (issuance off):** built 2026-11-19 (`6942691`),
+  verified 2026-11-20 (Codex T129 review, Claude T152 races 6/6), pushed `122bac2`.
+  No migration or edge function applied to E2E/production; issuance stays off.
 
-## Now: entry path (codex-report-121)
+## Now: where we are against the schedule (rev 3)
 
-| # | Step | Status |
-|---|---|---|
-| 1 | One-deal contract: issuer/acceptance binding, scopes, revoke/replay rules | **Done** (local) |
-| 2 | Credential store, issue and revoke for one deal; no direct client mutation | Uncommitted Codex Task 123 code, reworked per the design in schedule row 1 |
-| 3 | Owner delegated reads and writes, with atomic liveness checks and an authority reference on each event | Not started |
-| 4 | Counterpart account-to-invite binding and delegated acceptance (AI2AI) | Not started |
-| 5 | One end-to-end deal, negative authority/revoke/replay cases, E2E release rehearsal | Not started |
+**Row 2 (C5 server-side create), planned 2026-11-23..24: started 2026-11-20, about 3 working days
+ahead of the planned start.** Revised estimate 3–4 working days (Codex T131), so the finish may spill
+1–2 days past 11-24; Kenji accepted that (2026-11-20). M1 2026-12-04 unchanged.
 
-**C5 decided:** build server-side creation and close direct client inserts; current client insert
-is not the target. C2 binds credential ID and issuer kind in v5; C3 applies normalized email
-matching to relevant RLS checks as well. No `issuer_assurance` column. See the dated baseline
-in `docs/schedule.md` (**rev 3**, **execution authorized 2026-11-19**; whole design confirmed by Kenji. Row 0 (cross-review) **done 11-19** as planned (Codex T126 + Claude T147): **on schedule, 0 days late**. Next: row 1 (Codex builds the credential store, input = T126 must-fix list). The v5 preimage is still open for row 3; M1 2026-12-04, M2 12-07, M3 12-15, M4 12-16; +1 working day vs rev 2 because row 4 was under-sized); auth/record work gets independent cross-review and production release
-needs Kenji's separate OK.
+| Row 2 step | Status |
+|---|---|
+| Stage A: migration `20261120090000` adds RPC `create_entry_contract` (additive; direct INSERT still open), client and all writers switched, E2E specs converted | Built locally (T134–T137), **uncommitted** |
+| Stage A local tests: SQL suite, 2-session races, legacy-vs-RPC hash parity, row 1 races | PASS (Claude T154/T155); harness hardened after Codex T138/T139 blocks (T156/T157) |
+| Codex final re-review, then one local commit (no push) | T158 harness fix accepted by Codex T141 (12:13 ET); commit still held: full make check 778/779 (eventFormat matrix test times out under suite load; one unexplained verifyReceipt failure). Codex T142 (12:27 ET) making both tests load-safe (tests only), then local commit if make check green twice |
+| Before-B fixes: `currency.spec` B-pending asserts; explicit projection instead of `to_jsonb(c)` | Open |
+| E2E rehearsal incl. the 5 converted scripts (Kenji chose to run them there) | Needs Kenji's OK |
+| Migration B: close direct client INSERT (no rollback after it, only forward fix) | Needs Kenji's OK |
+
+**Deploy order:** apply and verify migration A on the target **before** pushing any frontend
+with the RPC client; a push auto-deploys the production frontend.
+
+Next rows: 3 (v5 canonical, opens with an independent review of the v5 preimage) 11-25,
+4 (owner delegated append + resolver) 11-26..27, then 5–8 to M1 on 12-04.
+
+**C5 decided:** build server-side creation and close direct client inserts. C2 binds credential ID
+and issuer kind in v5; C3 applies normalized email matching to relevant RLS checks as well.
+No `issuer_assurance` column. Auth/record work gets independent cross-review; production
+release needs Kenji's separate OK.
 
 **Decided 2026-11-19 (Task 145):** (b) grant evidence is kept, and a draft with any grant cannot be
 deleted; (c) v5 preimage has a fixed key order, `hash_version` and a domain separator; (a) the creation
@@ -83,8 +97,7 @@ snapshot is deferred, because the acceptance snapshot already fixes the terms.
 
 ## Unverified
 
-- The Vercel deploy of `eee0889` was still "pending" right after the push (Task 137).
-  Nothing in HANDOFF confirms that it finished.
+- The push of `122bac2` (Task 153) triggers a production frontend redeploy; nothing in
+  HANDOFF confirms it finished.
 - `918d25c` has not been cross-reviewed since the fix. Task 139 reviewed `75a1c3f` only.
-- Step 2's actual state is whatever Codex Task 123 reports. Nothing was read from the
-  uncommitted files for this roadmap.
+- Row 2 stage A HTTP/REST behavior and the 5 scripts are untested until the E2E rehearsal.

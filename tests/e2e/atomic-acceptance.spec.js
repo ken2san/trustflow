@@ -40,6 +40,13 @@ async function api(request, path, { method = 'POST', token, guestToken, body, pr
   return { status: response.status(), body: parsed };
 }
 
+// Build only the eight accepted RPC parameters; never forward owner-controlled fields.
+function createEntryArgs(t) {
+  return { p_project_name: t.project_name, p_dod: t.dod, p_amount_minor: t.amount_minor,
+    p_currency: t.currency, p_deadline: t.deadline ?? null, p_invited_hirer_email: t.invited_hirer_email,
+    p_performed_by: t.performed_by ?? 'creator', p_earner_display_name: t.earner_display_name ?? null };
+}
+
 const TERMS = {
   project_name: 'Atomic acceptance probe',
   dod: ['translate the document'],
@@ -52,18 +59,13 @@ const TERMS = {
 /** An unaccepted contract with a live invitation. */
 async function invited(request, overrides = {}) {
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
-    body: {
-      ...TERMS, ...overrides,
-      earner_user_id: userId,
-      earner_display_name: 'Acme Translations',
-      invited_hirer_email: 'invited@example.test',
-    },
+    body: createEntryArgs({ ...TERMS, ...overrides, earner_display_name: 'Acme Translations', invited_hirer_email: 'invited@example.test' }),
   });
-  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  return { contract: created.body[0], earnerToken: token };
+  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  return { contract: created.body.contract, earnerToken: token };
 }
 
 const acceptWith = (request, inviteToken, body = {}) =>

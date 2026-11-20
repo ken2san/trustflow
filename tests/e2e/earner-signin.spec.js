@@ -85,21 +85,24 @@ test('a returning Earner with a restored session sees their existing contracts',
   // A contract that definitely belongs to this Earner and is easy to find
   // among the others.
   const marker = `Returning Earner Probe ${Date.now()}`;
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token: session.access_token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: session.user.id,
-      earner_display_name: 'Returning Earner',
-      project_name: marker,
-      dod: ['deliverable'],
-      amount_jpy: 12345,
-      amount_minor: 12345,
-      currency: 'JPY',
-      invited_hirer_email: 'returning.client@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+
+      p_earner_display_name: 'Returning Earner',
+      p_project_name: marker,
+      p_dod: ['deliverable'],
+
+      p_amount_minor: 12345,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'returning.client@example.test',
     },
   });
-  expect(created.status).toBe(201);
+  expect(created.status).toBe(200);
+  expect(created.body.status).toBe('created');
 
   // A completely fresh browser context that happens to hold the session.
   await seedSession(page, session);

@@ -170,23 +170,20 @@ function exacting() {
 async function runAgreement({ ownerToken, ownerId, label, party }) {
   console.log(`\n── ${label} ────────────────────────────────`);
 
-  const created = await rest(ownerToken, 'contracts?select=*', {
+  const created = await rest(ownerToken, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: ownerId,
-      earner_display_name: 'Simulation Owner',
-      project_name: `${RUN} — ${label}`,
-      dod: ['Deliver the thing', 'Thing matches the brief'],
-      amount_jpy: 50000,
-      amount_minor: 50000,
-      currency: 'JPY',
-      deadline: tomorrowLocalISO(),
-      invited_hirer_email: party.email,
-      performed_by: 'creator',
+      p_earner_display_name: 'Simulation Owner',
+      p_project_name: `${RUN} — ${label}`,
+      p_dod: ['Deliver the thing', 'Thing matches the brief'],
+      p_amount_minor: 50000,
+      p_currency: 'JPY',
+      p_deadline: tomorrowLocalISO(),
+      p_invited_hirer_email: party.email,
+      p_performed_by: 'creator',
     }),
   });
-  const contract = Array.isArray(created.body) ? created.body[0] : null;
+  const contract = created.body?.status === 'created' ? created.body.contract : null;
   if (!contract) die(`insert refused (HTTP ${created.status}): ${JSON.stringify(created.body)}`);
   return contract;
 }

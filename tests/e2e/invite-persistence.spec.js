@@ -25,6 +25,13 @@ test.skip(LIVE_SKIPPED,
   'TF_LIVE_E2E=skip — the live-API suites were deliberately disabled.');
 
 // The terms a Hirer must be shown, and which a tampered URL must not change.
+// Build only the eight accepted RPC parameters; never forward owner-controlled fields.
+function createEntryArgs(t) {
+  return { p_project_name: t.project_name, p_dod: t.dod, p_amount_minor: t.amount_minor,
+    p_currency: t.currency, p_deadline: t.deadline ?? null, p_invited_hirer_email: t.invited_hirer_email,
+    p_performed_by: t.performed_by ?? 'creator', p_earner_display_name: t.earner_display_name ?? null };
+}
+
 const TERMS = {
   project_name: 'Persisted Terms Probe',
   amount_jpy: 63500,
@@ -55,19 +62,13 @@ const signInVerifiedEarner = getEarnerSession;
 /** Creates a contract the way the app does: business columns only. */
 async function createFixtureContract(request, overrides = {}) {
   const { token, userId } = await signInVerifiedEarner(request);
-  const { status, body } = await api(request, '/rest/v1/contracts', {
+  const { status, body } = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
-    body: {
-      earner_user_id: userId,
-      invited_hirer_email: 'invited.client@example.test',
-      currency: 'JPY',
-      ...TERMS,
-      ...overrides,
-    },
+    body: createEntryArgs({ invited_hirer_email: 'invited.client@example.test', currency: 'JPY', ...TERMS, ...overrides }),
   });
-  expect(status, `fixture insert failed: ${JSON.stringify(body)}`).toBe(201);
-  return { contract: body[0], token };
+  expect(status, `fixture insert failed: ${JSON.stringify(body)}`).toBe(200);
+  expect(body.status).toBe('created');
+  return { contract: body.contract, token };
 }
 
 // ── Persistence and the verified-Earner gate ────────────────────────────────
@@ -89,6 +90,7 @@ test('a verified Earner persists a contract that the server owns the security fi
   expect(Math.round(ttlHours)).toBe(72);
 });
 
+// B-pending bypass test: direct INSERT must remain refused after B.
 test('an unverified (anonymous) Earner cannot persist a contract at all', async ({ request }) => {
   // This used to mint a fresh anonymous user per run, which made the test a
   // coin flip: anonymous sign-ins are capped at 30/hour per IP and every page

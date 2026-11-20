@@ -91,23 +91,21 @@ async function main() {
   // CAD with cents, deliberately. $1,250.50 is 125050 minor units, and every
   // path that has ever been exercised headlessly was in yen — a currency with
   // no minor unit, where the mandatory-digest branch does not apply.
-  const created = await restCall(URL_, KEY, token, 'contracts?select=*', {
+  const created = await restCall(URL_, KEY, token, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: userId,
-      earner_display_name: 'Owner Agent',
-      project_name: `two-agent ${RUN} — CAD`,
-      dod: ['Translate the document', 'Return a stamped PDF'],
-      amount_minor: 125050,
-      currency: 'CAD',
-      deadline: tomorrowLocalISO(),
-      invited_hirer_email: 'agent-guest@example.invalid',
-      performed_by: 'creator',
+      p_earner_display_name: 'Owner Agent',
+      p_project_name: `two-agent ${RUN} — CAD`,
+      p_dod: ['Translate the document', 'Return a stamped PDF'],
+      p_amount_minor: 125050,
+      p_currency: 'CAD',
+      p_deadline: tomorrowLocalISO(),
+      p_invited_hirer_email: 'agent-guest@example.invalid',
+      p_performed_by: 'creator',
     }),
   });
-  const contract = Array.isArray(created.body) ? created.body[0] : null;
-  r.ok('created a CAD agreement', created.status === 201 && Boolean(contract?.id),
+  const contract = created.body?.status === 'created' ? created.body.contract : null;
+  r.ok('created a CAD agreement', created.status === 200 && Boolean(contract?.id),
     `HTTP ${created.status} ${contract?.amount_minor} ${contract?.currency}`);
   if (!contract) throw new Error(`creation failed: ${JSON.stringify(created.body)}`);
   console.log(`      contract ${contract.id}`);

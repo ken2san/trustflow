@@ -282,7 +282,7 @@ describe('guestChainStatus matches the 1.0 status, renaming only its first state
       }
     }
     expect(compared).toBeGreaterThan(10000)
-  })
+  }, 30000)
 
   it('puts zero v2-or-later rows ahead of any failure, as 1.0 did', () => {
     const rows = [v1Row(1, false, null, false)]

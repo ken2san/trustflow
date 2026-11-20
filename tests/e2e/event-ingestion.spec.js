@@ -41,22 +41,22 @@ const signInEarner = getEarnerSession;
 
 async function createContract(request) {
   const { token, userId } = await signInEarner(request);
-  const { status, body } = await api(request, '/rest/v1/contracts', {
+  const { status, body } = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Ingestion Suite Earner',
-      project_name: 'Event Ingestion Probe',
-      dod: ['deliverable'],
-      amount_jpy: 1000,
-      amount_minor: 1000,
-      currency: 'JPY',
-      invited_hirer_email: 'ingestion.invitee@example.test',
+      p_earner_display_name: 'Ingestion Suite Earner',
+      p_project_name: 'Event Ingestion Probe',
+      p_dod: ['deliverable'],
+      p_amount_minor: 1000,
+      p_currency: 'JPY',
+      p_deadline: null,
+      p_invited_hirer_email: 'ingestion.invitee@example.test',
+      p_performed_by: 'creator',
     },
   });
-  expect(status, `contract insert failed: ${JSON.stringify(body)}`).toBe(201);
-  return { contract: body[0], token, userId };
+  expect(status, `contract creation failed: ${JSON.stringify(body)}`).toBe(200);
+  expect(body.status).toBe('created');
+  return { contract: body.contract, token, userId };
 }
 
 // ── The client cannot write to the table at all ─────────────────────────────

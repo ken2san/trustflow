@@ -38,6 +38,13 @@ async function api(request, path, { method = 'POST', token, guestToken, body, pr
   return { status: response.status(), body: parsed };
 }
 
+// Build only the eight accepted RPC parameters; never forward owner-controlled fields.
+function createEntryArgs(t) {
+  return { p_project_name: t.project_name, p_dod: t.dod, p_amount_minor: t.amount_minor,
+    p_currency: t.currency, p_deadline: t.deadline ?? null, p_invited_hirer_email: t.invited_hirer_email,
+    p_performed_by: t.performed_by ?? 'creator', p_earner_display_name: t.earner_display_name ?? null };
+}
+
 const TERMS = {
   project_name: 'Certified translation of a birth certificate',
   dod: ['translate the document', 'return a stamped PDF'],
@@ -54,19 +61,13 @@ async function acceptedAgreement(request, {
 } = {}) {
   const { token, userId } = await getEarnerSession(request);
 
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
-    body: {
-      ...TERMS, ...terms,
-      earner_user_id: userId,
-      earner_display_name: 'Acme Translations',
-      performed_by: performedBy,
-      invited_hirer_email: invitedEmail,
-    },
+    body: createEntryArgs({ ...TERMS, ...terms, earner_display_name: 'Acme Translations', performed_by: performedBy, invited_hirer_email: invitedEmail }),
   });
-  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  const contract = created.body[0];
+  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   // Consuming the invitation and recording what was accepted are one operation.
   const accept = await api(request, '/functions/v1/validate-invite-token', {

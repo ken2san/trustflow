@@ -45,22 +45,25 @@ const signInEarner = getEarnerSession;
 async function acceptedContract(request, { projectName = 'Guest Evidence Probe' } = {}) {
   const { token, userId } = await signInEarner(request);
 
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Evidence Suite Earner',
-      project_name: projectName,
-      dod: ['deliverable one', 'deliverable two'],
-      amount_jpy: 42000,
-      amount_minor: 42000,
-      currency: 'JPY',
-      invited_hirer_email: 'invited@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+
+      p_earner_display_name: 'Evidence Suite Earner',
+      p_project_name: projectName,
+      p_dod: ['deliverable one', 'deliverable two'],
+
+      p_amount_minor: 42000,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'invited@example.test',
     },
   });
-  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  const contract = created.body[0];
+  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   await api(request, '/functions/v1/log-event', {
     token, body: { type: 'contract.initiated', contract_id: contract.id, payload: { step: 1 } },
@@ -295,22 +298,25 @@ test('internal event fields are omitted and payloads are allowlisted', async ({ 
 
 test('a guest accepts an invite and can then read the record in the UI', async ({ page, request }) => {
   const { token, userId } = await signInEarner(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'UI Flow Earner',
-      project_name: 'UI Flow Probe',
-      dod: ['ship the thing'],
-      amount_jpy: 7500,
-      amount_minor: 7500,
-      currency: 'JPY',
-      invited_hirer_email: 'ui.guest@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+
+      p_earner_display_name: 'UI Flow Earner',
+      p_project_name: 'UI Flow Probe',
+      p_dod: ['ship the thing'],
+
+      p_amount_minor: 7500,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'ui.guest@example.test',
     },
   });
-  expect(created.status).toBe(201);
-  const contract = created.body[0];
+  expect(created.status).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   await api(request, '/functions/v1/log-event', {
     token, body: { type: 'contract.initiated', contract_id: contract.id, payload: { step: 1 } },
@@ -421,22 +427,25 @@ test('a guest who navigates away can still reach the agreement they accepted', a
   // Found by a blind counterparty asked to accept and then look for its own
   // record. The first blind run declined, so it never reached this.
   const { token, userId } = await signInEarner(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Return Path Earner',
-      project_name: 'Return Path Probe',
-      dod: ['do the thing'],
-      amount_jpy: 20000,
-      amount_minor: 20000,
-      currency: 'JPY',
-      invited_hirer_email: 'return.invited@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+
+      p_earner_display_name: 'Return Path Earner',
+      p_project_name: 'Return Path Probe',
+      p_dod: ['do the thing'],
+
+      p_amount_minor: 20000,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'return.invited@example.test',
     },
   });
-  expect(created.status).toBe(201);
-  const contract = created.body[0];
+  expect(created.status).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto(`/?token=${contract.invite_token}`);
@@ -479,22 +488,25 @@ test('declining records nothing and leaves the invitation usable', async ({ page
   // and the invitation has to still work, because reconsidering is the common
   // case and the link is the only way back.
   const { token, userId } = await signInEarner(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Decline Path Earner',
-      project_name: 'Decline Path Probe',
-      dod: ['do the thing'],
-      amount_jpy: 20000,
-      amount_minor: 20000,
-      currency: 'JPY',
-      invited_hirer_email: 'decline.invited@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+
+      p_earner_display_name: 'Decline Path Earner',
+      p_project_name: 'Decline Path Probe',
+      p_dod: ['do the thing'],
+
+      p_amount_minor: 20000,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'decline.invited@example.test',
     },
   });
-  expect(created.status).toBe(201);
-  const contract = created.body[0];
+  expect(created.status).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto(`/?token=${contract.invite_token}`);

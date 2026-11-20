@@ -36,22 +36,25 @@ async function api(request, path, { method = 'POST', token, guestToken, body, pr
 async function acceptedContract(request, { dod = ['ship the thing'] } = {}) {
   const { token, userId } = await getEarnerSession(request);
 
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Evidence Core Earner',
-      project_name: 'Evidence Core Probe',
-      dod,
-      amount_jpy: 1000,
-      amount_minor: 1000,
-      currency: 'JPY',
-      invited_hirer_email: 'invited@example.test',
+      p_performed_by: 'creator',
+      p_deadline: null,
+
+      p_earner_display_name: 'Evidence Core Earner',
+      p_project_name: 'Evidence Core Probe',
+      p_dod: dod,
+
+      p_amount_minor: 1000,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'invited@example.test',
     },
   });
-  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  const contract = created.body[0];
+  expect(created.status, `contract insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   const accept = await api(request, '/functions/v1/validate-invite-token', {
     body: { invite_token: contract.invite_token, accept: true, hirer_email: 'hirer@example.test' },
@@ -311,23 +314,25 @@ test('a client still cannot write state directly', async ({ request }) => {
 
 async function agreementWhere(request, performedBy) {
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Creator',
-      project_name: 'Direction Probe',
-      dod: ['translate the document'],
-      amount_jpy: 20000,
-      amount_minor: 20000,
-      currency: 'JPY',
-      invited_hirer_email: 'invited@example.test',
-      performed_by: performedBy,
+      p_deadline: null,
+
+      p_earner_display_name: 'Creator',
+      p_project_name: 'Direction Probe',
+      p_dod: ['translate the document'],
+
+      p_amount_minor: 20000,
+      p_currency: 'JPY',
+      p_invited_hirer_email: 'invited@example.test',
+      p_performed_by: performedBy,
     },
   });
-  expect(created.status, `insert failed: ${JSON.stringify(created.body)}`).toBe(201);
-  const contract = created.body[0];
+  expect(created.status, `insert failed: ${JSON.stringify(created.body)}`).toBe(200);
+  expect(created.body.status).toBe('created');
+  const contract = created.body.contract;
 
   const accept = await api(request, '/functions/v1/validate-invite-token', {
     body: { invite_token: contract.invite_token, accept: true, hirer_email: 'worker@example.test' },

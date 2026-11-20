@@ -101,23 +101,20 @@ function tomorrowLocalISO() {
 }
 
 async function makeDraft(ownerToken, ownerId, n) {
-  const created = await rest(ownerToken, 'contracts?select=id', {
+  const created = await rest(ownerToken, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: ownerId,
-      earner_display_name: 'Race Harness Owner',
-      project_name: `${RUN} — trial ${n}`,
-      dod: ['A draft raced against its own evidence'],
-      amount_jpy: 10000,
-      amount_minor: 10000,
-      currency: 'JPY',
-      deadline: tomorrowLocalISO(),
-      invited_hirer_email: 'harness-guest@example.invalid',
-      performed_by: 'creator',
+      p_earner_display_name: 'Race Harness Owner',
+      p_project_name: `${RUN} — trial ${n}`,
+      p_dod: ['A draft raced against its own evidence'],
+      p_amount_minor: 10000,
+      p_currency: 'JPY',
+      p_deadline: tomorrowLocalISO(),
+      p_invited_hirer_email: 'harness-guest@example.invalid',
+      p_performed_by: 'creator',
     }),
   });
-  return (Array.isArray(created.body) ? created.body[0] : null)?.id ?? null;
+  return (created.body?.status === 'created' ? created.body.contract : null)?.id ?? null;
 }
 
 async function main() {

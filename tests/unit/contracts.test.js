@@ -17,12 +17,7 @@ const getUser = vi.fn()
 vi.mock('../../src/lib/supabase.js', () => ({
   supabase: {
     auth: { getUser: (...a) => getUser(...a) },
-    from: () => ({
-      insert: (...a) => {
-        insert(...a)
-        return { select: () => ({ single: async () => ({ data: { id: 'c1' }, error: null }) }) }
-      },
-    }),
+    rpc: async (name, args) => { insert(args); return { data: { status: 'created', contract: { id: 'c1' } }, error: null } },
   },
 }))
 vi.mock('../../src/lib/guestSession.js', () => ({ getGuestAccessToken: vi.fn(() => null) }))
@@ -44,7 +39,7 @@ beforeEach(() => {
   getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
 })
 
-const sentRow = () => insert.mock.calls.at(-1)[0]
+const sentRow = () => Object.fromEntries(Object.entries(insert.mock.calls.at(-1)[0]).map(([key, value]) => [key.replace(/^p_/, ''), value]))
 
 describe('createContract', () => {
   it('does not send dod_hash — the column the client may not write', async () => {
@@ -60,7 +55,7 @@ describe('createContract', () => {
     // expiry, the guest credential, hirer_email, and every settlement column.
     expect(Object.keys(sentRow()).sort()).toEqual([
       'amount_minor', 'currency', 'deadline', 'dod',
-      'earner_display_name', 'earner_user_id', 'invited_hirer_email',
+      'earner_display_name', 'invited_hirer_email',
       'performed_by', 'project_name',
     ])
   })
@@ -111,7 +106,7 @@ describe('createContract', () => {
 
   it('attributes the row to the signed-in account, not to anything passed in', async () => {
     await createContract({ ...base, earnerUserId: 'someone-else' })
-    expect(sentRow().earner_user_id).toBe('user-1')
+    expect(sentRow()).not.toHaveProperty('earner_user_id')
   })
 
   it('refuses to build a row when nobody is signed in', async () => {

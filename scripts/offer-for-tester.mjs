@@ -37,26 +37,22 @@ function deadlineISO(days = 21) {
 
 const { token, userId } = await ownerSession();
 
-const created = await rest(token, 'contracts?select=*', {
-  method: 'POST',
-  headers: { Prefer: 'return=representation' },
-  body: JSON.stringify({
-    earner_user_id: userId,
-    earner_display_name: 'Acme Translations',
-    project_name: BRIEF,
-    dod: ['Deliver the translated document', 'Return it as a stamped PDF'],
-    amount_jpy: AMOUNT,
-    amount_minor: AMOUNT,
-    amount_minor: AMOUNT,
-    currency: 'JPY',
-    deadline: deadlineISO(),
-    invited_hirer_email: 'invited@example.invalid',
-    performed_by: PERFORMED_BY,
+const created = await rest(token, 'rpc/create_entry_contract', {
+    method: 'POST',
+    body: JSON.stringify({
+      p_earner_display_name: 'Acme Translations',
+    p_project_name: BRIEF,
+    p_dod: ['Deliver the translated document', 'Return it as a stamped PDF'],
+    p_amount_minor: AMOUNT,
+    p_currency: 'JPY',
+    p_deadline: deadlineISO(),
+    p_invited_hirer_email: 'invited@example.invalid',
+    p_performed_by: PERFORMED_BY,
   }),
-});
+  });
 
-const contract = Array.isArray(created.body) ? created.body[0] : null;
-if (created.status !== 201 || !contract) {
+const contract = created.body?.status === 'created' ? created.body.contract : null;
+if (created.status !== 200 || !contract) {
   console.error(`Could not offer the agreement: HTTP ${created.status}`);
   console.error(JSON.stringify(created.body, null, 2));
   process.exit(1);

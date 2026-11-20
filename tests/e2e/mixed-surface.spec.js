@@ -70,23 +70,24 @@ function tomorrow() {
  */
 async function offer(request, { currency, amountMinor, label }) {
   const { token, userId } = await getEarnerSession(request);
-  const created = await api(request, '/rest/v1/contracts?select=*', {
+  const created = await api(request, '/rest/v1/rpc/create_entry_contract', {
     token,
-    prefer: 'return=representation',
+
     body: {
-      earner_user_id: userId,
-      earner_display_name: 'Mixed Surface Owner',
-      project_name: `mixed-surface ${label} ${Date.now()}`,
-      dod: ['Translate the document', 'Return a stamped PDF'],
-      amount_minor: amountMinor,
-      currency,
-      deadline: tomorrow(),
-      invited_hirer_email: 'mixed-surface@example.invalid',
-      performed_by: 'creator',
+
+      p_earner_display_name: 'Mixed Surface Owner',
+      p_project_name: `mixed-surface ${label} ${Date.now()}`,
+      p_dod: ['Translate the document', 'Return a stamped PDF'],
+      p_amount_minor: amountMinor,
+      p_currency: currency,
+      p_deadline: tomorrow(),
+      p_invited_hirer_email: 'mixed-surface@example.invalid',
+      p_performed_by: 'creator',
     },
   });
-  expect(created.status, JSON.stringify(created.body)).toBe(201);
-  return { contract: created.body[0], ownerToken: token };
+  expect(created.status, JSON.stringify(created.body)).toBe(200);
+  expect(created.body.status).toBe('created');
+  return { contract: created.body.contract, ownerToken: token };
 }
 
 /**

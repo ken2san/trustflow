@@ -67,28 +67,23 @@ async function main() {
   ok('owner holds a verified session', Boolean(ownerToken && ownerId));
 
   // ── 1. The owner offers an agreement ──────────────────────────────────────
-  // A plain PostgREST insert, exactly as src/lib/contracts.js does it. The
-  // server-owned columns are absent because the client's INSERT grant on them
-  // was revoked (20260923000000); including one makes the whole insert 403.
-  const created = await rest(ownerToken, 'contracts?select=*', {
+  // Create through the authenticated RPC, as the application does. The server
+  // derives the owner and other protected fields.
+  const created = await rest(ownerToken, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: ownerId,
-      earner_display_name: 'API Harness Owner',
-      project_name: `${RUN} — slice 1`,
-      dod: ['Deliver the thing', 'Thing matches the brief'],
-      amount_jpy: 50000,
-      amount_minor: 50000,
-      amount_minor: 50000,
-      currency: 'JPY',
-      deadline: tomorrowLocalISO(),
-      invited_hirer_email: 'harness-guest@example.invalid',
-      performed_by: 'creator',
+      p_earner_display_name: 'API Harness Owner',
+      p_project_name: `${RUN} — slice 1`,
+      p_dod: ['Deliver the thing', 'Thing matches the brief'],
+      p_amount_minor: 50000,
+      p_currency: 'JPY',
+      p_deadline: tomorrowLocalISO(),
+      p_invited_hirer_email: 'harness-guest@example.invalid',
+      p_performed_by: 'creator',
     }),
   });
-  const contract = Array.isArray(created.body) ? created.body[0] : null;
-  if (!ok('owner creates a contract', created.status === 201 && Boolean(contract),
+  const contract = created.body?.status === 'created' ? created.body.contract : null;
+  if (!ok('owner creates a contract', created.status === 200 && Boolean(contract),
     `HTTP ${created.status}`)) die(`insert refused: ${JSON.stringify(created.body)}`);
 
   const contractId = contract.id;
@@ -355,53 +350,54 @@ async function main() {
   // whose whole claim is an append-only evidence log. 20261104204009 added
   // `not exists (select 1 from events ...)` to the predicate. Reachable then,
   // reached here.
-  const draft = await rest(ownerToken, 'contracts?select=id', {
+  const draft = await rest(ownerToken, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: ownerId,
-      earner_display_name: 'API Harness Owner',
-      project_name: `${RUN} — deletable draft`,
-      dod: ['A draft that will be deleted'],
-      amount_jpy: 10000,
-      amount_minor: 10000,
-      amount_minor: 10000,
-      currency: 'JPY',
-      deadline: tomorrowLocalISO(),
-      invited_hirer_email: 'harness-guest@example.invalid',
-      performed_by: 'creator',
+      p_earner_display_name: 'API Harness Owner',
+      p_project_name: `${RUN} — deletable draft`,
+      p_dod: ['A draft that will be deleted'],
+      p_amount_minor: 10000,
+      p_currency: 'JPY',
+      p_deadline: tomorrowLocalISO(),
+      p_invited_hirer_email: 'harness-guest@example.invalid',
+      p_performed_by: 'creator',
     }),
   });
-  const draftId = (Array.isArray(draft.body) ? draft.body[0] : null)?.id ?? null;
-  ok('the owner creates a second draft', draft.status === 201 && Boolean(draftId),
+  const draftId = (draft.body?.status === 'created' ? draft.body.contract : null)?.id ?? null;
+  ok('the owner creates a second draft', draft.status === 200 && Boolean(draftId),
     `HTTP ${draft.status}`);
 
   // The control, and it is not optional. Without it a refusal below proves
   // only that delete never works — which is exactly the shape of a test that
   // passes for the wrong reason, the failure this suite was written after.
-  const emptyDraft = await rest(ownerToken, 'contracts?select=id', {
+  const emptyDraft = await rest(ownerToken, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: ownerId,
-      earner_display_name: 'API Harness Owner',
-      project_name: `${RUN} — deletable draft, no events`,
-      dod: ['A draft with nothing recorded against it'],
-      amount_jpy: 10000,
-      amount_minor: 10000,
-      amount_minor: 10000,
-      currency: 'JPY',
-      deadline: tomorrowLocalISO(),
-      invited_hirer_email: 'harness-guest@example.invalid',
-      performed_by: 'creator',
+      p_earner_display_name: 'API Harness Owner',
+      p_project_name: `${RUN} — deletable draft, no events`,
+      p_dod: ['A draft with nothing recorded against it'],
+      p_amount_minor: 10000,
+      p_currency: 'JPY',
+      p_deadline: tomorrowLocalISO(),
+      p_invited_hirer_email: 'harness-guest@example.invalid',
+      p_performed_by: 'creator',
     }),
   });
-  const emptyDraftId = (Array.isArray(emptyDraft.body) ? emptyDraft.body[0] : null)?.id ?? null;
-  await rest(ownerToken, `contracts?id=eq.${emptyDraftId}`, { method: 'DELETE' });
-  const emptyGone = await rest(ownerToken, `contracts?id=eq.${emptyDraftId}&select=id`);
-  ok('a draft with no events is deletable',
-    Array.isArray(emptyGone.body) && emptyGone.body.length === 0,
-    `${(emptyGone.body ?? []).length} rows remain`);
+  const emptyDraftId = (emptyDraft.body?.status === 'created' ? emptyDraft.body.contract : null)?.id ?? null;
+  // Without a real id, the delete and the read below match no row and the
+  // "deletable" check would pass on nothing.
+  if (ok('the owner creates the empty control draft',
+    emptyDraft.status === 200 && emptyDraft.body?.status === 'created' && Boolean(emptyDraftId),
+    `HTTP ${emptyDraft.status}, status ${emptyDraft.body?.status ?? 'missing'}`)) {
+    const emptyDelete = await rest(ownerToken, `contracts?id=eq.${emptyDraftId}`, { method: 'DELETE' });
+    const emptyGone = await rest(ownerToken, `contracts?id=eq.${emptyDraftId}&select=id`);
+    ok('a draft with no events is deletable',
+      emptyDelete.status >= 200 && emptyDelete.status < 300
+        && emptyGone.status === 200 && Array.isArray(emptyGone.body) && emptyGone.body.length === 0,
+      `delete HTTP ${emptyDelete.status}, read HTTP ${emptyGone.status}, ${(Array.isArray(emptyGone.body) ? emptyGone.body : []).length} rows remain`);
+  } else {
+    ok('a draft with no events is deletable', false, 'no control draft to delete');
+  }
 
   const draftEvent = await invoke('log-event', {
     ownerToken,

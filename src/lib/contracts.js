@@ -58,40 +58,21 @@ export async function createContract({
     return { contract: null, error: userError ?? new Error('Not signed in') }
   }
 
-  const { data, error } = await supabase
-    .from('contracts')
-    .insert({
-      earner_user_id: userData.user.id,
-      earner_display_name: earnerDisplayName,
-      project_name: projectName,
-      dod,
-      // dod_hash is NOT sent. It is derived from `dod` server-side wherever it
-      // is needed, and the client INSERT grant on it was revoked precisely so a
-      // party cannot record a terms-hash that disagrees with its own terms.
-      // Sending it made every creation fail with a 403 that no test caught,
-      // because the tests wrote their own insert bodies instead of calling this
-      // function — which is why there is now a test that calls this function.
-      //
-      // The amount, in the currency's minor unit. The deprecated amount_jpy
-      // mirror is NOT sent: the server fills it for a JPY contract and refuses
-      // it for any other (contracts_fill_amount_minor and
-      // contracts_amount_jpy_mirror_check, 20261108160000/161000). This client
-      // wrote it for a while, which worked, and meant every JPY writer had to
-      // keep a deprecated column in step by hand — one more place for the
-      // mirror to drift. One owner of the mirror, and it is the database.
-      amount_minor: amountMinor,
-      currency,
-      deadline: deadline || null,
-      invited_hirer_email: invitedHirerEmail,
-      // Which side does the work. Normalised here rather than trusted: a check
-      // constraint would reject anything else anyway, but as an opaque database
-      // error rather than the quiet default a caller expects.
-      performed_by: performedBy === 'counterparty' ? 'counterparty' : 'creator',
-    })
-    .select()
-    .single()
-
-  return { contract: data ?? null, error: error ?? null }
+  const { data, error } = await supabase.rpc('create_entry_contract', {
+    p_project_name: projectName,
+    p_dod: dod,
+    p_amount_minor: amountMinor,
+    p_currency: currency,
+    p_deadline: deadline || null,
+    p_invited_hirer_email: invitedHirerEmail,
+    p_performed_by: performedBy === 'counterparty' ? 'counterparty' : 'creator',
+    p_earner_display_name: earnerDisplayName ?? null,
+  })
+  if (error) return { contract: null, error }
+  if (data?.status !== 'created' || !data.contract) {
+    return { contract: null, error: new Error(data?.status ?? 'create_failed') }
+  }
+  return { contract: data.contract, error: null }
 }
 
 /**
