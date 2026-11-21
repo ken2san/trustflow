@@ -3,7 +3,7 @@
 // WHAT IS AND IS NOT AUTOMATED HERE
 // The Earner's OTP round trip cannot be automated: confirming the code needs a
 // real inbox. So the fixture contract is created through the same PostgREST
-// insert path the app uses, signed in as an already-verified Earner supplied
+// RPC the app uses, signed in as an already-verified Earner supplied
 // via env vars:
 //
 //   TF_TEST_EARNER_EMAIL / TF_TEST_EARNER_PASSWORD
@@ -90,27 +90,40 @@ test('a verified Earner persists a contract that the server owns the security fi
   expect(Math.round(ttlHours)).toBe(72);
 });
 
-// B-pending bypass test: direct INSERT must remain refused after B.
-test('an unverified (anonymous) Earner cannot persist a contract at all', async ({ request }) => {
-  // This used to mint a fresh anonymous user per run, which made the test a
-  // coin flip: anonymous sign-ins are capped at 30/hour per IP and every page
-  // load in the suite consumes one, so a full run routinely exhausted the
-  // budget and the gate went unexercised behind a conditional skip.
-  //
-  // The gate is on the JWT's is_anonymous claim, and one anonymous session is
-  // as good as another, so the session is minted once per worker and reused.
-  // If the cap is genuinely hit the test fails rather than skips — an
-  // unreachable anonymous session is an environment problem worth seeing, but
-  // it is now one sign-in per run instead of one per attempt.
-  const anon = await getAnonymousSession(request);
+// Stage A: --grep-invert '@post-b'; stage B: --grep-invert '@pre-b'.
+const ANONYMOUS_CREATE_TERMS = {
+  ...TERMS, deadline: null, currency: 'JPY', performed_by: 'creator',
+  invited_hirer_email: 'invited.client@example.test',
+};
 
-  const { status, body } = await api(request, '/rest/v1/contracts', {
-    token: anon.accessToken,
-    body: { earner_user_id: anon.userId, ...TERMS },
+async function anonymousDirectInsert(request) {
+  const { accessToken, userId } = await getAnonymousSession(request);
+  return api(request, '/rest/v1/contracts', {
+    token: accessToken,
+    body: { ...ANONYMOUS_CREATE_TERMS, earner_user_id: userId },
   });
+}
 
+test('@pre-b RLS rejects direct creation by an anonymous Earner', async ({ request }) => {
+  const { status, body } = await anonymousDirectInsert(request);
   expect(status).toBe(403);
   expect(JSON.stringify(body)).toContain('verified_earner_only_insert');
+});
+
+test('@post-b INSERT privileges reject direct creation by an anonymous Earner', async ({ request }) => {
+  const { status, body } = await anonymousDirectInsert(request);
+  expect(status).toBe(403);
+  expect(body?.code).toBe('42501');
+});
+
+test('the create RPC refuses an anonymous Earner', async ({ request }) => {
+  const { accessToken } = await getAnonymousSession(request);
+  const { status, body } = await api(request, '/rest/v1/rpc/create_entry_contract', {
+    token: accessToken,
+    body: createEntryArgs(ANONYMOUS_CREATE_TERMS),
+  });
+  expect(status).toBe(200);
+  expect(body).toEqual({ status: 'not_authorized' });
 });
 
 // ── What the Hirer is shown ─────────────────────────────────────────────────

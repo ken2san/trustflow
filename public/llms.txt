@@ -62,14 +62,18 @@ Use **one** `Authorization: Bearer ...` header:
 
 ### Contract flow
 
-1. **Create:** `POST /rest/v1/contracts` as the owner, with
-   `Prefer: return=representation`. Send JSON with `earner_user_id` set to the owner's
-   user ID, `project_name`, `dod` (array of completion criteria),
-   `amount_minor` (integer), `currency`, `performed_by` (`creator` or
-   `counterparty`), and optionally `deadline` (`YYYY-MM-DD`),
-   `earner_display_name` and `invited_hirer_email`. With `Prefer` alone the
-   response is an array; its first row has `id` and `invite_token`. Pass the
-   invitation to the other party privately; TrustFlow does not deliver it.
+1. **Create:** Once Stage A is applied to the target, call
+   `POST /rest/v1/rpc/create_entry_contract` with the verified owner's session.
+   Send `p_project_name`, `p_dod` (array of completion criteria),
+   `p_amount_minor` (integer), `p_currency`, `p_invited_hirer_email`,
+   `p_performed_by` (`creator` or `counterparty`), `p_deadline` (`YYYY-MM-DD`
+   or null), and `p_earner_display_name` (string or null). The server derives
+   the owner from the session. HTTP 200 with `status: "created"` returns
+   `contract.id` and `contract.invite_token`. Hand the invitation to the
+   other party privately. HTTP 200 can also carry `invalid_terms` (with a
+   `field`) or `not_authorized`. After a lost or ambiguous response, stop
+   and reconcile recent owner drafts before trying another create. See the
+   [Agent protocol](/agent-protocol.md) for recovery.
 2. **Read and accept:** `POST /functions/v1/validate-invite-token` as the guest
    with `{"invite_token":"<INVITE_TOKEN>"}` to read the terms. To accept, post
    `invite_token`, `accept: true`, `hirer_email`, optional `counterparty_name`,

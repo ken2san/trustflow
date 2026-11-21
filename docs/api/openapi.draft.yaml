@@ -569,125 +569,130 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /rest/v1/contracts:
+  /rest/v1/rpc/create_entry_contract:
     post:
       tags: [invitation]
       operationId: createContract
-      summary: Create an agreement (PostgREST).
-      x-trustflow-status: live
+      summary: Create an agreement with a verified owner session.
+      x-trustflow-status: proposed
       description: |
-        A verified (non-anonymous) account session only:
-        `verified_earner_only_insert`. The client holds INSERT on exactly nine
-        columns — `project_name`, `dod`, `amount_minor`, `amount_jpy`,
-        `currency`, `deadline`, `invited_hirer_email`, `earner_display_name`,
-        `earner_user_id`, `performed_by` — and sending any other column fails the whole insert
-        with 403. `state`, `invite_token` (and its 72h expiry),
-        `guest_access_token`, `hirer_email`, `dod_hash` and every payment column
-        are server-owned.
+        Stage A is implemented and rehearsed on E2E. Use this operation
+        on a target after Stage A is applied and verified there.
 
-        There is no UPDATE grant and no UPDATE policy on this table, for any
-        column, so nothing here can be corrected afterwards from a client. See
-        docs/proposals/web-ux-waiting-and-wrong-email.md section 2.3.
+        The server derives the owner from the session and generates the
+        state, invitation token and 72-hour expiry. Send all eight named
+        arguments, including null for an omitted deadline or display name.
+        The server derives the legacy yen amount from the minor-unit amount
+        for JPY and stores null for other currencies.
+
+        There is no create idempotency key. After a timeout or lost response,
+        stop and read recent drafts as the owner. Compare terms, creation
+        time and intended invitee before deciding whether to create again.
+        Matching terms alone do not identify the operation.
       security:
         - ownerJwt: []
-      parameters:
-        - $ref: '#/components/parameters/PreferRepresentation'
-        - $ref: '#/components/parameters/AcceptSingleObject'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [earner_user_id, project_name, dod, amount_minor, currency, performed_by]
+              required:
+                - p_project_name
+                - p_dod
+                - p_amount_minor
+                - p_currency
+                - p_deadline
+                - p_invited_hirer_email
+                - p_performed_by
+                - p_earner_display_name
               additionalProperties: false
-              description: |
-                Exactly the nine columns the client holds INSERT on. Sending any
-                other column fails the whole insert with 403, which is why this
-                schema is closed rather than open. `dod_hash` in particular is
-                NOT sent: it is derived server-side, and the grant on it was
-                revoked so that a party cannot record a terms-hash that
-                disagrees with its own terms (src/lib/contracts.js:54-74).
               properties:
-                earner_user_id:
+                p_project_name:
                   type: string
-                  format: uuid
-                  description: Must be the caller's own `auth.uid()`.
-                earner_display_name:
-                  type: string
-                  nullable: true
-                project_name:
-                  type: string
-                dod:
+                  maxLength: 500
+                p_dod:
                   type: array
+                  minItems: 1
+                  maxItems: 50
+                  description: Completion criteria. The JSON array is also subject to a database size limit.
                   items:
                     type: string
-                amount_minor:
+                    maxLength: 1000
+                p_amount_minor:
                   type: integer
                   minimum: 1
                   maximum: 2147483647
-                  description: |
-                    The amount as an integer in `currency`'s MINOR unit: yen
-                    for JPY, cents for CAD/HKD/USD/EUR/GBP. CA$12.50 is 1250.
-                    There is no decimal form on the wire and no FX anywhere.
-                    Rejected as `amount_not_an_integer`, `amount_not_positive`
-                    or `amount_too_large`
-                    (supabase/functions/_shared/money.ts).
-                amount_jpy:
-                  type: integer
-                  nullable: true
-                  description: |
-                    DEPRECATED 2026-11-08 and transitional. REQUIRED and equal
-                    to `amount_minor` when `currency` is JPY; must be ABSENT or
-                    null for any other currency. A database CHECK enforces both
-                    directions, so a cent amount cannot be stored in a column
-                    named after yen. Drop it from a request once the column is
-                    dropped.
-                currency:
+                  description: Yen for JPY and cents for CAD/HKD/USD/EUR/GBP. CA$12.50 is 1250.
+                p_currency:
                   type: string
                   enum: [JPY, CAD, HKD, USD, EUR, GBP]
-                  default: JPY
-                  description: |
-                    ISO 4217. Append-only: the list is
-                    `SUPPORTED_CURRENCIES` in
-                    supabase/functions/_shared/money.ts, mirrored by
-                    `contracts_currency_check`. Anything else is
-                    `currency_unsupported`.
-                deadline:
+                p_deadline:
                   type: string
                   format: date
                   nullable: true
-                invited_hirer_email:
+                p_invited_hirer_email:
                   type: string
-                  nullable: true
-                  description: |
-                    The address the invitation is MEANT for. Not in the hashed
-                    agreement snapshot, and not corrigible afterwards.
-                performed_by:
+                  format: email
+                  description: The intended invitation address.
+                p_performed_by:
                   type: string
                   enum: [creator, counterparty]
+                p_earner_display_name:
+                  type: string
+                  maxLength: 200
+                  nullable: true
       responses:
-        '201':
-          description: |
-            Created. **TWO headers are needed, not one.**
-            `Prefer: return=representation` is what makes PostgREST send a body
-            at all — without it the response is empty and there is no
-            `invite_token` and no id to show the user. `Accept:
-            application/vnd.pgrst.object+json` is what makes that body a single
-            object rather than an array of one, which is why the schema below is
-            an object. `src/lib/contracts.js` gets both by chaining
-            `.select().single()`: the client sets the Prefer header for
-            `.select()` and the Accept header inside `.single()`
-            (`@supabase/postgrest-js`, `PostgrestTransformBuilder`). A caller
-            sending only `Prefer` gets a one-element array and cannot read
-            `response.invite_token`.
+        '200':
+          description: Inspect the JSON status before using any returned contract.
           content:
             application/json:
               schema:
-                type: object
-                description: The contract row, including `invite_token` and `invite_token_expires_at`.
+                oneOf:
+                  - type: object
+                    required: [status, contract]
+                    properties:
+                      status:
+                        type: string
+                        enum: [created]
+                      contract:
+                        type: object
+                        description: The new contract row. Keep the invitation token private.
+                        required: [id, invite_token, invite_token_expires_at]
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                          invite_token:
+                            type: string
+                            format: uuid
+                          invite_token_expires_at:
+                            type: string
+                            format: date-time
+                  - type: object
+                    required: [status, field]
+                    properties:
+                      status:
+                        type: string
+                        enum: [invalid_terms]
+                      field:
+                        type: string
+                        description: The name of the invalid term, without the p_ prefix.
+                  - type: object
+                    required: [status]
+                    properties:
+                      status:
+                        type: string
+                        enum: [not_authorized]
+                        description: The account is missing, anonymous, or unconfirmed.
+        '400':
+          description: PostgREST could not coerce an argument to the required database type.
+        '401':
+          description: The request has no valid owner authorization.
         '403':
-          description: Anonymous session, or a server-owned column was sent.
+          description: The request role does not have permission to execute the RPC.
+
+  /rest/v1/contracts:
     get:
       tags: [invitation]
       operationId: listContracts
@@ -970,28 +975,6 @@ components:
         PROPOSED. Not in `Authorization`, because the gateway validates that
         header before TrustFlow code runs. Must be added to
         Access-Control-Allow-Headers before any browser use.
-    PreferRepresentation:
-      name: Prefer
-      in: header
-      required: true
-      schema:
-        type: string
-        enum: ['return=representation']
-      description: |
-        PostgREST returns no body without it, so the created row — and with it
-        `invite_token` — would be lost. Marked required here because every
-        caller in this codebase needs the row.
-    AcceptSingleObject:
-      name: Accept
-      in: header
-      required: true
-      schema:
-        type: string
-        enum: ['application/vnd.pgrst.object+json']
-      description: |
-        Makes PostgREST answer with ONE object instead of an array of one, and
-        turns "no row" into an error rather than an empty list. Required
-        wherever this document shows a single-object response body.
     PreferCountExact:
       name: Prefer
       in: header

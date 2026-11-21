@@ -878,3 +878,5 @@ Kept as constraints, not stories.
 - Codex Task 147: local migration B drafted to revoke client table/column INSERT and drop the creation policy, with fail-closed effective privilege and policy checks. Lint and `make check` passed; B was not applied and its SQL, catalog/bypass and `@post-b` HTTP tests remain unverified. Claude T162's uncommitted rehearsal notes are preserved. Report: `.ada/codex-report-147.md`.
 
 - Codex Task 148: **B cutover blocked**. The cancellation fixture recorder still uses direct contract INSERT, and invite-persistence expects the pre-B policy error. Migration `5609c46` left as-is. Local SQL/catalog verification and the post-B E2E rehearsal remain pending. Report: `.ada/codex-report-148.md`.
+
+- Codex Task 149: switched cancellation fixture creation to the Stage A RPC, split invite-persistence direct INSERT denials by migration stage, added anonymous RPC refusal coverage, and updated public create/recovery instructions. Row 2 started one working day early. E2E and Docker verification remain pending, including the fresh cancellation fixture's v14 artifact prerequisite. Report: `.ada/codex-report-149.md`.

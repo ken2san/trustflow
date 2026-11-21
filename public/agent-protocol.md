@@ -320,9 +320,16 @@ with `contract_id`, `project_name`, `dod`, `amount_jpy`, `amount_minor`,
 the preview. The acceptance response does not include `invited_hirer_email`
 or `performed_by`; those are returned by the invitation read.
 
-`POST /rest/v1/contracts` has no documented create idempotency key: after an
-ambiguous response stop, read back and reconcile before any retry. Matching
-terms alone do not prove a row is the same operation. `delivered_at` is a
+`POST /rest/v1/rpc/create_entry_contract` is the owner create endpoint on
+targets with Stage A applied. It has no create idempotency key. If a
+response is lost or ambiguous, stop and use the same owner session to
+read recent drafts via `GET /rest/v1/contracts`. Compare the project name,
+terms, creation time and intended invitee. Matching terms alone do not
+prove a row is the same operation. Resume with the existing row only once
+it is identified. If the result remains uncertain, stop for reconciliation
+before sending another create.
+
+`delivered_at` is a
 legacy, unmaintained column from an old auto-capture design; null does not
 prove no delivery. Use the timestamps of `performance.asserted` and
 `performance.accepted` for the respective statements.

@@ -290,21 +290,21 @@ async function startRecord(owner) {
   say(`  run ${runId}: record file created`);
 
   // Permanent from here on.
-  const created = await rest(owner.token, 'contracts', {
+  const created = await rest(owner.token, 'rpc/create_entry_contract', {
     method: 'POST',
-    headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
-      earner_user_id: owner.userId,
-      earner_display_name: 'Cancellation Fixture',
-      project_name: `Cancellation fixture ${runId}`,
-      dod: ['fixture'],
-      amount_jpy: 1000,
-      amount_minor: 1000,
-      currency: 'JPY',
-      invited_hirer_email: GUEST_EMAIL,
+      p_project_name: `Cancellation fixture ${runId}`,
+      p_dod: ['fixture'],
+      p_amount_minor: 1000,
+      p_currency: 'JPY',
+      p_deadline: null,
+      p_invited_hirer_email: GUEST_EMAIL,
+      p_performed_by: 'creator',
+      p_earner_display_name: 'Cancellation Fixture',
     }),
   });
-  const contract = created.status === 201 && Array.isArray(created.body) ? created.body[0] : null;
+  const contract = created.status === 200 && created.body?.status === 'created'
+    ? created.body.contract : null;
   if (!contract?.id) stop(`contract creation answered ${created.status}; find it by its project name before anything else`);
   await save({ contract_id: contract.id, invite_token: contract.invite_token, step: 'contract_id' });
   say(`  contract created: ${safeId(contract.id)}`);
