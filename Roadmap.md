@@ -1,7 +1,7 @@
 # TrustFlow Roadmap
 
 _The canonical roadmap. Rebuilt 2026-11-18; maintained by 棟梁 (Kenji, 2026-11-20).
-Last updated **2026-11-21 09:17 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 163 / Codex 148._
+Last updated **2026-11-21 09:22 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 163 / Codex 149._
 
 `HANDOFF.md` holds the current state and `Decisions.md` holds the reasons. If this file
 disagrees with either of them, this file is wrong. The longer product-strategy text that
@@ -53,7 +53,7 @@ entry path never wait for real deals or real users (`Decisions.md` 2026-11-18).
 | Codex final re-review, then local commit (no push) | **Done.** 6371d87 (12:29 ET, make check 779 x2, tests load-safe via Codex T142) |
 | Before-B fixes: `currency.spec` B-pending asserts; apply-time SELECT assertion on returned columns (chosen instead of explicit projection, output/hash unchanged) | **Committed locally d2e4b9f** (Codex T143, Claude T159–T161: SQL, races 9/9, harness, make check 779, lint 0). Codex T144 review: no code blocker. A/B split done (Codex T146, 5a7f2be). Grants/RLS and catalog rechecked on E2E at A apply (Claude T163) |
 | E2E rehearsal incl. the 5 converted scripts (Kenji chose to run them there) | **PASS on E2E 11-20** (T163): currency spec pre-B 9/9, all 5 scripts PASS |
-| Migration B: close direct client INSERT (no rollback after it, only forward fix) | **Built locally 5609c46** (`20261120180000_close_contract_client_insert.sql`, Codex T147, 11-20). Not applied anywhere. T148 review: 2 cutover blockers + 1 should-fix, all outside migration B, being fixed in Codex T149. Then: local Docker checks; B on E2E (Kenji OK); browser create flow on E2E; production applies + push (Kenji OK each) |
+| Migration B: close direct client INSERT (no rollback after it, only forward fix) | **Built locally 5609c46** (`20261120180000_close_contract_client_insert.sql`, Codex T147, 11-20). Not applied anywhere. T148 blockers + should-fix fixed locally in Codex T149 (`29c1fce`). Claude T164 running: disposable Docker rehearsal of B + A-stage invite-persistence on E2E. Remaining: fresh cancellation fixture on E2E (permanent writes, Kenji OK); B on E2E (Kenji OK); browser flow; production applies + push (Kenji OK each) |
 
 **Deploy order:** apply and verify migration A on the target **before** pushing any frontend
 with the RPC client; a push auto-deploys the production frontend.

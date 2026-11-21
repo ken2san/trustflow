@@ -112,6 +112,15 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 164 (2026-11-21): T149 verification items 3 and 1 only.
+  - **Item 3, local Docker rehearsal of B through the real `supabase db push` (CLI 2.105.0):** faithful restore of the local DB (owners, ACLs and data; only the 7 reviewed event triggers excluded), row 1 + A pushed from a pre-B worktree, then B from HEAD. A disposable login role whose sessions `SET ROLE postgres` was used, since the local postgres password is unknown; it was dropped afterwards.
+    - Pre/post diff is exactly two lines: the history gains `20261120180000`, and `authenticated` loses its 10 INSERT columns.
+    - Unchanged: anon/PUBLIC no INSERT; service_role and postgres keep INSERT; 1 contract and 7 events with identical row md5 and event/agreement hashes; RLS on; the other 3 policies byte-identical; RPC definer/owner postgres/empty search_path/authenticated-only; 0 unselectable return columns; pg_graphql absent; no client-writable views; only rules are events no-update/no-delete; the only client-reachable definer inserting into contracts is `create_entry_contract`; row 1 inventory PASS.
+    - After B: trusted postgres insert still enforces currency and the JPY mirror (4 refusals, USD/JPY accepted); authenticated direct insert gets 42501; RPC create owner = `auth.uid()`; party RLS holds; anon refused for RPC and insert.
+    - **Fault:** an INSERT grant inherited through a role makes the push fail with `SELF-TEST FAILED: authenticated retains effective INSERT on contracts` (exit 1), and the snapshot is identical to before: no history row, policy and grants intact.
+    - Note: B's file has its own `begin; … commit;`, unlike T107's no-BEGIN rule. Rollback-on-failure works through the runner; on success the history row is written after B's own COMMIT (minor; not a blocker).
+  - **Item 1, E2E** (row 1 + A, B absent): `invite-persistence.spec.js --grep-invert @post-b` **9 passed**.
+  - B not applied anywhere hosted; no fixture recorder; no push. Report: `.ada/claude-report-164.md`.
 - Codex Task 76 reviewed b467194: FAIL
 
 - New migration `20261114120000_guest_append_under_credential_lock.sql`: a
