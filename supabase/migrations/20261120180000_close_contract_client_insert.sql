@@ -1,6 +1,5 @@
 -- Stage B: route client contract creation through create_entry_contract.
 -- This changes privileges and policies only; it does not rewrite contract rows.
-begin;
 
 revoke insert on table public.contracts from public, anon, authenticated;
 
@@ -57,4 +56,3 @@ begin
   end if;
 end $$;
 
-commit;
