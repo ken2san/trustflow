@@ -112,6 +112,11 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 165 (2026-11-21, Kenji OK 09:30 ET, E2E only): **migration B `20261120180000` (HEAD `cbd02d3`) applied to E2E** (`yqjtawffpesplqyurlpj`) with `supabase db push --db-url`, CLI 2.105.0, one `op read` → `PGPASSWORD` only; the dry-run gate listed exactly that one file.
+  - Read-only before/after catalog diff is exactly 3 lines: history gains B; `authenticated` column INSERT goes from 10 columns to none; `creator_insert_contract` dropped.
+  - Unchanged: anon/authenticated/PUBLIC no table INSERT; service_role and postgres keep INSERT; 3737 contracts and 5964 events with identical row and hash digests; RLS on; the other 3 policies identical (party-only read); RPC definer, owner postgres, empty search_path, authenticated-only; 0 unselectable return columns; pg_graphql absent; no client-writable views; the only client-reachable definer inserting contracts is the RPC; row 1 inventory PASS.
+  - Tests: `currency.spec` 15 passed (6 `@post-b`); `invite-persistence --grep-invert @pre-b` 9 passed; `api-e2e` 32/0; `race-delete-vs-append` PASS; `sim-counterparty` 19/0; owner-agent via `sim:two-agents` PASS; `offer-for-tester` PASS.
+  - No production, no push, no fixture recorder. **Production still has neither row 1, A nor B**; a push would break production create until A is applied there. Report: `.ada/claude-report-165.md`.
 - Claude Task 164 (2026-11-21): T149 verification items 3 and 1 only.
   - **Item 3, local Docker rehearsal of B through the real `supabase db push` (CLI 2.105.0):** faithful restore of the local DB (owners, ACLs and data; only the 7 reviewed event triggers excluded), row 1 + A pushed from a pre-B worktree, then B from HEAD. A disposable login role whose sessions `SET ROLE postgres` was used, since the local postgres password is unknown; it was dropped afterwards.
     - Pre/post diff is exactly two lines: the history gains `20261120180000`, and `authenticated` loses its 10 INSERT columns.
