@@ -894,3 +894,7 @@ Kept as constraints, not stories.
 - Codex Task 148: **B cutover blocked**. The cancellation fixture recorder still uses direct contract INSERT, and invite-persistence expects the pre-B policy error. Migration `5609c46` left as-is. Local SQL/catalog verification and the post-B E2E rehearsal remain pending. Report: `.ada/codex-report-148.md`.
 
 - Codex Task 149: switched cancellation fixture creation to the Stage A RPC, split invite-persistence direct INSERT denials by migration stage, added anonymous RPC refusal coverage, and updated public create/recovery instructions. Row 2 started one working day early. E2E and Docker verification remain pending, including the fresh cancellation fixture's v14 artifact prerequisite. Report: `.ada/codex-report-149.md`.
+
+- Codex Task 152: browser verification stopped before the E2E backend guard executed because Playwright's dev server failed with `listen EPERM` on `::1:5173`. No retry or subsequent suites. Owner form and true invitation expiry remain unverified. Report: `.ada/codex-report-152.md`.
+
+- Codex Task 153: wrote `docs/production-apply-runbook.md` for separately approved row 1 → A → B → push, with exact pending-set gates, read-only verification and B-compatible frontend recovery. Production execution remains gated on T166 and Kenji's step-specific approvals. Report: `.ada/codex-report-153.md`.
