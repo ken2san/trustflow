@@ -26,11 +26,16 @@ import {
   GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
   payloadHash, deriveDodHash, deriveAgreementHash, sha256Hex,
 } from '../supabase/functions/_shared/eventCanonical.ts';
+import { classifyStoredEvent, verifyEvidenceSlice } from '../supabase/functions/_shared/eventVerifyV5.ts';
+import { acceptedAgreementHashOf } from '../supabase/functions/_shared/guestEventView.ts';
 import { ownerSession, rest, PROJECT_REF } from './lib/tfClient.mjs';
+import { fetchAllEvents } from './lib/pagedEvents.mjs';
 
+// Explicit, including the v5 authority pair (row 3; verified on E2E, T199).
 const EVENT_COLUMNS = [
   'id', 'type', 'contract_id', 'actor_id', 'payload', 'dod_hash', 'created_at',
   'event_hash', 'prev_event_hash', 'hash_version', 'payload_hash', 'agreement_hash',
+  'credential_id', 'issuer_kind',
 ].join(',');
 
 /**
@@ -86,13 +91,44 @@ async function main() {
     process.exit(1);
   }
 
-  const e = await rest(token,
-    `events?contract_id=eq.${encodeURIComponent(contractId)}`
-    + `&select=${EVENT_COLUMNS}&order=created_at.asc,id.asc`);
-  const rows = Array.isArray(e.body) ? e.body : [];
+  // Paged and ordered. A read that stopped at its own cap is a prefix, and a
+  // prefix is never reported as the chain.
+  const { rows, read } = await fetchAllEvents(q => rest(token, q), contractId, EVENT_COLUMNS);
   if (rows.length === 0) {
     console.error('No events. An accepted contract always has at least one.');
     process.exit(1);
+  }
+  if (!read.tail_complete) {
+    console.error(`FAIL: the read stopped at its row cap (${read.row_cap}) after ${read.pages} pages; `
+      + 'a capped prefix is not the whole chain, so nothing is reported as verified.');
+    process.exit(1);
+  }
+
+  // Any v5 (or v5-shaped invalid) row: the whole chain is judged by the strict
+  // shared rules, with full payloads. Legacy-only chains keep the checks below.
+  if (rows.some(r => ['v5', 'invalid'].includes(classifyStoredEvent(r).kind))) {
+    const accepted = await acceptedAgreementHashOf(rows);
+    const slice = await verifyEvidenceSlice(rows, {
+      // Complete read (checked above): no acceptance act means pre-acceptance.
+      startsAtChainStart: true, tailComplete: true,
+      acceptance: rows.some(r => r.type === 'dod.consent_recorded') ? 'unknown' : 'none',
+      acceptedAgreementHash: accepted.hash, legacyAgreementHash: await deriveAgreementHash(contract),
+    });
+    for (const r of slice.rows) {
+      const bad = [r.hash, r.link, r.payload, r.agreement]
+        .some(v => ['mismatch', 'broken', 'invalid', 'invalid_input'].includes(v));
+      console.log(`${bad ? 'FAIL' : ' ok '} [${r.index}] ${r.kind} v${r.version ?? '?'} `
+        + `hash=${r.hash} link=${r.link} payload=${r.payload} agreement=${r.agreement}`
+        + `${r.reason ? `  (${r.reason})` : ''}`);
+    }
+    console.log(`\naccepted agreement: ${accepted.status}${accepted.hash ? ` ${accepted.hash.slice(0, 16)}…` : ''}`);
+    console.log(`dimensions: ${JSON.stringify(slice.dimensions)}  acceptance: ${slice.acceptance.status}`);
+    if (slice.overall !== 'verified') {
+      console.log(`\nCHAIN NOT VERIFIED — strict result: ${slice.overall}`);
+      process.exit(1);
+    }
+    console.log('\nCHAIN VERIFIED — recomputed independently of the app (strict v5 rules).');
+    return;
   }
 
   // Derived from the contract row, not read from any event: an expected value

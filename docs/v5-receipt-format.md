@@ -1,6 +1,6 @@
 # Receipt format v2 (event-hash v5 aware)
 
-**Status: design, not implemented.** One receipt format shared by `scripts/make-receipt.mjs` (writer) and `scripts/verify-receipt.mjs` (offline verifier). Neither changes until the additive authority columns are verified on the target (row 3, 3C-CLI). Until then `make-receipt` keeps emitting `receipt_version: 1`, which contains no v5 acts.
+**Status: implemented locally (Task 200): `scripts/lib/receiptV2.mjs`, `make-receipt.mjs`, `verify-receipt.mjs`.** One receipt format shared by `scripts/make-receipt.mjs` (writer) and `scripts/verify-receipt.mjs` (offline verifier). Neither changes until the additive authority columns are verified on the target (row 3, 3C-CLI). Until then `make-receipt` keeps emitting `receipt_version: 1`, which contains no v5 acts.
 
 Sources: `docs/v5-preimage-review.md` (the frozen v5 preimage), Codex T161 (3C plan), and the shared rules in `supabase/functions/_shared/eventVerifyV5.ts`.
 
@@ -61,7 +61,7 @@ Each act has `sequence`, a `canonical` block, the stored `event_hash`, and the h
    - `startsAtChainStart` and `tailComplete` from `read`
    - acceptance derived from the acts
    - the accepted digest taken only from `agreement.accepted`
-4. **Verdict:** `RECEIPT VERIFIED` only when the slice is `verified`. An incomplete read, an unknown acceptance position or a draft-only receipt gives an explicit non-verified outcome. A proven mismatch is always reported, even beside indeterminate checks.
+4. **Verdict:** a receipt carries no payloads (a stated limit), so the slice's payload dimension is at best `unavailable`. `RECEIPT VERIFIED` therefore requires the hash, link, agreement and completeness dimensions to pass and payload **not to fail** (exit 0). Any failed check exits 1. Anything else, such as an incomplete read, an unknown start or an unknown acceptance position, prints `RECEIPT NOT VERIFIED — incomplete` and exits 3. A whole, complete read with no acceptance act is provably pre-acceptance (`acceptance: 'none'`), so a valid draft-only receipt can verify; it reports that it has no accepted agreement. A proven mismatch is always reported, even beside indeterminate checks.
 5. **`compare`** (two parties' receipts): the same act digests in the same order, **and** the same accepted digest.
 6. **Required statements:** `not_verifiable_here` must still be present (payload text versus a projection; authority fields aren't proof of who acted; equivocation needs a comparison). A receipt that asserts its own verdict still fails.
 

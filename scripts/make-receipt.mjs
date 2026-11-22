@@ -32,17 +32,18 @@
 
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import {
-  GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
-  buildAgreementSnapshot, deriveAgreementHash, sha256Hex,
-} from '../supabase/functions/_shared/eventCanonical.ts';
-import { assuranceMeaning, bearerAssurance } from '../supabase/functions/_shared/authAssurance.ts';
+import { deriveAgreementHash } from '../supabase/functions/_shared/eventCanonical.ts';
+import { verifyEvidenceSlice } from '../supabase/functions/_shared/eventVerifyV5.ts';
 import { ownerSession, rest, PROJECT_REF, SUPABASE_URL } from './lib/tfClient.mjs';
+import { fetchAllEvents } from './lib/pagedEvents.mjs';
+import { buildReceiptV2 } from './lib/receiptV2.mjs';
 
+// Explicit, including the v5 authority pair (row 3; the additive columns are
+// verified on E2E, T199). tfClient refuses any project but E2E.
 const COLUMNS = [
   'id', 'type', 'contract_id', 'actor_id', 'payload', 'dod_hash', 'created_at',
   'event_hash', 'prev_event_hash', 'hash_version', 'payload_hash',
-  'agreement_hash', 'idempotency_key', 'tsa_token',
+  'agreement_hash', 'idempotency_key', 'tsa_token', 'credential_id', 'issuer_kind',
 ].join(',');
 
 async function main() {
@@ -58,130 +59,28 @@ async function main() {
   const contract = (await rest(token, `contracts?id=eq.${encodeURIComponent(contractId)}&select=*`)).body?.[0];
   if (!contract) { console.error('No contract readable at that id.'); process.exit(1); }
 
-  const rows = (await rest(token,
-    `events?contract_id=eq.${encodeURIComponent(contractId)}&select=${COLUMNS}`
-    + '&order=created_at.asc,id.asc')).body ?? [];
+  // Paged and ordered; a capped read is recorded as such in `read`.
+  const { rows, read } = await fetchAllEvents(q => rest(token, q), contractId, COLUMNS);
   if (!rows.length) { console.error('No events.'); process.exit(1); }
 
-  const agreementHash = await deriveAgreementHash(contract);
-
-  // Recompute rather than copy. A receipt asserting a digest it did not verify
-  // is the "integrity_status: VERIFIED" problem in a new file.
-  let prev = GENESIS_HASH;
-  let chainIntact = true;
-  const acts = [];
-  for (const [i, r] of rows.entries()) {
-    const version = canonicalVersionOf(r);
-    const recomputed = await sha256Hex(eventCanonical(r, version));
-    const linked = (r.prev_event_hash ?? GENESIS_HASH) === (i === 0 ? GENESIS_HASH : prev);
-    const sameAgreement = !bindsWholeAgreement(version) || r.agreement_hash === agreementHash;
-    if (!(recomputed === r.event_hash && linked && sameAgreement)) chainIntact = false;
-
-    acts.push({
-      sequence: i,
-
-      // ── EVERY CANONICAL INPUT, so a reader can recompute event_hash from
-      // this file and nothing else. An earlier version of this script omitted
-      // id, contract_id, actor_id and dod_hash and asserted a `checks` object
-      // instead — which made the receipt a statement that TrustFlow had
-      // verified itself, exactly the `integrity_status: VERIFIED` problem in a
-      // new file. These are identifiers and digests only; no payload preimage.
-      canonical: {
-        id:              r.id,
-        type:            r.type,
-        contract_id:     r.contract_id,
-        actor_id:        r.actor_id,
-        dod_hash:        r.dod_hash ?? null,
-        created_at:      r.created_at,
-        prev_event_hash: r.prev_event_hash ?? null,
-        payload_hash:    r.payload_hash ?? null,
-        agreement_hash:  r.agreement_hash ?? null,
-        hash_version:    r.hash_version ?? null,
-      },
-      // The digest as stored. The verifier recomputes and compares; this file
-      // claims nothing about whether they match.
-      event_hash: r.event_hash,
-
-      // Context for a human reader, not inputs to any hash.
-      recorded_at: r.created_at,
-      actor_role: r.payload?._actor_role ?? null,
-      role_in_agreement: r.payload?._role_in_agreement ?? null,
-      // Carried verbatim, both of them. The string is the coarse legacy value
-      // two stored values wide; the object is what the server observed from
-      // the credential actually presented, and is absent on every event
-      // written before it existed. Neither is a verdict and neither is
-      // recomputable here — they are what the record says about how the actor
-      // got in. No JWT, `amr` entry or absolute authentication timestamp is
-      // copied into this file; the server does not store one.
-      authentication_as_recorded: r.payload?._auth_method ?? null,
-      authentication: r.payload?._authentication ?? null,
-      claimed_identity_verified: r.payload?._claimed_identity_verified ?? null,
-      idempotency_key: r.idempotency_key ?? null,
-      timestamp_token_present: Boolean(r.tsa_token),
-    });
-    prev = r.event_hash;
-  }
-
-  const receipt = {
-    receipt_version: 1,
-    issued_at: new Date().toISOString(),
+  const receipt = await buildReceiptV2({
+    contract, rows, read,
     source: { project_ref: PROJECT_REF, api: SUPABASE_URL, issued_for_role: 'owner' },
+  });
 
-    // The deal, in the exact shape its hash is taken over, so a reader can
-    // recompute agreement_hash from this file alone.
-    agreement: {
-      contract_id: contract.id,
-      snapshot: buildAgreementSnapshot(contract),
-      agreement_hash: agreementHash,
-      state: contract.state,
-    },
-
-    acts,
-
-    // Deliberately NOT a verdict. The issuer of a receipt asserting its own
-    // correctness is the thing a receipt is supposed to make unnecessary.
-    how_to_verify: {
-      command: 'node scripts/verify-receipt.mjs <this-file>',
-      // A reader of this file has no README, so the runtime requirement is
-      // stated here. The verifier loads the server's own canonical definition
-      // instead of a copy, and that file is TypeScript.
-      requires: 'Node 22.18 or newer. On Node 22.6-22.17 or 23.x, add '
-        + '--experimental-strip-types. Older runtimes cannot load the canonical '
-        + 'definition at all.',
-      offline: true,
-      recomputes: ['event_hash per act', 'chain linkage', 'agreement_hash from the snapshot'],
-      canonical_definition: 'supabase/functions/_shared/eventCanonical.ts',
-      note: 'The verifier needs no network and no access to TrustFlow. If it '
-        + 'disagrees with this file, believe the verifier.',
-    },
-
-    // The honest half. A machine reader has no README to consult.
-    not_verifiable_here: [
-      'That the text of any statement matches what was committed to. Canonical v4 '
-      + 'commits to one payload_hash over the whole payload, and the parties are shown '
-      + 'an allowlisted projection, so the digest cannot be reproduced from what they see.',
-      'The identity of any party. The counterparty holds a transferable bearer '
-      + 'capability and their address is self-claimed and recorded unverified.',
-      'How any account holder authenticated, beyond what the record states. From '
-      + 'the change that added the `authentication` field this is observed from the '
-      + 'credential presented rather than inferred from the role, but it is still '
-      + 'the server\'s own report of its own check: nothing in this file lets a '
-      + 'reader confirm independently that the described session existed. Events '
-      + 'written earlier carry only the coarse legacy string, or nothing at all.',
-      'That the work described was performed, or that any payment moved. TrustFlow '
-      + 'records that a party said so.',
-      'That TrustFlow showed both parties the same history. There is no external '
-      + 'witness to its log, so an operator presenting two different consistent '
-      + 'histories to the two parties would not be detectable from this file — '
-      + 'only by comparing it against the other party\'s receipt.',
-      'That anyone authenticated in order to perform an act. Authentication is '
-      + 'not bound to the act: there is no challenge tied to this agreement_hash '
-      + 'and action, so even a login seconds beforehand shows recency, not intent. '
-      + 'Consent given through an authenticated session is not a signature.',
-    ],
-
-    counterparty_authority: assuranceMeaning(bearerAssurance('guest_access_token')),
-  };
+  // The issuer's own recomputation over the FULL rows (payloads included)
+  // decides only the exit code and is not written into the artifact.
+  const slice = await verifyEvidenceSlice(rows, {
+    startsAtChainStart: read.start === 'first_event',
+    tailComplete: read.tail_complete,
+    // A whole, complete read with no acceptance act is provably pre-acceptance.
+    acceptance: read.start === 'first_event' && read.tail_complete
+      && !rows.some(r => r.type === 'dod.consent_recorded') ? 'none' : 'unknown',
+    acceptedAgreementHash: receipt.agreement.accepted?.agreement_hash ?? null,
+    legacyAgreementHash: await deriveAgreementHash(contract),
+  });
+  const chainIntact = slice.overall === 'verified';
+  const acts = receipt.acts;
 
   // A receipt carries the agreement terms, both parties' roles and an address
   // in the acceptance act, so it is not stdout material. Writing to a file is

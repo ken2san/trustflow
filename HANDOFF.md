@@ -1062,3 +1062,12 @@ Kept as constraints, not stories.
 - Claude Task 198 (2026-11-22, Kenji OK 15:00 ET): one normal push of `origin/main..aaafd91` (row 3: storage migration file, unapplied; 3A shared v5 rules; 3B-core guest reader; 3C-core owner export; T197 test/comment/docs). Codex T172 reviewed through `050e45b`; `aaafd91` (test/comment/docs) was unreviewed. The only frontend change is `src/lib/auditExport.js` (strict v5 path; legacy-only exports unchanged). No DB, no migration applied, no edge function deployed. Report: `.ada/claude-report-198.md`.
 
 - Claude Task 199 (2026-11-22, Kenji OK 15:11 ET, E2E only): **`20261122130000_events_v5_authority_columns` applied to E2E** (`yqjtawffpesplqyurlpj`) with `supabase db push --db-url`, CLI 2.105.0, one `op read` into `PGPASSWORD` only. The dry run listed exactly that file. Read-only checks: **22/23 PASS**. The one FAIL was the check script's literal-text match: Postgres stores `IS NOT DISTINCT FROM 5` as `NOT (hash_version IS DISTINCT FROM 5)`. 棟梁 accepted the quoted stored definition in `.ada/claude-report-199.md`. Columns nullable, all five constraints validated, FK ON DELETE RESTRICT, write gate closed, no authority values or v5 rows, records/ACL/RLS unchanged (6012 events, 3782 contracts). Production untouched.
+
+- Claude Task 200 (2026-11-22, local, Kenji OK 15:11 ET): 3C CLI.
+  - **Shared libraries:** a paged ordered events read (`scripts/lib/pagedEvents.mjs`; a capped read is never complete) and receipt v2 (`scripts/lib/receiptV2.mjs`, per `docs/v5-receipt-format.md`).
+  - **`make-receipt`:** selects `credential_id, issuer_kind` explicitly and emits v2.
+  - **`verify-chain`:** the authority columns, a capped read fails, and strict trails use `verifyEvidenceSlice`.
+  - **`verify-receipt`:** v1 is unchanged except that v5 acts fail; v2 classifies first, checks per-version inputs and that accepted follows from snapshot plus acceptance act, and uses the slice. VERIFIED needs every dimension but payload to pass; incomplete exits 3.
+  - **Tests:** verifyReceipt + pagedEvents **37/37**.
+  - **E2E round trip (read-only) on the harness deal `7773166e`:** receipt v2 → RECEIPT VERIFIED, and CHAIN VERIFIED. The authority-column SELECT works on E2E.
+  - Not pushed. Report: `.ada/claude-report-200.md`.

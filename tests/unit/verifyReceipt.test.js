@@ -147,3 +147,161 @@ describe('two receipts for one agreement are compared, which is the only equivoc
     expect(out).toContain('FAIL')
   })
 })
+
+// ── Receipt v2 (3C-CLI): written by buildReceiptV2, checked by the executable ─
+import { buildReceiptV2 } from '../../scripts/lib/receiptV2.mjs'
+import {
+  eventCanonical, payloadHash, sha256Hex, buildAgreementSnapshot, deriveAgreementHash, stableStringify,
+} from '../../supabase/functions/_shared/eventCanonical.ts'
+import { buildEventCanonicalV5 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
+
+const RCID = '22222222-2222-4222-8222-222222222222'
+const ruid = n => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`
+const CONTRACT_V2 = { id: RCID, project_name: 'Receipt v2', dod: ['Translate'], amount_minor: 1250, currency: 'CAD',
+  deadline: null, performed_by: 'creator', earner_display_name: 'Example', state: 'TERMS_ACCEPTED' }
+let rclock = Date.parse('2026-04-01T00:00:00.000Z')
+const rat = () => new Date((rclock += 1000)).toISOString()
+const COMPLETE_READ = { start: 'first_event', tail_complete: true, pages: 1, row_cap: 10000 }
+const SOURCE = { project_ref: 'test', api: 'test', issued_for_role: 'owner' }
+
+async function v4Row(n, prev, { type = 'performance.asserted', payload = { note: `v4-${n}` }, agreement } = {}) {
+  const row = { id: ruid(n), type, contract_id: RCID, actor_id: 'owner', dod_hash: 'd'.repeat(64), created_at: rat(),
+    prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement, hash_version: 4,
+    credential_id: null, issuer_kind: null }
+  row.event_hash = await sha256Hex(eventCanonical(row, 4))
+  return row
+}
+async function v5Row(n, prev, { agreement } = {}) {
+  const payload = { note: `v5-${n}` }
+  const row = { id: ruid(n), type: 'payment.reported', contract_id: RCID, actor_id: ruid(6), dod_hash: 'd'.repeat(64),
+    created_at: rat(), prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement,
+    hash_version: 5, credential_id: ruid(7), issuer_kind: 'owner_account' }
+  const built = buildEventCanonicalV5(row)
+  if (!built.ok) throw new Error(built.field)
+  row.event_hash = await sha256Hex(built.canonical)
+  return row
+}
+async function mixedRows(snapshot = buildAgreementSnapshot(CONTRACT_V2)) {
+  const accepted = await sha256Hex(stableStringify(snapshot))
+  const current = await deriveAgreementHash(CONTRACT_V2)
+  const a = await v4Row(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: snapshot }, agreement: accepted })
+  const b = await v5Row(2, a.event_hash, { agreement: accepted })
+  const c = await v4Row(3, b.event_hash, { agreement: current })
+  return [a, b, c]
+}
+async function receiptOf(rows, read = COMPLETE_READ) {
+  return buildReceiptV2({ contract: CONTRACT_V2, rows, read, source: SOURCE, issuedAt: '2026-04-01T00:00:00.000Z' })
+}
+function runReceipt(label, receipt) {
+  const file = path.join(dir, `v2-${label.replace(/\W+/g, '-')}.json`)
+  writeFileSync(file, JSON.stringify(receipt, null, 2))
+  try {
+    return { status: 0, out: execFileSync('node', [VERIFIER, file], { encoding: 'utf8', timeout: SPAWN_MS }) }
+  } catch (e) {
+    return { status: e.status, out: `${e.stdout ?? ''}${e.stderr ?? ''}` }
+  }
+}
+
+describe('receipt v2 round trip', { timeout: TEST_MS }, () => {
+  it('a complete mixed v4 → v5 → v4 receipt verifies', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    expect(receipt.agreement.accepted_status).toBe('ok')
+    expect(Object.keys(receipt.acts[1].canonical)).toContain('credential_id')
+    expect(Object.keys(receipt.acts[0].canonical)).not.toContain('credential_id')
+    const { status, out } = runReceipt('mixed', receipt)
+    expect(out).toContain('RECEIPT VERIFIED')
+    expect(status).toBe(0)
+  })
+
+  it('a legacy-only v2 receipt verifies', async () => {
+    const rows = (await mixedRows()).filter(r => r.hash_version === 4).slice(0, 1)
+    const { status, out } = runReceipt('legacy-only', await receiptOf(rows))
+    expect(out).toContain('RECEIPT VERIFIED')
+    expect(status).toBe(0)
+  })
+
+  it('an incomplete read or unknown start is never verified (exit 3), and says so', async () => {
+    for (const read of [{ ...COMPLETE_READ, tail_complete: false }, { ...COMPLETE_READ, start: 'unknown' }]) {
+      const { status, out } = runReceipt(`read-${read.start}-${read.tail_complete}`, await receiptOf(await mixedRows(), read))
+      expect(out).toContain('RECEIPT NOT VERIFIED — incomplete')
+      expect(out).not.toContain('RECEIPT VERIFIED —')
+      expect(status).toBe(3)
+    }
+  })
+
+  it('a tampered credential_id or issuer_kind fails', async () => {
+    for (const [k, v] of [['credential_id', ruid(8)], ['issuer_kind', 'counterpart_account']]) {
+      const receipt = await receiptOf(await mixedRows())
+      receipt.acts[1].canonical[k] = v
+      const { status, out } = runReceipt(`tamper-${k}`, receipt)
+      expect(out).toContain('FAIL')
+      expect(status).toBe(1)
+    }
+  })
+
+  it('a v5 act missing any canonical input fails', async () => {
+    for (const k of ['credential_id', 'issuer_kind', 'hash_version', 'agreement_hash', 'prev_event_hash']) {
+      const receipt = await receiptOf(await mixedRows())
+      delete receipt.acts[1].canonical[k]
+      const { status, out } = runReceipt(`missing-${k}`, receipt)
+      expect(out, k).toContain('FAIL')
+      expect(status, k).toBe(1)
+    }
+  })
+
+  it('a prev_hash alias fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    receipt.acts[1].canonical.prev_hash = receipt.acts[1].canonical.prev_event_hash
+    const { status, out } = runReceipt('alias', receipt)
+    expect(out).toMatch(/uses only prev_event_hash/)
+    expect(status).toBe(1)
+  })
+
+  it('a v5 act inside a v1 receipt fails rather than verifying as legacy', async () => {
+    const v2 = await receiptOf(await mixedRows())
+    const v1 = { ...v2, receipt_version: 1,
+      agreement: { contract_id: RCID, snapshot: v2.agreement.accepted.snapshot, agreement_hash: v2.agreement.accepted.agreement_hash } }
+    const { status, out } = runReceipt('v5-in-v1', v1)
+    expect(out).toMatch(/not a legacy act/)
+    expect(status).toBe(1)
+  })
+
+  it('a draft-only receipt has no accepted agreement and verifies as pre-acceptance', async () => {
+    const d = await v5Row(4, 'GENESIS', { agreement: null })
+    const receipt = await receiptOf([d])
+    expect(receipt.agreement.accepted).toBe(null)
+    expect(receipt.agreement.accepted_status).toBe('no_acceptance')
+    const { status, out } = runReceipt('draft', receipt)
+    expect(out).toMatch(/no accepted agreement in this receipt/)
+    expect(status).toBe(0)
+  })
+
+  it('a self-consistently hashed wrong-type accepted snapshot is not accepted, so the receipt is not verified', async () => {
+    const bad = { ...buildAgreementSnapshot(CONTRACT_V2), amount: '1250' }
+    const receipt = await receiptOf(await mixedRows(bad))
+    expect(receipt.agreement.accepted).toBe(null)
+    expect(receipt.agreement.accepted_status).toBe('invalid_snapshot_values')
+    const { status, out } = runReceipt('bad-snapshot', receipt)
+    expect(out).not.toContain('RECEIPT VERIFIED —')
+    expect(status).not.toBe(0)
+  })
+
+  it('an accepted block that does not match its acceptance act fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    receipt.agreement.accepted.acceptance_event_id = ruid(9)
+    const { status, out } = runReceipt('accepted-id', receipt)
+    expect(out).toMatch(/FAIL the accepted agreement follows/)
+    expect(status).toBe(1)
+  })
+
+  it('two v2 receipts are compared on the accepted agreement too', async () => {
+    const rows = await mixedRows()
+    const a = path.join(dir, 'v2-cmp-a.json')
+    const b = path.join(dir, 'v2-cmp-b.json')
+    const ra = await receiptOf(rows)
+    writeFileSync(a, JSON.stringify(ra)); writeFileSync(b, JSON.stringify(ra))
+    const same = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8', timeout: SPAWN_MS })
+    expect(same).toContain('both receipts describe the same agreement')
+    expect(same).toContain('same acts, in the same order')
+  })
+})
