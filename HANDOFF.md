@@ -112,6 +112,11 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 172 (2026-11-22, Kenji OK 01:48 ET): **push STOPPED, nothing pushed.**
+  - Preflight passed: tree clean (only `.ada/` untracked); `RELEASE_SHA` `11d2075` is HEAD and a fast-forward of `origin/main` `122bac2` (16 reviewed commits); Vercel `project-trustflow` deploys `ken2san/trustflow` main to production, live at `122bac2`.
+  - The one push failed locally: `src refspec 11d2075…efs/heads/main does not match any`. zsh treated `:r` in `"$RELEASE_SHA:refs/heads/main"` as a history modifier. Remote unchanged (`origin/main` = `122bac2`, `ls-remote` confirms).
+  - Per the gate, no second push. **Production creation is still down** (B is live, the old frontend is live).
+  - Needs Kenji's OK to retry once with `git push origin "${RELEASE_SHA}:refs/heads/main"`. No smoke was run. Report: `.ada/claude-report-172.md`.
 - Claude Task 171 (2026-11-22, Kenji OK 01:44 ET): **migration B `20261120180000` applied to PRODUCTION** (`fqgpzhwvvfsxswlnbbgg`) per the runbook: pin `cbd02d3`, CLI 2.105.0, one `op read` → `PGPASSWORD` only. Exit codes: baseline 0, dry run 0, apply 0, snapshot 0, assertions 0.
   - The dry run listed exactly B. The catalog diff is **identical to E2E T165**: history gains B; authenticated column INSERT 10 → none; `creator_insert_contract` dropped.
   - All 18 assertions PASS: no table or column INSERT for anon/authenticated/PUBLIC (effective, inherited included); service_role and postgres keep INSERT; 3 policies remain with RLS on; RPC definer, owner postgres, empty search_path, authenticated-only; every returned column selectable; pg_graphql absent; no client-writable views; the RPC is the only client-reachable definer inserting contracts; row 1 inventory PASS.
