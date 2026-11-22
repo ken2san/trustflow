@@ -157,6 +157,43 @@ for (const fn of RETIRED) {
   check(`${fn} stays retired`, !r.deployed, `HTTP ${r.status} ${r.body}`);
 }
 
+// ── 4. Contract creation stays closed to anonymous callers ──────────────────
+// Since C5 (T171) only an authenticated, email-confirmed owner can create, and
+// only through `create_entry_contract`. These two probes prove the refusal over
+// HTTP. Each body also carries `currency: 'XXX'`, which `contracts_currency_check`
+// and the RPC's own validation both reject before any insert, so neither probe
+// can write a row even if privileges were wrongly open.
+//
+//   refused (pass): 401/403, or code 42501
+//   400 / 23514:    privileges OPEN, nothing written — FAIL
+//   any 2xx:        FAIL and STOP — investigate before anything else
+const REFUSAL_TERMS = {
+  project_name: 'smoke-refusal-probe', dod: ['never written'], amount_minor: 1,
+  currency: 'XXX', invited_hirer_email: 'nobody@example.invalid', performed_by: 'creator',
+};
+
+async function refusalProbe(label, route, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${route}`, {
+    method: 'POST',
+    headers: { apikey: ANON_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  let parsed = {};
+  try { parsed = JSON.parse(text); } catch { /* non-JSON body is reported by status alone */ }
+  const code = parsed.code ?? '';
+  const refused = r.status === 401 || r.status === 403 || code === '42501';
+  let detail = `HTTP ${r.status}${code ? ` ${code}` : ''}`;
+  if (r.ok) detail += ` STOP: 2xx${parsed.status ? ` status=${parsed.status}` : ''}`;
+  else if (!refused && (r.status === 400 || code === '23514')) detail += ' privileges OPEN (no write)';
+  check(label, refused, detail);
+}
+
+await refusalProbe('anonymous direct INSERT into contracts is refused', 'contracts', REFUSAL_TERMS);
+await refusalProbe('anonymous create_entry_contract is refused', 'rpc/create_entry_contract',
+  Object.fromEntries([...Object.entries(REFUSAL_TERMS), ['deadline', null], ['earner_display_name', null]]
+    .map(([k, v]) => [`p_${k}`, v])));
+
 // ── The published agent protocol ────────────────────────────────────────────
 //
 // An outside agent cannot accept an agreement in any currency but JPY without
