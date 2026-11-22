@@ -734,3 +734,78 @@ describe('T197: an unusable v5 payload digest through both guest verdicts', () =
     }
   })
 })
+
+// ── T201: the endpoint's v1 shaping, now under test, and the strict wrapper ──
+import { describeActor, guestStrictVerdicts, shapeGuestEventsV1 } from '../../supabase/functions/_shared/guestEventView.ts'
+
+describe('T201: shapeGuestEventsV1 is the unchanged version-1 body', () => {
+  const OWNER = vid(3)
+  const contract = { id: V5CID, earner_user_id: OWNER, earner_display_name: 'Acme', hirer_email: 'guest@example.test' }
+  const withNullAuthority = r => ({ ...r, credential_id: null, issuer_kind: null })
+
+  it('legacy rows: every field, in the original key order, with the original values', async () => {
+    const accepted = await sha256Hex(stableStringify(SNAPSHOT))
+    const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: SNAPSHOT, counterparty_name: 'G' }, agreement: accepted })
+    a.actor_id = 'guest:guest@example.test'
+    a.event_hash = await sha256Hex(eventCanonical({ ...a, contract_id: V5CID }, 4))
+    const b = await rawLegacy(2, a.event_hash, { agreement: accepted })
+    b.actor_id = OWNER
+    b.event_hash = await sha256Hex(eventCanonical({ ...b, contract_id: V5CID }, 4))
+    const events = await shapeGuestEventsV1([withNullAuthority(a), withNullAuthority(b)], contract)
+    expect(events.map(e => Object.keys(e))).toEqual(Array(2).fill(
+      ['id', 'type', 'created_at', 'actor', 'dod_hash', 'payload', 'canonical', 'integrity']))
+    expect(Object.keys(events[0].integrity)).toEqual(['trust_model', 'event_hash', 'prev_event_hash', 'hash_valid',
+      'chain_linked', 'substance_valid', 'binds_whole_agreement', 'canonical_version', 'canonical_version_supported'])
+    expect(events[0].canonical).toEqual(canonicalInputsOf(a, V5CID))
+    expect(events[0].payload).toEqual({ counterparty_name: 'G' })
+    expect(events[0].actor).toEqual({ id: 'guest:guest@example.test', role: 'guest_hirer', label: 'guest@example.test' })
+    expect(events[1].actor).toEqual({ id: OWNER, role: 'earner', label: 'Acme' })
+    for (const e of events) {
+      expect(e.integrity).toMatchObject({ trust_model: 'server_attested', hash_valid: true, chain_linked: true,
+        substance_valid: true, binds_whole_agreement: true, canonical_version: 4, canonical_version_supported: true })
+    }
+    // The selected authority columns never appear in the v1 body.
+    expect(JSON.stringify(events)).not.toContain('credential_id')
+    expect(JSON.stringify(events)).not.toContain('issuer_kind')
+  })
+
+  it('a v5 row stays what v1 has always said about it: an unsupported version, not verified', async () => {
+    const { rows } = await mixedTrail()
+    const [, v5] = await shapeGuestEventsV1([withNullAuthority(rows[0]), rows[1]], contract)
+    expect(v5.integrity).toMatchObject({ canonical_version: 5, canonical_version_supported: false, hash_valid: null,
+      substance_valid: null, binds_whole_agreement: false })
+  })
+
+  it('describeActor is unchanged', () => {
+    expect(describeActor(null, contract, null)).toEqual({ id: null, role: 'unknown', label: 'Unknown' })
+    expect(describeActor('x', contract, 'agent')).toEqual({ id: 'x', role: 'agent', label: 'Unverified actor' })
+  })
+})
+
+describe('T201: guestStrictVerdicts as the endpoint runs it', () => {
+  const contract = { id: V5CID }
+
+  it('a mixed trail selected with the authority columns verifies on the server, never locally', async () => {
+    const { rows } = await mixedTrail()
+    const selected = [{ ...rows[0], credential_id: null, issuer_kind: null }, rows[1],
+      { ...rows[2], credential_id: null, issuer_kind: null }]
+    const v = await guestStrictVerdicts(selected, contract, { truncated: false, acceptedAgreement: SNAPSHOT })
+    expect(v.server.overall).toBe('verified')
+    expect(v.local.overall).toBe('incomplete')
+  })
+
+  it('enforces the projection contract: a row read without the authority columns is invalid', async () => {
+    const { rows } = await mixedTrail()
+    const v = await guestStrictVerdicts(rows, contract, { truncated: false, acceptedAgreement: SNAPSHOT })
+    expect(v.server.rows[0]).toMatchObject({ kind: 'invalid' })
+    expect(v.server.overall).toBe('failed')
+  })
+
+  it('the row cap makes the trail incomplete', async () => {
+    const { rows } = await mixedTrail()
+    const selected = [{ ...rows[0], credential_id: null, issuer_kind: null }, rows[1],
+      { ...rows[2], credential_id: null, issuer_kind: null }]
+    const v = await guestStrictVerdicts(selected, contract, { truncated: true, acceptedAgreement: SNAPSHOT })
+    expect(v.server.overall).toBe('incomplete')
+  })
+})

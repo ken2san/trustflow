@@ -29,8 +29,8 @@
 // otherwise would be the same overclaim as `integrity_status: VERIFIED`.
 
 import {
-  type CanonicalEvent, GENESIS_HASH, buildAgreementSnapshot, canonicalVersionOf, eventCanonical,
-  isSupportedHashVersion, isSupportedSnapshotVersion, sha256Hex, stableStringify,
+  type CanonicalEvent, GENESIS_HASH, bindsWholeAgreement, buildAgreementSnapshot, canonicalVersionOf,
+  eventCanonical, isSupportedHashVersion, isSupportedSnapshotVersion, payloadHash, sha256Hex, stableStringify,
 } from './eventCanonical.ts'
 import {
   type SliceResult, type StoredEventKind, classifyStoredEvent, fromV5Transport, verifyEvidenceSlice,
@@ -522,4 +522,145 @@ export async function guestTrailVerdicts(
   if (local.overall === 'verified') local.overall = 'incomplete'
 
   return { server, server_agreement, local, local_agreement, local_cap: 'no_full_payload' }
+}
+
+// ── Guest endpoint v1 shaping (row 3 step 3B-wire, Task 201) ────────────────
+//
+// Moved VERBATIM out of guest-contract-events/index.ts so the version-1 body
+// can be unit-tested: the per-row loop below and describeActor are unchanged
+// statements, now under test. The endpoint calls this and serializes exactly
+// what it returns, so v1 is byte-identical by construction.
+
+/**
+ * Describe who acted, without making the reader look up an opaque id.
+ *
+ * actor_id is kept: it is part of the hashed canonical, so removing it would
+ * make the chain impossible for the guest to re-verify independently, and
+ * independent verifiability is the point of the trail. It is an opaque random
+ * uuid for the Earner — not an email, a name or a credential — so exposing it
+ * to their counterparty costs little next to what redacting it would break.
+ */
+export function describeActor(
+  actorId: string | null,
+  contract: Record<string, unknown>,
+  actorRole: string | null,
+) {
+  if (!actorId) return { id: null, role: 'unknown', label: 'Unknown' }
+
+  if (actorId === contract.earner_user_id) {
+    return {
+      id: actorId,
+      role: 'earner',
+      label: (contract.earner_display_name as string | null) ?? 'The other party',
+    }
+  }
+  if (actorId.startsWith('guest:')) {
+    return { id: actorId, role: 'guest_hirer', label: actorId.slice('guest:'.length) }
+  }
+  // Legacy rows: actor_id was whatever the browser supplied ('user', an email,
+  // a display name). It identifies nobody reliably.
+  return { id: actorId, role: actorRole ?? 'unknown', label: 'Unverified actor' }
+}
+
+/** Version-1 `events`, exactly as the endpoint has always shaped them. */
+// Rows typed as PostgREST hands them to the endpoint (untyped), as before the move.
+// deno-lint-ignore no-explicit-any
+type StoredRow = Record<string, any>
+
+export async function shapeGuestEventsV1(
+  rows: readonly StoredRow[],
+  contract: Record<string, unknown> & { id: string },
+): Promise<Record<string, unknown>[]> {
+  let expectedPrev = GENESIS_HASH
+  const events = []
+
+  for (const row of rows) {
+    // Three canonical formats now exist; a row is verified under the one it
+    // was written with. Applying the newest to an older row reports an
+    // untouched event as tampered with.
+    const hashVersion = canonicalVersionOf(row)
+    // Built once and both returned to the guest and used here, so what the
+    // server checked and what the guest is given to check are by
+    // construction the same inputs. If they could differ, the guest's
+    // recomputation would be verifying something other than the record.
+    const canonical = canonicalInputsOf(row, contract.id)
+    const recomputed = await recomputeFromCanonicalBlock(canonical)
+
+    // From v3 the payload is bound into the hash, so the substance of an
+    // assertion can be checked as well as its authorship. null rather than
+    // false for older rows: TrustFlow never attested their payloads, which is
+    // a different statement from the check having failed.
+    //
+    // `versionSupported` first, because `hashVersion >= 3` would ASSUME the
+    // payload semantics of a version this build does not know — Codex's
+    // finding 1 again, one line along. An unknown version's payload coverage
+    // is unknown, not v3-style.
+    const versionSupported = isSupportedHashVersion(hashVersion)
+    const substanceValid = versionSupported && hashVersion >= 3 && row.payload_hash
+      ? (await payloadHash(row.payload ?? {})) === row.payload_hash
+      : null
+
+    const actorRole = (row.payload as Record<string, unknown> | null)?._actor_role as string | null
+
+    events.push({
+      id:         row.id,
+      type:       row.type,
+      created_at: row.created_at,
+      actor:      describeActor(row.actor_id, contract, actorRole ?? null),
+      dod_hash:   row.dod_hash ?? null,
+      payload:    filterPayload(row.type, row.payload),
+      // Every input the event_hash is taken over, so the guest can recompute
+      // it with no access to TrustFlow. Redundant with the fields above on
+      // purpose: this is the ten-field block scripts/verify-receipt.mjs
+      // already consumes, so one verifier serves both parties.
+      canonical,
+      integrity: {
+        // v1 rows were written by a browser that chose its own actor_id,
+        // type and hash. They are preserved as history, not as attestation.
+        trust_model:     hashVersion >= 2 ? 'server_attested' : 'client_asserted',
+        event_hash:      row.event_hash ?? null,
+        prev_event_hash: row.prev_event_hash ?? null,
+        // `recomputed` is null when this build does not know the row's
+        // canonical version. `null` here means CANNOT SAY, and conflating it
+        // with `false` would tell a counterparty their record had been
+        // altered when the truth is that this build cannot check it.
+        hash_valid:      row.event_hash && recomputed !== null
+          ? row.event_hash === recomputed
+          : null,
+        chain_linked:    row.prev_event_hash ? row.prev_event_hash === expectedPrev : null,
+        substance_valid: substanceValid,
+        // From v4 the whole deal is bound, not just its completion criteria —
+        // and only for a version this build understands, so an unknown one
+        // does not claim to bind anything.
+        binds_whole_agreement: bindsWholeAgreement(hashVersion),
+        // Stated rather than left to be inferred from three nulls. The
+        // version itself is here too: `canonical` carries it for
+        // recomputation, but a reader deciding what to do about an
+        // unsupported row should not have to go looking in another object.
+        canonical_version: hashVersion,
+        canonical_version_supported: versionSupported,
+      },
+    })
+
+    // Advance regardless of match, so a break also surfaces on the next
+    // event rather than silently resetting the expected chain.
+    expectedPrev = row.event_hash ?? expectedPrev
+  }
+  return events
+}
+
+/**
+ * The strict v5 reader as the endpoint runs it (server-side, full payloads).
+ * Not serialized into version 1: what a response carries waits for the
+ * response-version decision. `start` is 'first_event' because the endpoint
+ * reads one deal ascending from its first event; `truncated` is the row cap.
+ */
+export function guestStrictVerdicts(
+  rows: readonly Record<string, unknown>[],
+  contract: { id: string },
+  { truncated, acceptedAgreement }: { truncated: boolean, acceptedAgreement: unknown },
+): Promise<GuestTrailVerdicts> {
+  return guestTrailVerdicts(rows, {
+    contractId: contract.id, truncated, start: 'first_event', sentSnapshot: acceptedAgreement, projected: true,
+  })
 }

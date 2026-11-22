@@ -1071,3 +1071,11 @@ Kept as constraints, not stories.
   - **Tests:** verifyReceipt + pagedEvents **37/37**.
   - **E2E round trip (read-only) on the harness deal `7773166e`:** receipt v2 → RECEIPT VERIFIED, and CHAIN VERIFIED. The authority-column SELECT works on E2E.
   - Not pushed. Report: `.ada/claude-report-200.md`.
+
+- Claude Task 201 (2026-11-22, local only): row 3 step 3B-wire (guest), groundwork.
+  - **Endpoint:** `guest-contract-events` now SELECTs `credential_id, issuer_kind` and runs the strict reader server-side (`guestStrictVerdicts`: projected, from the first event, the cap as truncation, the sent snapshot). The result is **not** in the response; it is logged only on v5-shaped rows or a disagreement with v1's headline.
+  - **v1 body:** unchanged. The shaping loop and `describeActor` moved verbatim into `guestEventView.ts` (`shapeGuestEventsV1`) and are now under test. guestEventView **59/59**.
+  - **Not done:** not deployed; `deno check` hasn't been run (no deno locally).
+  - **Deploy-order hazard:** do NOT deploy this function to production before production storage `20261122130000`; every guest read would fail.
+  - **Response-version options** are in the report; option 1 (v2 behind `?response_version=2`) is recommended.
+  - Report: `.ada/claude-report-201.md`.

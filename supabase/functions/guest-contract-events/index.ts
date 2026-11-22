@@ -52,12 +52,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
 import {
-  GENESIS_HASH, bindsWholeAgreement, canonicalVersionOf, isSupportedHashVersion,
-  isSupportedSnapshotVersion, payloadHash,
-  buildAgreementSnapshot,
+  isSupportedSnapshotVersion, buildAgreementSnapshot,
 } from '../_shared/eventCanonical.ts'
 import {
-  canonicalInputsOf, chainSummary, filterPayload, guestVerificationNotes, recomputeFromCanonicalBlock,
+  chainSummary, guestStrictVerdicts, guestVerificationNotes, shapeGuestEventsV1,
 } from '../_shared/guestEventView.ts'
 
 // CORS is per request now, from ../_shared/cors.ts: the allowed origin depends
@@ -109,37 +107,6 @@ function termsChangedSinceAcceptance(
   return Object.keys(current)
     .filter(key => key !== 'snapshot_version')
     .filter(key => JSON.stringify(current[key]) !== JSON.stringify(accepted[key]))
-}
-
-/**
- * Describe who acted, without making the reader look up an opaque id.
- *
- * actor_id is kept: it is part of the hashed canonical, so removing it would
- * make the chain impossible for the guest to re-verify independently, and
- * independent verifiability is the point of the trail. It is an opaque random
- * uuid for the Earner — not an email, a name or a credential — so exposing it
- * to their counterparty costs little next to what redacting it would break.
- */
-function describeActor(
-  actorId: string | null,
-  contract: Record<string, unknown>,
-  actorRole: string | null,
-) {
-  if (!actorId) return { id: null, role: 'unknown', label: 'Unknown' }
-
-  if (actorId === contract.earner_user_id) {
-    return {
-      id: actorId,
-      role: 'earner',
-      label: (contract.earner_display_name as string | null) ?? 'The other party',
-    }
-  }
-  if (actorId.startsWith('guest:')) {
-    return { id: actorId, role: 'guest_hirer', label: actorId.slice('guest:'.length) }
-  }
-  // Legacy rows: actor_id was whatever the browser supplied ('user', an email,
-  // a display name). It identifies nobody reliably.
-  return { id: actorId, role: actorRole ?? 'unknown', label: 'Unverified actor' }
 }
 
 Deno.serve(async (req: Request) => {
@@ -199,7 +166,10 @@ Deno.serve(async (req: Request) => {
     // is a weaker guarantee than "it is not selected".
     const { data: rows, error: eventsError } = await admin
       .from('events')
-      .select('id, type, actor_id, payload, dod_hash, created_at, event_hash, prev_event_hash, hash_version, payload_hash, agreement_hash')
+      // The v5 authority pair is selected explicitly (row 3). These columns
+      // exist on E2E (T199); deploying this to a database without them makes
+      // every read fail, so production storage must come first.
+      .select('id, type, actor_id, payload, dod_hash, created_at, event_hash, prev_event_hash, hash_version, payload_hash, agreement_hash, credential_id, issuer_kind')
       .eq('contract_id', contract.id)
       .neq('type', 'runtime.snapshot')
       // The same ordering the writers use to pick the tip, read backwards.
@@ -213,81 +183,8 @@ Deno.serve(async (req: Request) => {
 
     if (eventsError) return json({ error: 'events_lookup_failed' }, 500)
 
-    let expectedPrev = GENESIS_HASH
-    const events = []
-
-    for (const row of rows ?? []) {
-      // Three canonical formats now exist; a row is verified under the one it
-      // was written with. Applying the newest to an older row reports an
-      // untouched event as tampered with.
-      const hashVersion = canonicalVersionOf(row)
-      // Built once and both returned to the guest and used here, so what the
-      // server checked and what the guest is given to check are by
-      // construction the same inputs. If they could differ, the guest's
-      // recomputation would be verifying something other than the record.
-      const canonical = canonicalInputsOf(row, contract.id)
-      const recomputed = await recomputeFromCanonicalBlock(canonical)
-
-      // From v3 the payload is bound into the hash, so the substance of an
-      // assertion can be checked as well as its authorship. null rather than
-      // false for older rows: TrustFlow never attested their payloads, which is
-      // a different statement from the check having failed.
-      //
-      // `versionSupported` first, because `hashVersion >= 3` would ASSUME the
-      // payload semantics of a version this build does not know — Codex's
-      // finding 1 again, one line along. An unknown version's payload coverage
-      // is unknown, not v3-style.
-      const versionSupported = isSupportedHashVersion(hashVersion)
-      const substanceValid = versionSupported && hashVersion >= 3 && row.payload_hash
-        ? (await payloadHash(row.payload ?? {})) === row.payload_hash
-        : null
-
-      const actorRole = (row.payload as Record<string, unknown> | null)?._actor_role as string | null
-
-      events.push({
-        id:         row.id,
-        type:       row.type,
-        created_at: row.created_at,
-        actor:      describeActor(row.actor_id, contract, actorRole ?? null),
-        dod_hash:   row.dod_hash ?? null,
-        payload:    filterPayload(row.type, row.payload),
-        // Every input the event_hash is taken over, so the guest can recompute
-        // it with no access to TrustFlow. Redundant with the fields above on
-        // purpose: this is the ten-field block scripts/verify-receipt.mjs
-        // already consumes, so one verifier serves both parties.
-        canonical,
-        integrity: {
-          // v1 rows were written by a browser that chose its own actor_id,
-          // type and hash. They are preserved as history, not as attestation.
-          trust_model:     hashVersion >= 2 ? 'server_attested' : 'client_asserted',
-          event_hash:      row.event_hash ?? null,
-          prev_event_hash: row.prev_event_hash ?? null,
-          // `recomputed` is null when this build does not know the row's
-          // canonical version. `null` here means CANNOT SAY, and conflating it
-          // with `false` would tell a counterparty their record had been
-          // altered when the truth is that this build cannot check it.
-          hash_valid:      row.event_hash && recomputed !== null
-            ? row.event_hash === recomputed
-            : null,
-          chain_linked:    row.prev_event_hash ? row.prev_event_hash === expectedPrev : null,
-          substance_valid: substanceValid,
-          // From v4 the whole deal is bound, not just its completion criteria —
-          // and only for a version this build understands, so an unknown one
-          // does not claim to bind anything.
-          binds_whole_agreement: bindsWholeAgreement(hashVersion),
-          // Stated rather than left to be inferred from three nulls. The
-          // version itself is here too: `canonical` carries it for
-          // recomputation, but a reader deciding what to do about an
-          // unsupported row should not have to go looking in another object.
-          canonical_version: hashVersion,
-          canonical_version_supported: versionSupported,
-        },
-      })
-
-      // Advance regardless of match, so a break also surfaces on the next
-      // event rather than silently resetting the expected chain.
-      expectedPrev = row.event_hash ?? expectedPrev
-    }
+    // Version 1, unchanged: shaped by the moved, now-tested loop.
+    const events = await shapeGuestEventsV1(rows ?? [], contract)
 
     // The deal as it stood when it was accepted, taken from the acceptance
     // event rather than from the contract row. The row may legitimately have
@@ -296,6 +193,22 @@ Deno.serve(async (req: Request) => {
     const acceptedAgreement = (acceptance?.payload as Record<string, unknown> | null)?._agreement ?? null
     const invitedRecipient = (acceptance?.payload as Record<string, unknown> | null)?._invited_recipient ?? null
     const claimedIdentity = (acceptance?.payload as Record<string, unknown> | null)?._claimed_identity ?? null
+
+    // The strict v5 reader, server-side with full payloads. NOT serialized:
+    // what a response carries waits for the response-version decision. It is
+    // logged only when it sees v5-shaped rows or disagrees with v1's headline,
+    // neither of which can happen while v5 writes are closed. Counts and
+    // labels only — no ids, tokens or addresses.
+    const truncated = (rows?.length ?? 0) >= MAX_EVENTS
+    const chain = chainSummary(events, { truncated })
+    const strict = await guestStrictVerdicts(rows ?? [], contract, { truncated, acceptedAgreement })
+    const strictRows = strict.server.rows.filter(r => r.kind === 'v5' || r.kind === 'invalid').length
+    if (strictRows > 0 || (chain.verified === true && strict.server.overall === 'failed')) {
+      console.warn(JSON.stringify({
+        event: 'guest_strict_reader', strict_rows: strictRows,
+        v1_verified: chain.verified, strict_overall: strict.server.overall, dimensions: strict.server.dimensions,
+      }))
+    }
 
     return json({
       // What was ACCEPTED, recorded at the time. Null for agreements accepted
@@ -347,7 +260,7 @@ Deno.serve(async (req: Request) => {
       // what no amount of hashing in it will establish. Carried in the data
       // because a machine reader has no README.
       verification: guestVerificationNotes(),
-      chain: chainSummary(events, { truncated: (rows?.length ?? 0) >= MAX_EVENTS }),
+      chain,
     }, 200)
 
   } catch (err) {
