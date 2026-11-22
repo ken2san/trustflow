@@ -372,7 +372,7 @@ export function guestCanonicalBlock(
 
 export type AcceptedAgreementStatus =
   | 'ok' | 'no_acceptance' | 'multiple_acceptances' | 'no_snapshot' | 'malformed_snapshot'
-  | 'unsupported_snapshot_version' | 'no_recorded_digest' | 'digest_mismatch'
+  | 'unsupported_snapshot_version' | 'invalid_snapshot_values' | 'no_recorded_digest' | 'digest_mismatch'
 
 export interface AcceptedAgreement {
   /** The accepted snapshot digest, or null whenever any check below fails. */
@@ -380,6 +380,27 @@ export interface AcceptedAgreement {
   status: AcceptedAgreementStatus
   /** Index of the single acceptance row, when there is exactly one. */
   acceptance_index: number | null
+}
+
+const isStringOrNull = (v: unknown) => v === null || typeof v === 'string'
+
+/**
+ * Value rules per snapshot version, checked BEFORE a digest is accepted (Codex
+ * T169): a self-consistently hashed snapshot with a wrong value type is
+ * malformed agreement evidence, not an accepted agreement. Values are checked,
+ * never normalised, so historical bytes and the nulls the builder could emit
+ * stay valid. A supported version without a validator fails closed.
+ */
+const SNAPSHOT_VALUE_RULES: Record<number, (s: Record<string, unknown>) => boolean> = {
+  // buildSnapshotV1's output shape.
+  1: s => s.snapshot_version === 1
+    && isStringOrNull(s.project_name)
+    && Array.isArray(s.dod) && (s.dod as unknown[]).every(item => typeof item === 'string')
+    && (s.amount === null || (typeof s.amount === 'number' && Number.isSafeInteger(s.amount)))
+    && isStringOrNull(s.currency)
+    && (s.deadline === null || (typeof s.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.deadline)))
+    && (s.performed_by === 'creator' || s.performed_by === 'counterparty')
+    && isStringOrNull(s.offered_by),
 }
 
 /**
@@ -412,6 +433,8 @@ export async function acceptedAgreementOf(
   if (!version.present || !isSupportedSnapshotVersion(version.value)) return fail('unsupported_snapshot_version')
   const expectedKeys = Object.keys(buildAgreementSnapshot({}, version.value as number)).sort()
   if (stableStringify(Object.keys(snapshot).sort()) !== stableStringify(expectedKeys)) return fail('malformed_snapshot')
+  const valuesOk = SNAPSHOT_VALUE_RULES[version.value as number]
+  if (!valuesOk || !valuesOk(snapshot as Record<string, unknown>)) return fail('invalid_snapshot_values')
   if ((await sha256Hex(stableStringify(snapshot))) !== recorded) return fail('digest_mismatch')
   return { hash: recorded, status: 'ok', acceptance_index: index }
 }

@@ -580,7 +580,11 @@ describe('T167: raw invalidity, honest agreement and completeness, local never v
     }
   })
 
-  it('a transport failure is carried, not replaced by unchecked input', async () => {
+  // Raw-accessor test (Codex T169): the accessor is caught by raw classification
+  // before the adapter. The transport-failure branch itself is not reachable from
+  // guestTrailVerdicts (blocks are plain data with no prev_hash alias) and stays a
+  // defensive guard. What this proves: the getter is never invoked, on either side.
+  it('a raw accessor on a projection field is invalid in both verdicts and is never invoked', async () => {
     const { rows } = await mixedTrail()
     const hostile = { ...rows[1] }
     Object.defineProperty(hostile, 'issuer_kind', { enumerable: true, get() { throw new Error('read') } })
@@ -590,7 +594,9 @@ describe('T167: raw invalidity, honest agreement and completeness, local never v
     expect(v.server.overall).toBe('failed')
   })
 
-  it('an absent event_hash stays absent (not turned into null)', async () => {
+  // The verdict cannot tell an omitted hash from a synthesized null (both are
+  // invalid to the v5 verifier); this asserts the outcome, not the representation.
+  it('a missing event_hash is invalid input, never a match', async () => {
     const { rows } = await mixedTrail()
     const { event_hash: _e, ...noHash } = rows[1]
     const v = await guestTrailVerdicts([rows[0], noHash, rows[2]], FULL)
@@ -653,5 +659,62 @@ describe('T167: raw invalidity, honest agreement and completeness, local never v
     expect(v.server.dimensions.completeness).toBe('indeterminate')
     expect(v.server.rows[0].link).toBe('indeterminate')
     expect(v.server.overall).toBe('incomplete')
+  })
+})
+
+describe('T169: acceptance snapshot values are validated before the digest is accepted', () => {
+  const FULL = { contractId: V5CID, truncated: false, start: 'first_event' }
+
+  // A trail hashed self-consistently over the given snapshot: every digest is
+  // recomputed, so only the value check can stop it.
+  async function trailOver(snapshot) {
+    const accepted = await sha256Hex(stableStringify(snapshot))
+    const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: snapshot }, agreement: accepted })
+    const b = await rawV5(2, a.event_hash, { agreement: accepted })
+    return [a, b]
+  }
+
+  it('a wrong value type in a self-consistently hashed trail is not accepted', async () => {
+    for (const bad of [
+      { ...SNAPSHOT, amount: '1250' },
+      { ...SNAPSHOT, amount: 12.5 },
+      { ...SNAPSHOT, dod: 'Translate' },
+      { ...SNAPSHOT, dod: ['Translate', 3] },
+      { ...SNAPSHOT, currency: 42 },
+      { ...SNAPSHOT, deadline: '2026/12/01' },
+      { ...SNAPSHOT, performed_by: 'someone' },
+      { ...SNAPSHOT, offered_by: { name: 'x' } },
+      { ...SNAPSHOT, project_name: ['x'] },
+      { ...SNAPSHOT, snapshot_version: 1.0, amount: true },
+    ]) {
+      const rows = await trailOver(bad)
+      const v = await guestTrailVerdicts(rows, { ...FULL, sentSnapshot: bad })
+      const label = JSON.stringify(bad)
+      expect(v.server.rows[0].hash, label).toBe('match')
+      expect(v.server_agreement, label).toMatchObject({ hash: null, status: 'invalid_snapshot_values' })
+      expect(v.local_agreement.status, label).toBe('invalid_snapshot_values')
+      expect(v.server.rows[1].agreement, label).toBe('indeterminate')
+      expect(v.server.overall, label).not.toBe('verified')
+    }
+  })
+
+  it('historical nulls and exact bytes stay valid', async () => {
+    const nulls = { ...SNAPSHOT, project_name: null, amount: null, currency: null, deadline: null, offered_by: null, dod: [] }
+    const spaced = { ...SNAPSHOT, project_name: '  Example  ', dod: [' Translate '], deadline: '2026-12-01' }
+    for (const good of [nulls, spaced, { ...SNAPSHOT, performed_by: 'counterparty' }]) {
+      const rows = await trailOver(good)
+      const v = await guestTrailVerdicts(rows, { ...FULL, sentSnapshot: good })
+      expect(v.server_agreement.status, JSON.stringify(good)).toBe('ok')
+      expect(v.server.overall).toBe('verified')
+    }
+  })
+
+  it('the snapshot result and the acceptance row\'s own validity are reported separately', async () => {
+    const rows = await trailOver(SNAPSHOT)
+    const tampered = [{ ...rows[0], actor_id: 'someone else' }, rows[1]]
+    const v = await guestTrailVerdicts(tampered, { ...FULL, sentSnapshot: SNAPSHOT })
+    expect(v.server_agreement.status).toBe('ok')
+    expect(v.server.rows[0].hash).toBe('mismatch')
+    expect(v.server.overall).toBe('failed')
   })
 })

@@ -609,3 +609,16 @@ describe('3C-core: a malformed row labelled v5 is invalid evidence, never VERIFI
     expect(t.events[1]._export_verification.strict_v5).toMatchObject({ kind: 'v5', hash: 'invalid_input' })
   })
 })
+
+describe('T169: owner export with a self-consistently hashed wrong-type snapshot', () => {
+  it('is never VERIFIED, and says why', async () => {
+    const bad = { ...V5_SNAPSHOT, amount: '1250' }
+    const accepted = await sha256Hex(stableStringify(bad))
+    const a = await ownerV4(8, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: bad }, agreement: accepted })
+    const b = await ownerV5(9, a.event_hash, { agreement: accepted })
+    const t = await doc([a, b], COMPLETE_READ)
+    expect(t.v5_verification.accepted_agreement).toMatchObject({ hash: null, status: 'invalid_snapshot_values' })
+    expect(t.events[0]._export_verification.hash_match).toBe(true)
+    expect(t.integrity_status).toBe('INDETERMINATE_INCOMPLETE_EVIDENCE')
+  })
+})
