@@ -112,6 +112,11 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 171 (2026-11-22, Kenji OK 01:44 ET): **migration B `20261120180000` applied to PRODUCTION** (`fqgpzhwvvfsxswlnbbgg`) per the runbook: pin `cbd02d3`, CLI 2.105.0, one `op read` → `PGPASSWORD` only. Exit codes: baseline 0, dry run 0, apply 0, snapshot 0, assertions 0.
+  - The dry run listed exactly B. The catalog diff is **identical to E2E T165**: history gains B; authenticated column INSERT 10 → none; `creator_insert_contract` dropped.
+  - All 18 assertions PASS: no table or column INSERT for anon/authenticated/PUBLIC (effective, inherited included); service_role and postgres keep INSERT; 3 policies remain with RLS on; RPC definer, owner postgres, empty search_path, authenticated-only; every returned column selectable; pg_graphql absent; no client-writable views; the RPC is the only client-reachable definer inserting contracts; row 1 inventory PASS.
+  - 1322 contracts, 2397 events, row and hash digests unchanged. No write smoke.
+  - **Cutover gap now open (accepted):** the current production frontend's direct insert can no longer create contracts until the new frontend is pushed. **The push is NOT done** and needs its own OK. Report: `.ada/claude-report-171.md`.
 - Claude Task 170 (2026-11-22, Kenji OK 01:37 ET): **migration A `20261120090000` applied to PRODUCTION** (`fqgpzhwvvfsxswlnbbgg`) per the runbook: pin `5a7f2be`, CLI 2.105.0, one `op read` → `PGPASSWORD` only. Exit codes: baseline 0, dry run 0, apply 0, verify 0.
   - The dry run listed exactly A. Before and after are identical: 1322 contracts, 2397 events, row and hash digests, client INSERT grants (authenticated still has the 10 legacy columns, so direct create still works until B), and the 4 policies.
   - Verify all PASS: history ends at A and B is absent; the RPC has exactly the 8 arguments and no other overload, is SECURITY DEFINER with empty search_path, owned by postgres, returns jsonb, with EXECUTE for authenticated only; postgres holds `auth.users` UPDATE; 0 contracts columns authenticated cannot SELECT; party read policy and RLS as rehearsed; inventory PASS; pg_graphql absent. No production write smoke.
