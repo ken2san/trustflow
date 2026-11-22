@@ -43,7 +43,7 @@ entry path never wait for real deals or real users (`Decisions.md` 2026-11-18).
 ## Now: where we are against the schedule (rev 3)
 
 **Row 2 (C5 server-side create), planned 2026-11-23..24: started 2026-11-20, released to production 2026-11-22 (T173), about 1 working day early
-(Monday–Friday calendar). Closed 2026-11-22:** cancel fixture closed as covered by `cancellation-refusal` 4/4 (T175; Kenji 11:39 ET); prod refusal probes added and both refused 401/42501 (T176 `d747cff`, smoke:prod 18/18); Codex T157 must-fix on the probe classifier (2xx hard stop, 400 vs 23514, scoped no-write claim) goes to Claude T177. **Next: row 3 (v5 canonical), preimage confirmed by Kenji 2026-11-22 11:39 ET (Codex T156 `d53fc5e`).** Revised estimate 3–4 working days (Codex T131), so the finish may spill
+(Monday–Friday calendar). Closed 2026-11-22:** cancel fixture closed as covered by `cancellation-refusal` 4/4 (T175; Kenji 11:39 ET); prod refusal probes added and both refused 401/42501 (T176 `d747cff`, smoke:prod 18/18); Codex T157 must-fix on the probe classifier (2xx hard stop, 400 vs 23514, scoped no-write claim) fixed by Claude T177 `5b1a2a5` (pushed, Vercel READY; create probes now gated on pinned target + `--backstops-verified`; prod catalog readback proposed, awaits Kenji). Claude T178 = row 3 step 1 (freeze v5 contract + KAT/tamper tests, local). **Next: row 3 (v5 canonical), preimage confirmed by Kenji 2026-11-22 11:39 ET (Codex T156 `d53fc5e`).** Revised estimate 3–4 working days (Codex T131), so the finish may spill
 1–2 days past 11-24; Kenji accepted that (2026-11-20). M1 2026-12-04 unchanged.
 
 | Row 2 step | Status |
