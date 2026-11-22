@@ -98,8 +98,10 @@ Stop on unexpected catalog changes, failed verification, or any uncertainty abou
 Require all three production versions and signed-off verification, recorded in order. Verify the reviewed SHA is a normal fast-forward of current `origin/main`, the release diff has only reviewed changes and the Vercel integration points at the intended production project. From the release checkout, with `RELEASE_SHA` set to that inspected commit, run:
 
 ```bash
-git push origin "$RELEASE_SHA:refs/heads/main"
+git push origin "${RELEASE_SHA}:refs/heads/main"
 ```
+
+Keep the braces: in zsh, `$RELEASE_SHA:r…` applies the `:r` history modifier and mangles the refspec (T172).
 
 Wait for Vercel to show Ready for that SHA and confirm the production alias resolves to it. Read-only smoke: GET the production page and served assets, confirm the exact production Supabase ref and RPC create route in the bundle, and GET `/llms.txt` and `/agent-protocol.md` to confirm the RPC instructions and digest vectors. Check deployed function inventory and auth/CAPTCHA settings by readback. The existing `npm run smoke:prod` is the T123 supplemental probe if approved for the release worker. It loads production configuration through its existing loader and sends only its documented refusal/status probes, with no real signup or invitation. Do not submit the create form, accept invites, request a real OTP, or run live-writing specs. Read-only smoke cannot establish production end-to-end write behavior.
 

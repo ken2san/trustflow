@@ -112,6 +112,12 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 174 (2026-11-22, Kenji 02:19 ET):
+  - **`npm run smoke:prod` 16/16 ok, exit 0, no writes.** Bundle points at prod; OTP endpoint answers 400 and **server-side CAPTCHA is enforced** with a real site key; the 4 live functions are serving and the 5 retired ones absent; `/llms.txt` and `/agent-protocol.md` served.
+  - **Gap:** `smoke:prod` has **no probe** of `POST /rest/v1/contracts` or `rpc/create_entry_contract`, so the production refusal of the old insert and of an anonymous create is still proved only by catalog checks (T171) and E2E (T165), not by an HTTP probe.
+  - Proposed for a later OK: add two refusal probes whose bodies would fail a CHECK constraint even if privileges were open (e.g. an invalid currency), so a probe can never write. Then 42501 proves the refusal and 23514 would reveal open privileges.
+  - Runbook §4 push command braced (`"${RELEASE_SHA}:refs/heads/main"`) with a zsh note.
+  - Committed and pushed with a plain `git push origin main`. Report: `.ada/claude-report-174.md`.
 - Claude Task 173 (2026-11-22, Kenji OK 01:58 ET): **pushed to production.** `git push origin "${RELEASE_SHA}:refs/heads/main"` → `122bac2..11d2075`, exit 0; `origin/main` = `11d2075`.
   - Vercel `dpl_GmRv2BwoHuWLsvnCyBhUFLNcxAyD` is READY for `11d2075`, target production, aliased to `project-trustflow.vercel.app` with no alias error. **The cutover gap is closed.**
   - Read-only smoke all PASS:

@@ -42,18 +42,18 @@ entry path never wait for real deals or real users (`Decisions.md` 2026-11-18).
 
 ## Now: where we are against the schedule (rev 3)
 
-**Row 2 (C5 server-side create), planned 2026-11-23..24: started 2026-11-20, 1 working day early
-(Monday–Friday calendar).** Revised estimate 3–4 working days (Codex T131), so the finish may spill
+**Row 2 (C5 server-side create), planned 2026-11-23..24: started 2026-11-20, released to production 2026-11-22 (T173), about 1 working day early
+(Monday–Friday calendar).** Only `smoke:prod` and the cancel fixture remain. Revised estimate 3–4 working days (Codex T131), so the finish may spill
 1–2 days past 11-24; Kenji accepted that (2026-11-20). M1 2026-12-04 unchanged.
 
 | Row 2 step | Status |
 |---|---|
-| Stage A: migration `20261120090000` adds RPC `create_entry_contract` (additive; direct INSERT still open), client and all writers switched, E2E specs converted | **Committed locally 6371d87** (11-20); with row 1, applied to **E2E only** 11-20 (Claude T163). Not pushed. **Production: row 1 applied (T167, `61024dd`) and A applied + verified 11-22 (T170, `c6c88d4`)**; B and push pending (Kenji OK each) |
+| Stage A: migration `20261120090000` adds RPC `create_entry_contract` (additive; direct INSERT still open), client and all writers switched, E2E specs converted | **Committed locally 6371d87** (11-20); with row 1, applied to **E2E only** 11-20 (Claude T163). Not pushed. **Production: row 1 (T167, `61024dd`), A (T170, `c6c88d4`) and B (T171, `11d2075`) applied + verified 11-22; pushed and live on Vercel production 11-22 (T173)** |
 | Stage A local tests: SQL suite, 2-session races, legacy-vs-RPC hash parity, row 1 races | PASS (Claude T154/T155); harness hardened after Codex T138/T139 blocks (T156/T157) |
 | Codex final re-review, then local commit (no push) | **Done.** 6371d87 (12:29 ET, make check 779 x2, tests load-safe via Codex T142) |
 | Before-B fixes: `currency.spec` B-pending asserts; apply-time SELECT assertion on returned columns (chosen instead of explicit projection, output/hash unchanged) | **Committed locally d2e4b9f** (Codex T143, Claude T159–T161: SQL, races 9/9, harness, make check 779, lint 0). Codex T144 review: no code blocker. A/B split done (Codex T146, 5a7f2be). Grants/RLS and catalog rechecked on E2E at A apply (Claude T163) |
 | E2E rehearsal incl. the 5 converted scripts (Kenji chose to run them there) | **PASS on E2E 11-20** (T163): currency spec pre-B 9/9, all 5 scripts PASS |
-| Migration B: close direct client INSERT (no rollback after it, only forward fix) | **Built locally 5609c46**; T150 committed `cbd02d3` (removed in-file `begin;`/`commit;`, T107). Not applied anywhere yet. T148 blockers fixed in T149 (`29c1fce`). **T164 PASS** (`9de7425`): Docker B rehearsal incl. rollback, E2E A-stage invite-persistence 9/9. **T165 done 11-21 (`bee5c8d`): B applied to E2E**, catalog diff exactly 3 lines, rows/hashes unchanged, currency 15/15 + invite 9/9 incl. `@post-b`, 5 scripts PASS, make check 779. Not pushed. Browser owner-create spec PASS (T166 `e7df5de`, T169 `4f426c1`). **Production has row 1 + A (11-22, T167/T170), not B.** Remaining: production B, then push (Kenji OK each); cancel fixture after B (Kenji OK) |
+| Migration B: close direct client INSERT (no rollback after it, only forward fix) | **Built locally 5609c46**; T150 committed `cbd02d3` (removed in-file `begin;`/`commit;`, T107). Not applied anywhere yet. T148 blockers fixed in T149 (`29c1fce`). **T164 PASS** (`9de7425`): Docker B rehearsal incl. rollback, E2E A-stage invite-persistence 9/9. **T165 done 11-21 (`bee5c8d`): B applied to E2E**, catalog diff exactly 3 lines, rows/hashes unchanged, currency 15/15 + invite 9/9 incl. `@post-b`, 5 scripts PASS, make check 779. Not pushed. Browser owner-create spec PASS (T166 `e7df5de`, T169 `4f426c1`). **Production B applied + verified 11-22 (T171 `11d2075`); pushed, Vercel production READY, read-only smoke all PASS (T173).** Remaining: `smoke:prod` refusal probes and cancel fixture (Kenji OK each); runbook section 4 zsh brace fix |
 
 **Deploy order:** apply and verify migration A on the target **before** pushing any frontend
 with the RPC client; a push auto-deploys the production frontend.
