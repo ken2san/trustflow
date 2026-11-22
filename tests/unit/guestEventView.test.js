@@ -510,3 +510,44 @@ describe('3B-core: server and local verdicts are separate', () => {
     expect(v.server.overall).toBe('incomplete')
   })
 })
+
+describe('T166: acceptance markers and old envelopes through the guest consumer', () => {
+  it('a known-start trail with no acceptance and a matching v5 digest is not verified', async () => {
+    const accepted = await sha256Hex(stableStringify(SNAPSHOT))
+    const only = await rawV5(1, 'GENESIS', { agreement: accepted })
+    const v = await guestTrailVerdicts([only], { contractId: V5CID, truncated: false })
+    expect(v.accepted_agreement_hash).toBe(null)
+    expect(v.server.rows[0]).toMatchObject({ hash: 'match', link: 'linked', payload: 'match' })
+    expect(v.server.rows[0].agreement).not.toBe('match')
+    expect(v.server.overall).not.toBe('verified')
+    expect(v.local.overall).not.toBe('verified')
+  })
+
+  it('two acceptances in a legacy-only trail reject the derived marker and are not verified', async () => {
+    const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', agreement: hex('a') })
+    const b = await rawLegacy(2, a.event_hash, { type: 'dod.consent_recorded', agreement: hex('a') })
+    const v = await guestTrailVerdicts([a, b], { contractId: V5CID, truncated: false })
+    for (const side of [v.server, v.local]) {
+      expect(side.acceptance.status).toBe('rejected')
+      expect(side.dimensions.agreement).not.toBe('pass')
+      expect(side.overall).not.toBe('verified')
+    }
+  })
+
+  it('old envelopes without v5 fields keep legacy semantics; with a recorded 5 they are never legacy', async () => {
+    // An old SELECT: no authority columns at all; one row has no recorded version.
+    const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: SNAPSHOT },
+      agreement: await sha256Hex(stableStringify(SNAPSHOT)) })
+    const { hash_version: _h, ...noVersion } = a
+    expect(guestCanonicalBlock(noVersion, V5CID).kind).toBe('legacy')
+    expect(guestCanonicalBlock(a, V5CID).block).toEqual(canonicalInputsOf(a, V5CID))
+    const legacyV = await guestTrailVerdicts([a], { contractId: V5CID, truncated: false })
+    expect(legacyV.server.rows[0]).toMatchObject({ kind: 'legacy', hash: 'match' })
+    // The same old envelope claiming version 5 is a v5 candidate that cannot verify.
+    const claimed = { ...a, hash_version: 5 }
+    expect(guestCanonicalBlock(claimed, V5CID).kind).toBe('v5')
+    const v = await guestTrailVerdicts([claimed], { contractId: V5CID, truncated: false })
+    expect(v.server.rows[0]).toMatchObject({ kind: 'v5', hash: 'invalid_input' })
+    expect(v.server.overall).toBe('failed')
+  })
+})

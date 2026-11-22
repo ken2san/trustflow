@@ -520,6 +520,53 @@ describe('T164 regressions: no overall verified without proof', () => {
   })
 })
 
+describe('T166 regressions: acceptance markers cannot buy a verified slice', () => {
+  it("'before_slice' on a known-start slice with no acceptance is rejected, even with a matching v5 digest", async () => {
+    const only = await v5Row(1, 'GENESIS')
+    const r = await verifyEvidenceSlice([only], { ...COMPLETE, acceptance: 'before_slice' })
+    expect(r.acceptance.status).toBe('rejected')
+    expect(r.acceptance.reason).toContain("starts at the deal's first event")
+    expect(r.rows[0]).toMatchObject({ hash: 'match', link: 'linked', agreement: 'indeterminate' })
+    expect(r.overall).not.toBe('verified')
+  })
+
+  it("'before_slice' stays usable for a genuine suffix", async () => {
+    const [, b, c] = await mixedChain()
+    const r = await verifyEvidenceSlice([b, c], { ...COMPLETE, startsAtChainStart: false, acceptance: 'before_slice' })
+    expect(r.acceptance.status).toBe('caller')
+    expect(r.rows.map(x => x.agreement)).toEqual(['match', 'match'])
+  })
+
+  it('a rejected marker blocks verified on a fully matching legacy-only (v1–v3) slice', async () => {
+    // A hashed v1 row advances the expected tip (today's export semantics).
+    const a = await legacyRow(1, null, { version: 1 })
+    const b = await legacyRow(2, a.event_hash, { version: 2 })
+    const c = await legacyRow(3, b.event_hash, { version: 3 })
+    const control = await verifyEvidenceSlice([a, b, c], { ...COMPLETE, acceptance: 'none' })
+    expect(control.rows.map(x => [x.hash, x.link, x.payload, x.agreement])).toEqual([
+      ['match', 'not_in_format', 'not_in_format', 'not_bound'],
+      ['match', 'linked', 'not_in_format', 'not_bound'],
+      ['match', 'linked', 'match', 'not_bound'],
+    ])
+    expect(control.overall).toBe('verified')
+    for (const acceptance of [{ index: 5 }, { index: 0 }, 'before_slice', 'sometimes']) {
+      const r = await verifyEvidenceSlice([a, b, c], { ...COMPLETE, acceptance })
+      expect(r.acceptance.status, JSON.stringify(acceptance)).toBe('rejected')
+      expect(r.dimensions.agreement).toBe('indeterminate')
+      expect(r.overall, JSON.stringify(acceptance)).toBe('incomplete')
+    }
+  })
+
+  it('with a rejected marker, an actual mismatch still ranks first', async () => {
+    const a = await legacyRow(1, null, { version: 1 })
+    const b = { ...(await legacyRow(2, 'GENESIS', { version: 2 })), actor_id: 'someone else' }
+    const r = await verifyEvidenceSlice([a, b], { ...COMPLETE, acceptance: 'before_slice' })
+    expect(r.acceptance.status).toBe('rejected')
+    expect(r.rows[1].hash).toBe('mismatch')
+    expect(r.overall).toBe('failed')
+  })
+})
+
 describe('3A: legacy constants unchanged', () => {
   it('v5 is still not a legacy-supported version and the writer stays on v4', () => {
     expect([...SUPPORTED_HASH_VERSIONS]).toEqual([1, 2, 3, 4])

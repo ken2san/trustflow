@@ -326,6 +326,11 @@ function resolveAcceptance(rows: readonly unknown[], opts: SliceOptions):
     if (found[0] !== a.index) return reject('acceptance index does not name the acceptance event')
     return { marker: a, status: { status: 'caller', index: a.index } }
   }
+  // Acceptance cannot precede the deal's first event. 'before_slice' stays
+  // valid for a slice that is a genuine suffix (Codex T166).
+  if (a === 'before_slice' && opts.startsAtChainStart) {
+    return reject("marker 'before_slice' contradicts a slice that starts at the deal's first event")
+  }
   if (found.length === 1) {
     if (a === 'none' || a === 'before_slice') return reject(`marker '${String(a)}' contradicts an acceptance in the slice`)
     return { marker: { index: found[0] }, status: { status: 'derived', index: found[0] } }
@@ -416,11 +421,15 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
     else if (stored.value !== null && stored.value !== undefined) expectation = { kind: 'unknown_boundary' }
   }
 
+  // A rejected acceptance marker gates the aggregate whatever versions are
+  // present (Codex T166): agreement cannot pass, so overall cannot be verified.
+  // An actual failure still ranks above that indeterminacy.
+  const agreement = dimension(out.map(r => r.agreement))
   const dimensions = {
     hash: dimension(out.map(r => r.hash)),
     link: dimension(out.map(r => r.link)),
     payload: dimension(out.map(r => r.payload)),
-    agreement: dimension(out.map(r => r.agreement)),
+    agreement: acceptance.status.status === 'rejected' && agreement === 'pass' ? 'indeterminate' as Dimension : agreement,
     completeness: (opts.startsAtChainStart && opts.tailComplete && out.length > 0 ? 'pass' : 'indeterminate') as Dimension,
   }
   const all = Object.values(dimensions)

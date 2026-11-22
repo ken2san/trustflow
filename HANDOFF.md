@@ -1028,3 +1028,7 @@ Kept as constraints, not stories.
   - `guestTrailVerdicts`, with separate `server` (full payloads) and `local` (no payload, so never verified) verdicts
 
   Wiring into the endpoint, UI and export (3B-wire) waits for storage on E2E and the response-version decision. Tests: guestEventView + eventVerifyV5 + eventCanonicalV5 + eventRecord, **158/158**. Not pushed. Report: `.ada/claude-report-190.md`.
+
+- Codex Task 167: 3B-core split is sound, but hold `05900e3` pending preservation of raw invalid verdicts through projection, snapshot/start checks, and a legacy-only no-payload local-verdict regression. Report: `.ada/codex-report-167.md`.
+
+- Claude Task 191 (2026-11-22, local only): closed Codex T166 item 2 on 3A. `before_slice` is rejected on a known-start slice (still valid for a suffix). A rejected acceptance marker now gates the aggregate (agreement can't pass, overall can't be verified; real mismatches still `failed`). Regressions added in `eventVerifyV5.test.js` and, through `guestTrailVerdicts`, in `guestEventView.test.js` (including old envelopes without v5 fields). Three files **115/115**. Not pushed. Report: `.ada/claude-report-191.md`.
