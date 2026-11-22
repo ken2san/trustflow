@@ -48,12 +48,48 @@ docker cp "$work/toc.list" "$container:$dump.list"
 echo 'fixture: restoring'
 docker exec "$container" pg_restore -U supabase_admin -d "$db" --exit-on-error -L "$dump.list" "$dump"
 echo 'fixture: applying row 1, A, B'
-psql_pg -1 < supabase/migrations/20261118214020_entry_agent_credentials.sql
-psql_pg -1 < supabase/migrations/20261120090000_create_entry_contract.sql
-psql_pg -1 < supabase/migrations/20261120180000_close_contract_client_insert.sql
+psql_pg -1 -f - < supabase/migrations/20261118214020_entry_agent_credentials.sql
+psql_pg -1 -f - < supabase/migrations/20261120090000_create_entry_contract.sql
+psql_pg -1 -f - < supabase/migrations/20261120180000_close_contract_client_insert.sql
 psql_pg -c "do \$\$ begin
   if exists (select 1 from pg_attribute where attrelid = 'public.events'::regclass and attname in ('credential_id','issuer_kind'))
   then raise exception 'fixture: authority columns already present'; end if; end \$\$;"
+
+# ── Rollback proof (TF_V5_ROLLBACK_PROOF=1, Codex T163) ─────────────────────
+# psql -1 wraps only -c/-f actions; plain stdin runs in autocommit. Feed the
+# migration plus a forced error placed AFTER its self-test, once through the
+# transactional form (nothing may remain) and once through bare stdin as a
+# control (the columns must remain, proving the check can see a partial apply).
+if [[ "${TF_V5_ROLLBACK_PROOF:-}" == 1 ]]; then
+  forced="$work/forced.sql"
+  cat supabase/migrations/20261122130000_events_v5_authority_columns.sql > "$forced"
+  printf '\ndo $$ begin raise exception %s; end $$;\n' "'forced late failure (T188)'" >> "$forced"
+  residue() {
+    psql_pg -c "select
+      (select count(*) from pg_attribute where attrelid = 'public.events'::regclass and not attisdropped
+         and attname in ('credential_id', 'issuer_kind'))
+      || ':' ||
+      (select count(*) from pg_constraint where conrelid = 'public.events'::regclass
+         and conname in ('events_credential_id_fkey', 'events_issuer_kind_check', 'events_v5_authority_pair',
+                         'events_v5_prev_link', 'events_v5_writes_disabled'))"
+  }
+  set +e
+  psql_pg -1 -f - < "$forced" > "$work/forced.tx.out" 2>&1; tx_rc=$?
+  set -e
+  tx_left="$(residue)"
+  grep -q 'forced late failure (T188)' "$work/forced.tx.out" || { echo 'proof: forced error not reached in transactional run' >&2; cat "$work/forced.tx.out" >&2; exit 1; }
+  echo "proof: transactional apply exit=$tx_rc, residue columns:constraints=$tx_left"
+  [[ $tx_rc -ne 0 && "$tx_left" == '0:0' ]] || { echo 'proof: FAIL — transactional apply left residue or did not fail' >&2; exit 1; }
+  set +e
+  psql_pg < "$forced" > "$work/forced.bare.out" 2>&1; bare_rc=$?
+  set -e
+  bare_left="$(residue)"
+  grep -q 'forced late failure (T188)' "$work/forced.bare.out" || { echo 'proof: forced error not reached in bare run' >&2; exit 1; }
+  echo "proof: control (bare stdin, autocommit) exit=$bare_rc, residue columns:constraints=$bare_left"
+  [[ $bare_rc -ne 0 && "$bare_left" == '2:5' ]] || { echo 'proof: FAIL — control did not show a partial apply' >&2; exit 1; }
+  echo 'events_v5_authority rollback proof: PASS'
+  exit 0
+fi
 
 # ── Seed legacy data through the legacy writers (as service_role) ───────────
 echo 'seed: legacy writers and direct v1–v4/null rows'
@@ -184,7 +220,7 @@ echo 'existing (baseline, before migration): tests/sql/entry_agent_credentials.s
 psql_admin < tests/sql/entry_agent_credentials.sql > "$work/creds.before.out"
 
 echo 'migration: applying 20261122130000_events_v5_authority_columns'
-psql_pg -1 < supabase/migrations/20261122130000_events_v5_authority_columns.sql
+psql_pg -1 -f - < supabase/migrations/20261122130000_events_v5_authority_columns.sql
 snapshot after
 
 # ── Checks ──────────────────────────────────────────────────────────────────

@@ -1006,3 +1006,7 @@ Kept as constraints, not stories.
   - new `verifyEvidenceSlice`: separate hash/link/payload/agreement per row, per-dimension results, and an overall `verified` only on a complete slice
 
   Legacy constants and modules are unchanged. `eventVerifyV5` + `eventCanonicalV5`: **66/66**. Not pushed. Report: `.ada/claude-report-187.md`.
+
+- Codex Task 164: hold `b566c54` before 3B/push. Strict projection is sound, but slice aggregation can report verified with missing legacy checks or unknown v5 acceptance position. T188 storage evidence remains a separate gate. Report: `.ada/codex-report-164.md`.
+
+- Claude Task 188 (2026-11-22, local + disposable Docker): closed Codex T163 item 1. `tests/sql/events_v5_authority.sh` now applies every migration with `psql -1 -f -` (true single transaction; plain `-1 < file` did not use it). New `TF_V5_ROLLBACK_PROOF=1` mode: the migration plus a forced late error rolls back fully through `-1 -f -` (residue 0 columns / 0 constraints), while the old bare-stdin form leaves 2/5 as the control. One clean run: **132/132**. Migration SQL unchanged. Not pushed. Report: `.ada/claude-report-188.md`.
