@@ -280,7 +280,7 @@ describe('what the guest is told about the trail as a whole', () => {
     ...integrity,
   } })
 
-  const summary = events => chainSummary(events, { truncated: false })
+  const summary = events => chainSummary(events, { truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
 
   it('verifies a trail whose every row checks out', () => {
     const out = summary([shaped('e1', {}), shaped('e2', {})])
@@ -354,8 +354,8 @@ describe('what the guest is told about the trail as a whole', () => {
   })
 
   it('passes truncation through rather than inferring it', () => {
-    expect(chainSummary([shaped('e1', {})], { truncated: true }).truncated).toBe(true)
-    expect(chainSummary([shaped('e1', {})], { truncated: false }).truncated).toBe(false)
+    expect(chainSummary([shaped('e1', {})], { truncated: true, start: 'first_event', sentSnapshot: SNAPSHOT }).truncated).toBe(true)
+    expect(chainSummary([shaped('e1', {})], { truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT }).truncated).toBe(false)
   })
 
   it('reports payload coverage only when every row has it', () => {
@@ -451,19 +451,19 @@ describe('3B-core: guest canonical block is chosen from the raw row', () => {
 describe('3B-core: accepted agreement digest', () => {
   it('is the acceptance digest only when its snapshot hashes to it', async () => {
     const { rows, accepted } = await mixedTrail()
-    expect(await acceptedAgreementHashOf(rows)).toBe(accepted)
+    expect(await acceptedAgreementHashOf(rows)).toEqual({ hash: accepted, status: 'ok', acceptance_index: 0 })
     const altered = [{ ...rows[0], payload: { _agreement: { ...SNAPSHOT, amount: 1 } } }, ...rows.slice(1)]
-    expect(await acceptedAgreementHashOf(altered)).toBe(null)
-    expect(await acceptedAgreementHashOf([rows[0], { ...rows[0], id: vid(9) }])).toBe(null)
-    expect(await acceptedAgreementHashOf(rows.slice(1))).toBe(null)
+    expect(await acceptedAgreementHashOf(altered)).toMatchObject({ hash: null, status: 'digest_mismatch' })
+    expect(await acceptedAgreementHashOf([rows[0], { ...rows[0], id: vid(9) }])).toMatchObject({ hash: null, status: 'multiple_acceptances' })
+    expect(await acceptedAgreementHashOf(rows.slice(1))).toMatchObject({ hash: null, status: 'no_acceptance' })
   })
 })
 
 describe('3B-core: server and local verdicts are separate', () => {
   it('mixed v4 → v5 → v4: the server verifies with full payloads; the guest cannot verify payloads', async () => {
     const { rows, accepted } = await mixedTrail()
-    const v = await guestTrailVerdicts(rows, { contractId: V5CID, truncated: false })
-    expect(v.accepted_agreement_hash).toBe(accepted)
+    const v = await guestTrailVerdicts(rows, { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
+    expect(v.server_agreement.hash).toBe(accepted)
     expect(v.server.overall).toBe('verified')
     expect(v.local.dimensions).toEqual({ hash: 'pass', link: 'pass', payload: 'indeterminate', agreement: 'pass', completeness: 'pass' })
     expect(v.local.rows.every(r => r.payload === 'unavailable')).toBe(true)
@@ -473,7 +473,7 @@ describe('3B-core: server and local verdicts are separate', () => {
   it('a tampered payload fails on the server and is merely unavailable locally', async () => {
     const { rows } = await mixedTrail()
     const tampered = [rows[0], { ...rows[1], payload: { note: 'edited' } }, rows[2]]
-    const v = await guestTrailVerdicts(tampered, { contractId: V5CID, truncated: false })
+    const v = await guestTrailVerdicts(tampered, { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
     expect(v.server.rows[1].payload).toBe('mismatch')
     expect(v.server.overall).toBe('failed')
     expect(v.local.rows[1].payload).toBe('unavailable')
@@ -482,7 +482,7 @@ describe('3B-core: server and local verdicts are separate', () => {
   it('an invalid v5 row among good legacy rows fails both verdicts and is not dropped', async () => {
     const { rows } = await mixedTrail()
     const bad = [rows[0], { ...rows[1], created_at: '2026-02-01' }, rows[2]]
-    const v = await guestTrailVerdicts(bad, { contractId: V5CID, truncated: false })
+    const v = await guestTrailVerdicts(bad, { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
     for (const side of [v.server, v.local]) {
       expect(side.rows).toHaveLength(3)
       expect(side.rows[1].hash).toBe('invalid_input')
@@ -492,7 +492,7 @@ describe('3B-core: server and local verdicts are separate', () => {
 
   it('a capped (truncated) trail is never verified', async () => {
     const { rows } = await mixedTrail()
-    const v = await guestTrailVerdicts(rows, { contractId: V5CID, truncated: true })
+    const v = await guestTrailVerdicts(rows, { contractId: V5CID, truncated: true, start: 'first_event', sentSnapshot: SNAPSHOT })
     expect(v.server.dimensions.completeness).toBe('indeterminate')
     expect(v.server.overall).toBe('incomplete')
   })
@@ -503,9 +503,9 @@ describe('3B-core: server and local verdicts are separate', () => {
     const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { note: 'no snapshot' }, agreement: accepted })
     const b = await rawV5(2, a.event_hash, { agreement: accepted })
     const c = await rawLegacy(3, b.event_hash, { agreement: accepted })
-    const v = await guestTrailVerdicts([a, b, c], { contractId: V5CID, truncated: false })
+    const v = await guestTrailVerdicts([a, b, c], { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
     expect(v.server.dimensions).toMatchObject({ hash: 'pass', link: 'pass', payload: 'pass' })
-    expect(v.accepted_agreement_hash).toBe(null)
+    expect(v.server_agreement.hash).toBe(null)
     expect(v.server.rows[1].agreement).toBe('indeterminate')
     expect(v.server.overall).toBe('incomplete')
   })
@@ -515,8 +515,8 @@ describe('T166: acceptance markers and old envelopes through the guest consumer'
   it('a known-start trail with no acceptance and a matching v5 digest is not verified', async () => {
     const accepted = await sha256Hex(stableStringify(SNAPSHOT))
     const only = await rawV5(1, 'GENESIS', { agreement: accepted })
-    const v = await guestTrailVerdicts([only], { contractId: V5CID, truncated: false })
-    expect(v.accepted_agreement_hash).toBe(null)
+    const v = await guestTrailVerdicts([only], { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
+    expect(v.server_agreement.hash).toBe(null)
     expect(v.server.rows[0]).toMatchObject({ hash: 'match', link: 'linked', payload: 'match' })
     expect(v.server.rows[0].agreement).not.toBe('match')
     expect(v.server.overall).not.toBe('verified')
@@ -526,7 +526,7 @@ describe('T166: acceptance markers and old envelopes through the guest consumer'
   it('two acceptances in a legacy-only trail reject the derived marker and are not verified', async () => {
     const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', agreement: hex('a') })
     const b = await rawLegacy(2, a.event_hash, { type: 'dod.consent_recorded', agreement: hex('a') })
-    const v = await guestTrailVerdicts([a, b], { contractId: V5CID, truncated: false })
+    const v = await guestTrailVerdicts([a, b], { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
     for (const side of [v.server, v.local]) {
       expect(side.acceptance.status).toBe('rejected')
       expect(side.dimensions.agreement).not.toBe('pass')
@@ -541,13 +541,117 @@ describe('T166: acceptance markers and old envelopes through the guest consumer'
     const { hash_version: _h, ...noVersion } = a
     expect(guestCanonicalBlock(noVersion, V5CID).kind).toBe('legacy')
     expect(guestCanonicalBlock(a, V5CID).block).toEqual(canonicalInputsOf(a, V5CID))
-    const legacyV = await guestTrailVerdicts([a], { contractId: V5CID, truncated: false })
+    const legacyV = await guestTrailVerdicts([a], { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
     expect(legacyV.server.rows[0]).toMatchObject({ kind: 'legacy', hash: 'match' })
     // The same old envelope claiming version 5 is a v5 candidate that cannot verify.
     const claimed = { ...a, hash_version: 5 }
     expect(guestCanonicalBlock(claimed, V5CID).kind).toBe('v5')
-    const v = await guestTrailVerdicts([claimed], { contractId: V5CID, truncated: false })
+    const v = await guestTrailVerdicts([claimed], { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
     expect(v.server.rows[0]).toMatchObject({ kind: 'v5', hash: 'invalid_input' })
     expect(v.server.overall).toBe('failed')
+  })
+})
+
+describe('T167: raw invalidity, honest agreement and completeness, local never verified', () => {
+  const FULL = { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT }
+
+  it('a conflicting version indicator invalidates the row in BOTH verdicts', async () => {
+    const { rows } = await mixedTrail()
+    const conflicted = [rows[0], { ...rows[1], canonical_version: 4 }, rows[2]]
+    const v = await guestTrailVerdicts(conflicted, FULL)
+    for (const side of [v.server, v.local]) {
+      expect(side.rows[1]).toMatchObject({ kind: 'invalid', hash: 'invalid_input' })
+      expect(side.rows[1].reason).toContain('canonical_version')
+      expect(side.overall).toBe('failed')
+    }
+  })
+
+  it('a read that dropped the version and authority projection is invalid locally too, never legacy v2', async () => {
+    const { rows } = await mixedTrail()
+    const { hash_version: _h, credential_id: _c, issuer_kind: _i, ...dropped } = rows[1]
+    const projectedRows = [
+      { ...rows[0], credential_id: null, issuer_kind: null }, dropped, { ...rows[2], credential_id: null, issuer_kind: null },
+    ]
+    const v = await guestTrailVerdicts(projectedRows, { ...FULL, projected: true })
+    for (const side of [v.server, v.local]) {
+      expect(side.rows[1]).toMatchObject({ kind: 'invalid' })
+      expect(side.rows[1].reason).toContain('projection dropped')
+      expect(side.overall).toBe('failed')
+    }
+  })
+
+  it('a transport failure is carried, not replaced by unchecked input', async () => {
+    const { rows } = await mixedTrail()
+    const hostile = { ...rows[1] }
+    Object.defineProperty(hostile, 'issuer_kind', { enumerable: true, get() { throw new Error('read') } })
+    const v = await guestTrailVerdicts([rows[0], hostile, rows[2]], FULL)
+    expect(v.local.rows[1]).toMatchObject({ kind: 'invalid', hash: 'invalid_input' })
+    expect(v.local.overall).toBe('failed')
+    expect(v.server.overall).toBe('failed')
+  })
+
+  it('an absent event_hash stays absent (not turned into null)', async () => {
+    const { rows } = await mixedTrail()
+    const { event_hash: _e, ...noHash } = rows[1]
+    const v = await guestTrailVerdicts([rows[0], noHash, rows[2]], FULL)
+    expect(v.local.rows[1].hash).toBe('invalid_input')
+    expect(v.local.rows[1].reason).toContain('event_hash')
+    expect(v.local.overall).toBe('failed')
+  })
+
+  it('a complete, matching legacy-only v1/v2 trail is verified on the server but never locally', async () => {
+    const a = await rawLegacy(1, null, { type: 'note.legacy' })
+    a.hash_version = 1
+    a.payload_hash = null
+    a.agreement_hash = null
+    a.event_hash = await sha256Hex(eventCanonical({ ...a, contract_id: V5CID }, 1))
+    const b = { id: vid(2), type: 'note.legacy', actor_id: 'owner', dod_hash: hex('1'), created_at: at(),
+      prev_event_hash: a.event_hash, payload: { note: 'v2' }, payload_hash: null, agreement_hash: null, hash_version: 2 }
+    b.event_hash = await sha256Hex(eventCanonical({ ...b, contract_id: V5CID }, 2))
+    const v = await guestTrailVerdicts([a, b], FULL)
+    expect(v.server.overall).toBe('verified')
+    expect(v.local.dimensions).toEqual({ hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass', completeness: 'pass' })
+    expect(v.local.overall).toBe('incomplete')
+    expect(v.local_cap).toBe('no_full_payload')
+    // A real mismatch is still a failure locally.
+    const v2 = await guestTrailVerdicts([a, { ...b, actor_id: 'someone else' }], FULL)
+    expect(v2.local.overall).toBe('failed')
+  })
+
+  it('only a well-formed snapshot of a supported version yields an accepted digest', async () => {
+    const accepted = await sha256Hex(stableStringify(SNAPSHOT))
+    const base = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', agreement: accepted, payload: {} })
+    const withSnapshot = snap => [{ ...base, payload: { _agreement: snap } }]
+    const { snapshot_version: _v, ...noVersion } = SNAPSHOT
+    for (const [snap, status] of [
+      [[SNAPSHOT], 'malformed_snapshot'],
+      [noVersion, 'unsupported_snapshot_version'],
+      [{ ...SNAPSHOT, snapshot_version: 2 }, 'unsupported_snapshot_version'],
+      [{ ...SNAPSHOT, snapshot_version: '1' }, 'unsupported_snapshot_version'],
+      [{ ...SNAPSHOT, extra: 1 }, 'malformed_snapshot'],
+      [null, 'no_snapshot'],
+      [SNAPSHOT, 'ok'],
+    ]) {
+      expect((await acceptedAgreementHashOf(withSnapshot(snap))).status, JSON.stringify(snap)).toBe(status)
+    }
+  })
+
+  it('the local digest comes only from the snapshot sent to the guest', async () => {
+    const { rows } = await mixedTrail()
+    const noSent = await guestTrailVerdicts(rows, { ...FULL, sentSnapshot: undefined })
+    expect(noSent.server_agreement.status).toBe('ok')
+    expect(noSent.local_agreement).toMatchObject({ hash: null, status: 'no_snapshot' })
+    expect(noSent.local.dimensions.agreement).toBe('indeterminate')
+    const wrong = await guestTrailVerdicts(rows, { ...FULL, sentSnapshot: { ...SNAPSHOT, amount: 1 } })
+    expect(wrong.local_agreement.status).toBe('digest_mismatch')
+    expect(wrong.local.overall).not.toBe('verified')
+  })
+
+  it('an unknown start is never treated as known', async () => {
+    const { rows } = await mixedTrail()
+    const v = await guestTrailVerdicts(rows, { ...FULL, start: 'unknown' })
+    expect(v.server.dimensions.completeness).toBe('indeterminate')
+    expect(v.server.rows[0].link).toBe('indeterminate')
+    expect(v.server.overall).toBe('incomplete')
   })
 })

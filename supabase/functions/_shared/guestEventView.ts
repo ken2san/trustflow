@@ -29,8 +29,8 @@
 // otherwise would be the same overclaim as `integrity_status: VERIFIED`.
 
 import {
-  type CanonicalEvent, GENESIS_HASH, canonicalVersionOf, eventCanonical,
-  isSupportedHashVersion, sha256Hex, stableStringify,
+  type CanonicalEvent, GENESIS_HASH, buildAgreementSnapshot, canonicalVersionOf, eventCanonical,
+  isSupportedHashVersion, isSupportedSnapshotVersion, sha256Hex, stableStringify,
 } from './eventCanonical.ts'
 import {
   type SliceResult, type StoredEventKind, classifyStoredEvent, fromV5Transport, verifyEvidenceSlice,
@@ -370,64 +370,133 @@ export function guestCanonicalBlock(
   return { kind: cls.kind, block, missing: CANONICAL_INPUTS_V5.filter(k => !(k in block)) }
 }
 
+export type AcceptedAgreementStatus =
+  | 'ok' | 'no_acceptance' | 'multiple_acceptances' | 'no_snapshot' | 'malformed_snapshot'
+  | 'unsupported_snapshot_version' | 'no_recorded_digest' | 'digest_mismatch'
+
+export interface AcceptedAgreement {
+  /** The accepted snapshot digest, or null whenever any check below fails. */
+  hash: string | null
+  status: AcceptedAgreementStatus
+  /** Index of the single acceptance row, when there is exactly one. */
+  acceptance_index: number | null
+}
+
 /**
- * The accepted snapshot digest, for the SERVER (which holds full payloads).
- * The acceptance event's recorded agreement_hash, and only if the snapshot it
- * carries (`_agreement`) hashes to that digest; otherwise null, so agreement
- * checks stay indeterminate. Current contract fields are never used: the
- * historical record must not depend on a row that may have moved on.
+ * The accepted snapshot digest, derived only from a well-formed snapshot of a
+ * SUPPORTED version that hashes to the single acceptance event's recorded
+ * digest. Everything else is null with a reason, so agreement checks stay
+ * indeterminate. Current contract fields are never used. Whether the
+ * acceptance row's OWN hash verifies is a separate result (see the slice).
+ *
+ * `snapshotOf` says where the snapshot comes from: the server reads the stored
+ * payload; a guest has only the snapshot the response actually sent.
  */
-export async function acceptedAgreementHashOf(rows: readonly Record<string, unknown>[]): Promise<string | null> {
-  const acceptances = rows.filter(r => r?.type === 'dod.consent_recorded')
-  if (acceptances.length !== 1) return null
-  const [acceptance] = acceptances
-  const recorded = acceptance.agreement_hash
-  const snapshot = (acceptance.payload as Record<string, unknown> | null)?._agreement
-  if (typeof recorded !== 'string' || !/^[0-9a-f]{64}$/.test(recorded)) return null
-  if (snapshot === null || typeof snapshot !== 'object') return null
-  return (await sha256Hex(stableStringify(snapshot))) === recorded ? recorded : null
+export async function acceptedAgreementOf(
+  rows: readonly Record<string, unknown>[],
+  snapshotOf: (acceptance: Record<string, unknown>) => unknown,
+): Promise<AcceptedAgreement> {
+  const indices = rows.flatMap((r, i) => (r?.type === 'dod.consent_recorded' ? [i] : []))
+  if (indices.length === 0) return { hash: null, status: 'no_acceptance', acceptance_index: null }
+  if (indices.length > 1) return { hash: null, status: 'multiple_acceptances', acceptance_index: null }
+  const index = indices[0]
+  const fail = (status: AcceptedAgreementStatus): AcceptedAgreement => ({ hash: null, status, acceptance_index: index })
+  const recorded = ownData(rows[index], 'agreement_hash').value
+  if (typeof recorded !== 'string' || !/^[0-9a-f]{64}$/.test(recorded)) return fail('no_recorded_digest')
+  const snapshot = snapshotOf(rows[index])
+  if (snapshot === undefined || snapshot === null) return fail('no_snapshot')
+  if (typeof snapshot !== 'object' || Array.isArray(snapshot) || Object.getPrototypeOf(snapshot) !== Object.prototype) {
+    return fail('malformed_snapshot')
+  }
+  const version = ownData(snapshot, 'snapshot_version')
+  if (!version.present || !isSupportedSnapshotVersion(version.value)) return fail('unsupported_snapshot_version')
+  const expectedKeys = Object.keys(buildAgreementSnapshot({}, version.value as number)).sort()
+  if (stableStringify(Object.keys(snapshot).sort()) !== stableStringify(expectedKeys)) return fail('malformed_snapshot')
+  if ((await sha256Hex(stableStringify(snapshot))) !== recorded) return fail('digest_mismatch')
+  return { hash: recorded, status: 'ok', acceptance_index: index }
+}
+
+/** The server's accepted digest, from the stored acceptance payload. */
+export function acceptedAgreementHashOf(rows: readonly Record<string, unknown>[]): Promise<AcceptedAgreement> {
+  return acceptedAgreementOf(rows, r => (ownData(r, 'payload').value as Record<string, unknown> | null)?._agreement)
 }
 
 export interface GuestTrailVerdicts {
   /** Checked by TrustFlow over the stored rows with their FULL payloads. */
   server: SliceResult
-  /** What the guest can recompute from the blocks alone (no full payload). */
+  server_agreement: AcceptedAgreement
+  /**
+   * What the guest can recompute from the blocks and the snapshot actually
+   * sent to it. Never `verified`: the guest does not hold the full payload.
+   */
   local: SliceResult
-  accepted_agreement_hash: string | null
+  local_agreement: AcceptedAgreement
+  local_cap: 'no_full_payload'
 }
 
 /**
- * Two verdicts, never merged. The endpoint reads one deal's events ascending
- * from the first, so the start is known; the row cap cuts the TAIL, so the
- * trail is complete only when not truncated. Acceptance is placed from the
- * rows themselves.
+ * Two verdicts, never merged.
  *
- * The local verdict gets no payload: a guest holds an allowlisted projection,
- * not the committed payload, so its payload check is `unavailable` and the
- * local overall can never read `verified`.
+ *   start         'first_event' only when the read provably began at the
+ *                 deal's first event; otherwise 'unknown' (completeness and
+ *                 GENESIS links are then indeterminate).
+ *   truncated     the row cap cut the tail.
+ *   sentSnapshot  the accepted snapshot the response sends the guest; the
+ *                 local digest is derived from it alone, never from the server.
+ *   projected     the read selected the version and both authority columns.
+ *
+ * A raw row's invalidity (classification, projection or transport) is carried
+ * into BOTH results as a known-invalid row; nothing is reclassified after
+ * shaping, nothing falls back to unchecked input, and an absent event_hash is
+ * left absent.
  */
 export async function guestTrailVerdicts(
   rawRows: readonly Record<string, unknown>[],
-  { contractId, truncated, projected = false }: { contractId: string, truncated: boolean, projected?: boolean },
+  { contractId, truncated, start, sentSnapshot, projected = false }: {
+    contractId: string, truncated: boolean, start: 'first_event' | 'unknown', sentSnapshot?: unknown, projected?: boolean,
+  },
 ): Promise<GuestTrailVerdicts> {
-  const accepted = await acceptedAgreementHashOf(rawRows)
-  const opts = {
-    startsAtChainStart: true,
-    tailComplete: !truncated,
-    acceptance: 'unknown' as const,
-    acceptedAgreementHash: accepted,
-    legacyAgreementHash: accepted,
-  }
-  const withContract = rawRows.map(r => (ownData(r, 'contract_id').present ? r : { ...r, contract_id: contractId }))
-  const server = await verifyEvidenceSlice(withContract, { ...opts, projected })
+  const startsAtChainStart = start === 'first_event'
+  const base = { startsAtChainStart, tailComplete: !truncated, acceptance: 'unknown' as const, projected }
 
-  const localRows = rawRows.map(r => {
-    const { block } = guestCanonicalBlock(r, contractId, { projected })
-    const copy = fromV5Transport({ ...block, event_hash: ownData(r, 'event_hash').value ?? null })
-    // A block the transport rejects is passed through as-is so the slice
-    // reports it as invalid rather than dropping it.
-    return copy.ok ? copy.row : block
+  const known: ({ field: string, reason: string } | null)[] = []
+  const localRows: unknown[] = []
+  for (const raw of rawRows) {
+    const { kind, block } = guestCanonicalBlock(raw, contractId, { projected })
+    const rawClass = classifyStoredEvent(raw, { projected })
+    let failure = rawClass.kind === 'invalid' ? { field: rawClass.field, reason: rawClass.reason } : null
+    const hash = ownData(raw, 'event_hash')
+    const indicator = ownData(raw, 'canonical_version')
+    const transportInput: Record<string, unknown> = { ...block }
+    if (hash.present) transportInput.event_hash = hash.value
+    if (indicator.present) transportInput.canonical_version = indicator.value
+    const copy = fromV5Transport(transportInput)
+    if (!copy.ok && !failure) failure = { field: copy.field, reason: `transport: ${copy.reason}` }
+    known.push(failure)
+    localRows.push(copy.ok ? copy.row : { kind })
+  }
+
+  // Descriptors, not a spread: a spread would CALL an accessor on a raw row.
+  const withContract = rawRows.map(r => {
+    if (ownData(r, 'contract_id').present) return r
+    const copy = Object.defineProperties({}, Object.getOwnPropertyDescriptors(r))
+    return Object.defineProperty(copy, 'contract_id', { value: contractId, enumerable: true })
   })
-  const local = await verifyEvidenceSlice(localRows, opts)
-  return { server, local, accepted_agreement_hash: accepted }
+  const server_agreement = await acceptedAgreementHashOf(rawRows)
+  const server = await verifyEvidenceSlice(withContract, {
+    ...base, knownInvalid: known,
+    acceptedAgreementHash: server_agreement.hash, legacyAgreementHash: server_agreement.hash,
+  })
+
+  const local_agreement = await acceptedAgreementOf(
+    localRows.map(r => (r && typeof r === 'object' ? r : {}) as Record<string, unknown>), () => sentSnapshot)
+  const local = await verifyEvidenceSlice(localRows, {
+    ...base, projected: false, knownInvalid: known,
+    acceptedAgreementHash: local_agreement.hash, legacyAgreementHash: local_agreement.hash,
+  })
+  // The guest never holds the full payload, so its whole-trail claim is capped
+  // even where no row's format binds a payload (v1/v2). Failures stay failures.
+  if (local.overall === 'verified') local.overall = 'incomplete'
+
+  return { server, server_agreement, local, local_agreement, local_cap: 'no_full_payload' }
 }

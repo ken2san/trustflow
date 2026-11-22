@@ -284,6 +284,12 @@ export interface SliceOptions {
   legacyAgreementHash?: string | null
   /** Projection contract passed to classifyStoredEvent. */
   projected?: boolean
+  /**
+   * Rows a caller already knows to be invalid (from the raw row, before any
+   * projection or transport copy). They are reported invalid with this reason
+   * and never reclassified (Codex T167).
+   */
+  knownInvalid?: ReadonlyArray<{ field: string, reason: string } | null | undefined>
 }
 
 const FAIL = new Set(['mismatch', 'broken', 'invalid', 'invalid_input'])
@@ -358,7 +364,10 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index]
-    const cls = classifyStoredEvent(row, { projected: opts.projected })
+    const known = opts.knownInvalid?.[index]
+    const cls: StoredEventKind = known
+      ? { kind: 'invalid', field: known.field, reason: known.reason }
+      : classifyStoredEvent(row, { projected: opts.projected })
     const obj = (row !== null && typeof row === 'object' ? row : {}) as object
     const stored = dataValue(obj, 'event_hash')
     const result: RowResult = {

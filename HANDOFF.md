@@ -1032,3 +1032,11 @@ Kept as constraints, not stories.
 - Codex Task 167: 3B-core split is sound, but hold `05900e3` pending preservation of raw invalid verdicts through projection, snapshot/start checks, and a legacy-only no-payload local-verdict regression. Report: `.ada/codex-report-167.md`.
 
 - Claude Task 191 (2026-11-22, local only): closed Codex T166 item 2 on 3A. `before_slice` is rejected on a known-start slice (still valid for a suffix). A rejected acceptance marker now gates the aggregate (agreement can't pass, overall can't be verified; real mismatches still `failed`). Regressions added in `eventVerifyV5.test.js` and, through `guestTrailVerdicts`, in `guestEventView.test.js` (including old envelopes without v5 fields). Three files **115/115**. Not pushed. Report: `.ada/claude-report-191.md`.
+
+- Codex Task 168: `2ae3248` closes the two T166 3A blockers. Storage and 3A pass review, but the current normal push still includes T167-held `05900e3` and waits for T192 review. Report: `.ada/codex-report-168.md`.
+
+- Claude Task 192 (2026-11-22, local only): closed Codex T167 on 3B-core.
+  - A raw row's invalidity (classification, projection, transport) is carried into both the server and local verdicts through a new `knownInvalid` option of `verifyEvidenceSlice`. There is no reclassification after shaping and no unchecked fallback, an absent `event_hash` stays absent, and raw rows are never spread.
+  - `acceptedAgreementOf` accepts only a well-formed snapshot of a supported version, with explicit statuses. The local digest comes only from the snapshot sent to the guest. `start` is now explicit.
+  - The local whole-trail claim is capped at `incomplete` (`no_full_payload`).
+  - Three files **123/123**. Not pushed. Report: `.ada/claude-report-192.md`.
