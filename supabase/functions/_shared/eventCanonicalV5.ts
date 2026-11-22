@@ -32,7 +32,10 @@ export const V5_KEYS = [
   'issuer_kind',
 ] as const
 
-export const V5_ISSUER_KINDS: readonly string[] = ['owner_account', 'counterpart_account']
+// Frozen, and validation reads a private copy: downstream JS cannot widen the
+// accepted issuer kinds by mutating the export (Codex T158).
+export const V5_ISSUER_KINDS: readonly string[] = Object.freeze(['owner_account', 'counterpart_account'])
+const ISSUER_KINDS: ReadonlySet<string> = new Set(V5_ISSUER_KINDS)
 
 /**
  * The stored-row shape a v5 hash is recomputed from. `prev_event_hash` is the
@@ -61,7 +64,8 @@ export type V5Result =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const HEX64 = /^[0-9a-f]{64}$/
-const EVENT_TYPE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/
+// At least one dot: a dotted identifier, as confirmed (Codex T158).
+const EVENT_TYPE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/
 const TIMESTAMP =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|([+-])(\d{2}):(\d{2}))$/
 
@@ -109,8 +113,23 @@ export function canonicalTimestampV5(value: unknown): string | null {
   return utc.toISOString()
 }
 
-function own(input: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(input, key)
+const MISSING = Symbol('missing')
+const ACCESSOR = Symbol('accessor')
+
+/**
+ * Read one own property exactly once, as data. An accessor could validate one
+ * value and serialize another (Codex T158), so it is refused, not called.
+ */
+function readOnce(input: object, key: string): unknown {
+  let desc: PropertyDescriptor | undefined
+  try {
+    desc = Object.getOwnPropertyDescriptor(input, key)
+  } catch {
+    return ACCESSOR
+  }
+  if (desc === undefined) return MISSING
+  if (!('value' in desc)) return ACCESSOR
+  return desc.value
 }
 
 /**
@@ -122,16 +141,23 @@ export function buildEventCanonicalV5(input: unknown): V5Result {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, field: '(input)', reason: 'not an object' }
   }
-  const row = input as Record<string, unknown>
   const fail = (field: string, reason: string): V5Result => ({ ok: false, field, reason })
   const required = [
     'hash_version', 'id', 'type', 'contract_id', 'actor_id', 'dod_hash', 'created_at',
     'prev_event_hash', 'payload_hash', 'agreement_hash', 'credential_id', 'issuer_kind',
   ]
+  // Snapshot: each value is read once and only the snapshot is validated and
+  // emitted. Nothing below touches `input` again.
+  const row: Record<string, unknown> = {}
   for (const key of required) {
-    if (!own(row, key) || row[key] === undefined) return fail(key, 'missing')
+    const value = readOnce(input, key)
+    if (value === ACCESSOR) return fail(key, 'not a data property')
+    if (value === MISSING || value === undefined) return fail(key, 'missing')
+    row[key] = value
   }
-  if (own(row, 'domain') && row.domain !== V5_DOMAIN) return fail('domain', 'not the v5 domain')
+  const domain = readOnce(input, 'domain')
+  if (domain === ACCESSOR) return fail('domain', 'not a data property')
+  if (domain !== MISSING && domain !== V5_DOMAIN) return fail('domain', 'not the v5 domain')
   if (row.hash_version !== V5_HASH_VERSION) return fail('hash_version', 'not the integer 5')
   for (const key of ['id', 'contract_id', 'actor_id', 'credential_id']) {
     if (typeof row[key] !== 'string' || !UUID.test(row[key] as string)) return fail(key, 'not a lowercase UUID')
@@ -148,7 +174,7 @@ export function buildEventCanonicalV5(input: unknown): V5Result {
   if (!(agreement === null || (typeof agreement === 'string' && HEX64.test(agreement)))) {
     return fail('agreement_hash', 'not a SHA-256 hex digest or null')
   }
-  if (typeof row.issuer_kind !== 'string' || !V5_ISSUER_KINDS.includes(row.issuer_kind)) {
+  if (typeof row.issuer_kind !== 'string' || !ISSUER_KINDS.has(row.issuer_kind)) {
     return fail('issuer_kind', 'not a known issuer kind')
   }
   const createdAt = canonicalTimestampV5(row.created_at)

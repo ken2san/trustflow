@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  V5_DOMAIN, V5_HASH_VERSION, V5_KEYS, buildEventCanonicalV5, canonicalTimestampV5,
+  V5_DOMAIN, V5_HASH_VERSION, V5_KEYS, V5_ISSUER_KINDS, buildEventCanonicalV5, canonicalTimestampV5,
   verifyEventHashV5,
 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
 import {
@@ -195,10 +195,10 @@ describe('v5 presence, null and typing', () => {
   })
 
   it('event type is a nonempty ASCII dotted identifier', () => {
-    for (const ok of ['a', 'draft.note', 'contract.accepted_v2', 'a.b1.c_d']) {
+    for (const ok of ['draft.note', 'contract.accepted_v2', 'a.b1.c_d', 'a.b']) {
       expect(buildEventCanonicalV5({ ...VECTOR_1.input, type: ok }).ok, ok).toBe(true)
     }
-    for (const bad of ['', 'Draft.note', 'draft..note', '.draft', 'draft.', '1draft', 'draft.1note', 'draft note', 'dráft.note', 'draft-note', '_draft']) {
+    for (const bad of ['a', 'draft', 'payment_reported', '', 'Draft.note', 'draft..note', '.draft', 'draft.', '1draft', 'draft.1note', 'draft note', 'dráft.note', 'draft-note', '_draft']) {
       expect(buildEventCanonicalV5({ ...VECTOR_1.input, type: bad }), bad).toMatchObject({ ok: false, field: 'type' })
     }
   })
@@ -207,6 +207,42 @@ describe('v5 presence, null and typing', () => {
     for (const bad of ['owner', 'Owner_account', 'owner_account ', 'counterparty_account', 'guest']) {
       expect(buildEventCanonicalV5({ ...VECTOR_1.input, issuer_kind: bad }), bad).toMatchObject({ ok: false, field: 'issuer_kind' })
     }
+  })
+
+  it('the issuer allowlist cannot be widened from JS', () => {
+    expect(Object.isFrozen(V5_ISSUER_KINDS)).toBe(true)
+    expect(() => V5_ISSUER_KINDS.push('guest')).toThrow()
+    expect(() => { V5_ISSUER_KINDS[0] = 'guest' }).toThrow()
+    expect(buildEventCanonicalV5({ ...VECTOR_1.input, issuer_kind: 'guest' })).toMatchObject({ ok: false, field: 'issuer_kind' })
+  })
+
+  it('refuses accessor properties without calling them', () => {
+    for (const key of [...REQUIRED, 'domain']) {
+      let calls = 0
+      const input = { ...VECTOR_1.input }
+      const value = key === 'domain' ? 'trustflow.event' : input[key]
+      delete input[key]
+      Object.defineProperty(input, key, { enumerable: true, get() { calls += 1; return value } })
+      expect(buildEventCanonicalV5(input), key).toEqual({ ok: false, field: key, reason: 'not a data property' })
+      expect(calls, key).toBe(0)
+    }
+  })
+
+  it('reads each value once, so a changing source cannot validate one value and emit another', () => {
+    const reads = {}
+    const proxy = new Proxy({ ...VECTOR_1.input }, {
+      getOwnPropertyDescriptor(target, key) {
+        reads[key] = (reads[key] ?? 0) + 1
+        const desc = Reflect.getOwnPropertyDescriptor(target, key)
+        // A second read of type would come back undotted; it must never happen.
+        if (key === 'type' && desc && reads[key] > 1) return { ...desc, value: 'x' }
+        return desc
+      },
+    })
+    expect(canonicalOf(proxy)).toBe(VECTOR_1.preimage)
+    for (const key of Object.keys(VECTOR_1.input)) expect(reads[key], key).toBe(1)
+    const throwing = new Proxy({ ...VECTOR_1.input }, { getOwnPropertyDescriptor() { throw new Error('trap') } })
+    expect(buildEventCanonicalV5(throwing)).toMatchObject({ ok: false, reason: 'not a data property' })
   })
 
   it('non-object inputs are invalid', () => {
