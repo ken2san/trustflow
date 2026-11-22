@@ -112,6 +112,14 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 168 (2026-11-22, test-only): fixed `tests/e2e/owner-create-live.spec.js` per Codex T154 (BLOCK).
+  - **Target:** the configured target is checked as E2E before any session; the served app's backend (`window.__TF_SUPABASE_URL__`) is checked before seeding or submit. The matcher requires the E2E origin and the exact `/rest/v1/rpc/create_entry_contract` path.
+  - **Requests:** every matching POST is counted from before the click until the shown invite appears and the network is idle: exactly 1 create, 0 legacy `POST /rest/v1/contracts`. Every sent parameter value equals the form input (including null deadline and `creator`).
+  - **Drafts:** an independent owner read-back finds exactly 1 draft for a unique per-run marker.
+  - **Invite:** the guest opens the **displayed** invite URL (origin, route and token validated as booleans).
+  - **Redaction:** the token appears in no message, locator or navigation diagnostic (redacting `goto` wrapper); no token in the run output.
+  - Elapsed expiry remains a gap (wording corrected above).
+  - Live on E2E 1/1; lint 0 errors; `make check` 779. Report: `.ada/claude-report-168.md`.
 - Claude Task 167 (2026-11-22, Kenji OK ~01:15 ET): **row 1 `20261118214020` applied to PRODUCTION** (`fqgpzhwvvfsxswlnbbgg`) per `docs/production-apply-runbook.md`: worktree pin `6942691`, CLI 2.105.0, one `op read` → `PGPASSWORD` only. Read-only checks via psycopg (no host `psql`).
   - Baseline history ended at `20261118010000`; the dry run listed exactly row 1; apply printed `Finished supabase db push.`
   - Before and after are identical: 1322 contracts (original-column digest), 2397 events, and the event/agreement hash digest.
@@ -120,8 +128,8 @@ published reissue copy and `agent-protocol.md` now match production's backend.
   - **A, B and the push are NOT done**; each needs its own OK. The client direct insert is still open on production (as before). Report: `.ada/claude-report-167.md`.
 - Claude Task 166 (2026-11-22, E2E browser check, test-only):
   - `00-backend-guard` 1/1 (app and tests point at the same E2E project); `invite-persistence --grep-invert @pre-b` 9/9; `currency.spec` 15/15.
-  - New `tests/e2e/owner-create-live.spec.js` **1/1**: a verified owner fills the real New contract form with no network stubs. Send Invite issues one `rpc/create_entry_contract` POST carrying exactly the 8 parameters, answered 200 `created` with owner = the signed-in account. The stored row matches the typed terms with server-derived fields null or untouched, the form shows the invite for that token, and a signed-out browser opens the guest invite with those terms. It covers the bearer flow only; C3 verified-account matching is a separate path, not exercised. It writes one ordinary E2E draft per run.
-  - **Gap, not built:** `invite-persistence` "an expired invite fails closed" actually tests a *consumed* token. A true-expiry spec needs `invite_token_expires_at` in the past, which only the server or service role can set (the RPC derives +72 h), so it needs an app change, privileged write or permanent fixture.
+  - New `tests/e2e/owner-create-live.spec.js` **1/1**: a verified owner fills the real New contract form with no network stubs. Send Invite reached `rpc/create_entry_contract` with exactly the 8 parameter names, answered 200 `created` with owner = the signed-in account _(T168: the T166 spec observed only the first response, so it did not prove one request or one draft; T168's spec does)_. The stored row matches the typed terms with server-derived fields null or untouched, the form shows the invite for that token, and a signed-out browser opens the guest invite with those terms. It covers the bearer flow only; C3 verified-account matching is a separate path, not exercised. It writes one ordinary E2E draft per run.
+  - **Gap, not built:** `invite-persistence` "an expired invite fails closed" actually tests a *consumed* token. A true-expiry spec needs `invite_token_expires_at` in the past, which only the server or service role can set (the RPC derives +72 h). It needs an app change, a privileged write or a permanent fixture, or an untouched draft left to age past its 72 h TTL, which needs no change but is unsuitable for a single-run spec _(wording corrected T168, Codex T154)_. Elapsed expiry stays unverified on E2E.
   - No app bugs found. Lint 0 errors, `make check` 779. Report: `.ada/claude-report-166.md`.
 - Claude Task 165 (2026-11-21, Kenji OK 09:30 ET, E2E only): **migration B `20261120180000` (HEAD `cbd02d3`) applied to E2E** (`yqjtawffpesplqyurlpj`) with `supabase db push --db-url`, CLI 2.105.0, one `op read` → `PGPASSWORD` only; the dry-run gate listed exactly that one file.
   - Read-only before/after catalog diff is exactly 3 lines: history gains B; `authenticated` column INSERT goes from 10 columns to none; `creator_insert_contract` dropped.
