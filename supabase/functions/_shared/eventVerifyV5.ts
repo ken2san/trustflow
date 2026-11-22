@@ -1,31 +1,50 @@
 // supabase/functions/_shared/eventVerifyV5.ts
 //
-// Strict v5 READ support (row 3 step 2, Task 182). Pure: no I/O. Nothing here
-// writes, and the default writer stays on v4.
+// Strict v5 READ rules shared by every reader (row 3 step 2, Task 182; step 3A,
+// Task 187 per Codex T161). Pure: no I/O. Nothing here writes, and the default
+// writer stays on v4.
 //
 // WHY THIS IS NOT A BRANCH IN eventCanonical.ts
 // Adding 5 to SUPPORTED_HASH_VERSIONS would make every existing reader call the
 // lenient `eventCanonical(ev, 5)` path — the one that turns a missing
 // predecessor into GENESIS and a missing digest into null. That is precisely
 // the legacy fallback a v5 row must never get. So the legacy module still says
-// "unsupported" for 5, and readers adopt the functions below explicitly (step
-// 3). Until they do, a v5 row is reported as unsupported: safe, not verified.
+// "unsupported" for 5, and readers adopt the functions below explicitly (3B/3C).
 //
 // THE CHECKS ARE SEPARATE ON PURPOSE
-// Shape+hash, chain link and agreement each return their own verdict. A row
-// can recompute correctly and still sit in the wrong place in the chain, or
-// cite an agreement that is not the deal's. Collapsing them into one boolean
-// is how a sliced or pre-acceptance record would read as "verified".
+// Event hash, chain link, full payload and agreement each return their own
+// verdict, and a slice is only "verified" when every one passes AND the slice is
+// known to be complete. A row can recompute and still sit in the wrong place, a
+// slice can link perfectly and still be missing its start or its tail, and an
+// explicit null agreement digest proves nothing about acceptance on its own.
 
 import {
-  GENESIS_HASH, canonicalVersionOf, isSupportedHashVersion,
+  GENESIS_HASH, bindsWholeAgreement, canonicalVersionOf, eventCanonical, isSupportedHashVersion,
+  payloadHash, sha256Hex,
 } from './eventCanonical.ts'
 import { V5_HASH_VERSION, verifyEventHashV5, type V5Verdict } from './eventCanonicalV5.ts'
 
 const HEX64 = /^[0-9a-f]{64}$/
+const isDigest = (v: unknown): v is string => typeof v === 'string' && HEX64.test(v)
 
 /** Fields only a v5 row may carry a value in. */
 export const V5_AUTHORITY_FIELDS: readonly string[] = Object.freeze(['credential_id', 'issuer_kind'])
+
+/**
+ * What a reader that selects the authority columns must project together. If
+ * a projection drops the version and both authority fields at once, the row
+ * would otherwise look like an ordinary legacy row; requiring them as own
+ * properties (null allowed) is what catches that.
+ */
+export const V5_PROJECTION_FIELDS: readonly string[] =
+  Object.freeze(['hash_version', 'prev_event_hash', 'credential_id', 'issuer_kind'])
+
+/** The only keys a transport block may contribute to a v5 row. */
+const TRANSPORT_KEYS: readonly string[] = Object.freeze([
+  'domain', 'hash_version', 'canonical_version', 'id', 'type', 'contract_id', 'actor_id', 'dod_hash',
+  'created_at', 'prev_event_hash', 'prev_hash', 'payload_hash', 'agreement_hash', 'credential_id',
+  'issuer_kind', 'event_hash', 'payload',
+])
 
 export type StoredEventKind =
   | { kind: 'legacy', version: number }
@@ -33,7 +52,9 @@ export type StoredEventKind =
   | { kind: 'unsupported', version: unknown }
   | { kind: 'invalid', field: string, reason: string }
 
-function dataValue(row: object, key: string): { present: boolean, value: unknown, accessor: boolean } {
+interface Read { present: boolean, value: unknown, accessor: boolean }
+
+function dataValue(row: object, key: string): Read {
   let desc: PropertyDescriptor | undefined
   try {
     desc = Object.getOwnPropertyDescriptor(row, key)
@@ -46,31 +67,49 @@ function dataValue(row: object, key: string): { present: boolean, value: unknown
 }
 
 /**
- * Which verification path a stored row takes. No v5 row, and no row carrying
- * v5 authority values, can come back as legacy: a malformed v5 row is invalid
- * or unsupported, never verified under a version it did not claim.
+ * Which verification path a stored row takes. A recorded 5 is a CANDIDATE for
+ * strict v5 verification, not a match. No v5 row, and no row carrying v5
+ * authority values, can come back as legacy: a malformed v5 row is invalid or
+ * unsupported, never verified under a version it did not claim.
+ *
+ * `projected: true` is the reader's statement that it selected the version,
+ * predecessor and both authority columns; any of them missing is then invalid.
  */
-export function classifyStoredEvent(row: unknown): StoredEventKind {
+export function classifyStoredEvent(row: unknown, opts: { projected?: boolean } = {}): StoredEventKind {
   if (row === null || typeof row !== 'object' || Array.isArray(row)) {
     return { kind: 'invalid', field: '(row)', reason: 'not an object' }
   }
-  const version = dataValue(row, 'hash_version')
-  if (version.accessor) return { kind: 'invalid', field: 'hash_version', reason: 'not a data property' }
+  const read: Record<string, Read> = {}
+  for (const key of [...V5_PROJECTION_FIELDS, 'canonical_version']) {
+    read[key] = dataValue(row, key)
+    if (read[key].accessor) return { kind: 'invalid', field: key, reason: 'not a data property' }
+  }
+  if (opts.projected) {
+    for (const key of V5_PROJECTION_FIELDS) {
+      if (!read[key].present || read[key].value === undefined) {
+        return { kind: 'invalid', field: key, reason: 'projection dropped a required field' }
+      }
+    }
+  }
+  const version = read.hash_version
+  const indicator = read.canonical_version
+  if (indicator.present && indicator.value !== undefined) {
+    if (!version.present || !Object.is(indicator.value, version.value)) {
+      return { kind: 'invalid', field: 'canonical_version', reason: 'inconsistent version indicators' }
+    }
+  }
   if (version.value === V5_HASH_VERSION) return { kind: 'v5' }
 
   for (const field of V5_AUTHORITY_FIELDS) {
-    const f = dataValue(row, field)
-    if (f.accessor) return { kind: 'invalid', field, reason: 'not a data property' }
+    const f = read[field]
     if (f.value !== null && f.value !== undefined) {
       return { kind: 'invalid', field, reason: 'v5 authority value on a row not recorded as v5' }
     }
   }
 
-  const prev = dataValue(row, 'prev_event_hash')
-  if (prev.accessor) return { kind: 'invalid', field: 'prev_event_hash', reason: 'not a data property' }
   const legacy = canonicalVersionOf({
     hash_version: version.value as number | null | undefined,
-    prev_event_hash: prev.value as string | null | undefined,
+    prev_event_hash: read.prev_event_hash.value as string | null | undefined,
   })
   return isSupportedHashVersion(legacy)
     ? { kind: 'legacy', version: legacy }
@@ -83,23 +122,24 @@ export type TransportResult =
 
 /**
  * A transport block (export or guest projection) to the stored-row shape the
- * v5 verifier reads. `prev_hash` is the preimage spelling; `prev_event_hash`
- * the stored column. Either may be carried; both may be carried only if they
- * agree. Nothing is defaulted: an absent predecessor stays absent and fails
- * verification.
+ * v5 verifier reads. Only a fixed allowlist of keys is read, into an object
+ * with no prototype, so `__proto__` and other hostile names change nothing.
+ * `prev_hash` is the preimage spelling, `prev_event_hash` the stored column;
+ * both may be carried only if they agree. Nothing is defaulted: an absent key
+ * stays absent, an explicit null stays null.
  */
 export function fromV5Transport(block: unknown): TransportResult {
   if (block === null || typeof block !== 'object' || Array.isArray(block)) {
     return { ok: false, field: '(block)', reason: 'not an object' }
   }
-  const row: Record<string, unknown> = {}
-  for (const key of Object.keys(block)) {
+  const row: Record<string, unknown> = Object.create(null)
+  for (const key of TRANSPORT_KEYS) {
     const f = dataValue(block, key)
     if (f.accessor) return { ok: false, field: key, reason: 'not a data property' }
-    row[key] = f.value
+    if (f.present) row[key] = f.value
   }
-  const hasShort = Object.prototype.hasOwnProperty.call(row, 'prev_hash')
-  const hasStored = Object.prototype.hasOwnProperty.call(row, 'prev_event_hash')
+  const hasShort = 'prev_hash' in row
+  const hasStored = 'prev_event_hash' in row
   if (hasShort && hasStored && row.prev_hash !== row.prev_event_hash) {
     return { ok: false, field: 'prev_hash', reason: 'conflicts with prev_event_hash' }
   }
@@ -115,36 +155,219 @@ export function verifyV5EventHash(row: unknown, storedHash: unknown): Promise<V5
   return verifyEventHashV5(row, storedHash)
 }
 
-export type LinkVerdict = 'linked' | 'broken' | 'invalid_input'
-
 /**
- * Chain link. `expectedPrev` is the predecessor's STORED hash, or GENESIS when
- * the caller has the whole chain and this is its first hashed event. A caller
- * holding only a slice cannot know that, and must pass null: the answer is
- * then invalid_input, never "linked".
+ * What a reader knows about the link a row should have.
+ *   chain_start       the reader holds the deal's chain from its first hashed
+ *                     link, and this row is that link: only GENESIS links.
+ *   after             the immediately preceding observed stored hash.
+ *   unknown_boundary  the first row of a slice whose start is not known.
  */
-export function checkV5Link(row: unknown, expectedPrev: unknown): LinkVerdict {
+export type LinkExpectation =
+  | { kind: 'chain_start' }
+  | { kind: 'after', hash: string }
+  | { kind: 'unknown_boundary' }
+
+export type LinkVerdict = 'linked' | 'broken' | 'indeterminate' | 'invalid_input'
+
+/** Chain link for a v5 row. GENESIS needs a known start; a slice edge is indeterminate. */
+export function checkV5Link(row: unknown, expectation: LinkExpectation): LinkVerdict {
   if (row === null || typeof row !== 'object') return 'invalid_input'
   const prev = dataValue(row, 'prev_event_hash')
-  const valid = (v: unknown) => v === GENESIS_HASH || (typeof v === 'string' && HEX64.test(v))
-  if (prev.accessor || !valid(prev.value) || !valid(expectedPrev)) return 'invalid_input'
-  return prev.value === expectedPrev ? 'linked' : 'broken'
+  if (prev.accessor || !(prev.value === GENESIS_HASH || isDigest(prev.value))) return 'invalid_input'
+  switch (expectation?.kind) {
+    case 'chain_start': return prev.value === GENESIS_HASH ? 'linked' : 'broken'
+    case 'after':
+      if (!isDigest(expectation.hash)) return 'invalid_input'
+      return prev.value === expectation.hash ? 'linked' : 'broken'
+    case 'unknown_boundary': return 'indeterminate'
+    default: return 'invalid_input'
+  }
 }
 
-export type AgreementVerdict = 'pre_acceptance' | 'match' | 'mismatch' | 'invalid_input'
+export type AcceptancePosition = 'before_acceptance' | 'acceptance_or_after' | 'unknown'
+
+export type AgreementVerdict =
+  | 'pre_acceptance' | 'match' | 'mismatch' | 'invalid' | 'no_cited_digest' | 'indeterminate' | 'invalid_input'
 
 /**
- * Agreement. An explicit null is a pre-acceptance record: not applicable, and
- * deliberately not "match". A cited digest is compared with the deal's current
- * agreement digest under its recorded snapshot version; if that is missing,
- * the check cannot be made and says so.
+ * Agreement for a v5 row.
+ *   - Explicit null alone means "no cited digest". It is `pre_acceptance` only
+ *     at a position known to precede acceptance, and invalid at or after it.
+ *   - A cited digest before acceptance is invalid (v5 drafts cite null).
+ *   - Otherwise a cited digest is compared with the accepted snapshot digest
+ *     the CALLER derived under the recorded snapshot version — never the
+ *     contract's current fields. Without that digest: indeterminate.
  */
-export function checkV5Agreement(row: unknown, currentAgreementHash: unknown): AgreementVerdict {
+export function checkV5Agreement(
+  row: unknown,
+  ctx: { position: AcceptancePosition, acceptedAgreementHash?: unknown },
+): AgreementVerdict {
   if (row === null || typeof row !== 'object') return 'invalid_input'
   const cited = dataValue(row, 'agreement_hash')
   if (cited.accessor || !cited.present || cited.value === undefined) return 'invalid_input'
-  if (cited.value === null) return 'pre_acceptance'
-  if (typeof cited.value !== 'string' || !HEX64.test(cited.value)) return 'invalid_input'
-  if (typeof currentAgreementHash !== 'string' || !HEX64.test(currentAgreementHash)) return 'invalid_input'
-  return cited.value === currentAgreementHash ? 'match' : 'mismatch'
+  if (cited.value !== null && !isDigest(cited.value)) return 'invalid_input'
+  const position = ctx?.position
+  if (cited.value === null) {
+    if (position === 'before_acceptance') return 'pre_acceptance'
+    if (position === 'acceptance_or_after') return 'invalid'
+    return 'no_cited_digest'
+  }
+  if (position === 'before_acceptance') return 'invalid'
+  if (!isDigest(ctx?.acceptedAgreementHash)) return 'indeterminate'
+  return cited.value === ctx.acceptedAgreementHash ? 'match' : 'mismatch'
+}
+
+// ── Per-reader aggregation ──────────────────────────────────────────────────
+
+export type HashCheck = 'match' | 'mismatch' | 'not_recorded' | 'unsupported' | 'invalid_input'
+export type LinkCheck = LinkVerdict | 'not_recorded'
+export type PayloadCheck = 'match' | 'mismatch' | 'unavailable' | 'not_in_format' | 'not_recorded' | 'indeterminate'
+export type AgreementCheck = AgreementVerdict | 'not_bound'
+export type Dimension = 'pass' | 'fail' | 'indeterminate'
+
+export interface RowResult {
+  index: number
+  id: unknown
+  kind: StoredEventKind['kind']
+  version: unknown
+  reason?: string
+  hash: HashCheck
+  link: LinkCheck
+  payload: PayloadCheck
+  agreement: AgreementCheck
+}
+
+export interface SliceResult {
+  rows: RowResult[]
+  dimensions: { hash: Dimension, link: Dimension, payload: Dimension, agreement: Dimension, completeness: Dimension }
+  overall: 'verified' | 'failed' | 'incomplete'
+}
+
+/**
+ * Where acceptance sits relative to the rows supplied.
+ *   { index }       the row at this slice index is the acceptance event
+ *   'none'          no acceptance among these rows (with a known start, every
+ *                   row then precedes acceptance)
+ *   'before_slice'  acceptance happened before the first row supplied
+ *   'unknown'       the reader cannot say
+ */
+export type AcceptanceMarker = { index: number } | 'none' | 'before_slice' | 'unknown'
+
+export interface SliceOptions {
+  /** The first row supplied is the deal's first event. */
+  startsAtChainStart: boolean
+  /** Nothing after the last row supplied was left out (no cap, no truncation). */
+  tailComplete: boolean
+  acceptance: AcceptanceMarker
+  /** Accepted snapshot digest, derived under the recorded snapshot version. */
+  acceptedAgreementHash?: string | null
+  /** Legacy v4 only: the digest today's readers compare v4 rows with. */
+  legacyAgreementHash?: string | null
+  /** Projection contract passed to classifyStoredEvent. */
+  projected?: boolean
+}
+
+const FAIL = new Set(['mismatch', 'broken', 'invalid', 'invalid_input'])
+const PASS = new Set(['match', 'linked', 'pre_acceptance', 'not_recorded', 'not_in_format', 'not_bound'])
+
+function dimension(values: string[]): Dimension {
+  if (values.some(v => FAIL.has(v))) return 'fail'
+  return values.every(v => PASS.has(v)) ? 'pass' : 'indeterminate'
+}
+
+function positionOf(index: number, opts: SliceOptions): AcceptancePosition {
+  const a = opts.acceptance
+  if (a === 'before_slice') return 'acceptance_or_after'
+  if (a === 'none') return opts.startsAtChainStart ? 'before_acceptance' : 'unknown'
+  if (a === 'unknown' || typeof a !== 'object' || !Number.isInteger(a.index)) return 'unknown'
+  if (index >= a.index) return 'acceptance_or_after'
+  return opts.startsAtChainStart ? 'before_acceptance' : 'unknown'
+}
+
+/**
+ * Verify an ordered slice of stored rows (chronological) for one deal. Every
+ * row is reported, none is skipped, and the overall result is `failed` if
+ * anything is known to be wrong, `verified` only if every check passes on a
+ * slice known to be complete, and `incomplete` otherwise.
+ *
+ * Legacy rows keep today's export semantics: hashed through the unchanged
+ * legacy canonical, a missing stored hash or link on a pre-chain row is not a
+ * failure, and the expected tip advances as `event_hash ?? previous`.
+ */
+export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceOptions): Promise<SliceResult> {
+  let expectation: LinkExpectation = opts.startsAtChainStart ? { kind: 'chain_start' } : { kind: 'unknown_boundary' }
+  const out: RowResult[] = []
+
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index]
+    const cls = classifyStoredEvent(row, { projected: opts.projected })
+    const obj = (row !== null && typeof row === 'object' ? row : {}) as object
+    const stored = dataValue(obj, 'event_hash')
+    const result: RowResult = {
+      index, id: dataValue(obj, 'id').value, kind: cls.kind,
+      version: cls.kind === 'legacy' || cls.kind === 'unsupported' ? cls.version : cls.kind === 'v5' ? 5 : undefined,
+      hash: 'invalid_input', link: 'invalid_input', payload: 'indeterminate', agreement: 'invalid_input',
+    }
+    const payload = dataValue(obj, 'payload')
+    const payloadCheck = async (): Promise<PayloadCheck> => {
+      if (payload.accessor) return 'indeterminate'
+      if (!payload.present || payload.value === undefined) return 'unavailable'
+      const recorded = dataValue(obj, 'payload_hash').value
+      if (!isDigest(recorded)) return 'mismatch'
+      return (await payloadHash(payload.value)) === recorded ? 'match' : 'mismatch'
+    }
+
+    if (cls.kind === 'invalid') {
+      result.reason = `${cls.field}: ${cls.reason}`
+    } else if (cls.kind === 'unsupported') {
+      result.hash = 'unsupported'
+      result.link = 'indeterminate'
+      result.agreement = 'indeterminate'
+    } else if (cls.kind === 'v5') {
+      const v = await verifyV5EventHash(row, stored.value)
+      result.hash = v.verdict === 'invalid_input' ? 'invalid_input' : v.verdict
+      if (v.verdict === 'invalid_input') result.reason = `${v.field}: ${v.reason}`
+      result.link = checkV5Link(row, expectation)
+      result.payload = await payloadCheck()
+      result.agreement = checkV5Agreement(row, {
+        position: positionOf(index, opts), acceptedAgreementHash: opts.acceptedAgreementHash,
+      })
+    } else {
+      const version = cls.version
+      const r = row as Record<string, unknown>
+      result.hash = stored.value === null || stored.value === undefined
+        ? 'not_recorded'
+        : (await sha256Hex(eventCanonical(r as never, version))) === stored.value ? 'match' : 'mismatch'
+      const prev = dataValue(obj, 'prev_event_hash').value
+      if (prev === null || prev === undefined) result.link = 'not_recorded'
+      else if (expectation.kind === 'unknown_boundary') result.link = 'indeterminate'
+      else result.link = prev === (expectation.kind === 'chain_start' ? GENESIS_HASH : expectation.hash) ? 'linked' : 'broken'
+      // As today's export: a legacy row with no recorded payload digest was
+      // never attested, which is not a failure.
+      const recordedPayload = dataValue(obj, 'payload_hash').value
+      result.payload = version < 3 ? 'not_in_format'
+        : recordedPayload === null || recordedPayload === undefined ? 'not_recorded'
+        : await payloadCheck()
+      if (!bindsWholeAgreement(version)) result.agreement = 'not_bound'
+      else if (!isDigest(opts.legacyAgreementHash)) result.agreement = 'indeterminate'
+      else result.agreement = r.agreement_hash === opts.legacyAgreementHash ? 'match' : 'mismatch'
+    }
+    out.push(result)
+
+    // Advance the expected tip as today's export does: a row without a stored
+    // hash leaves it where it was; a malformed one makes the next link unknown.
+    if (isDigest(stored.value)) expectation = { kind: 'after', hash: stored.value }
+    else if (stored.value !== null && stored.value !== undefined) expectation = { kind: 'unknown_boundary' }
+  }
+
+  const dimensions = {
+    hash: dimension(out.map(r => r.hash)),
+    link: dimension(out.map(r => r.link)),
+    payload: dimension(out.map(r => r.payload)),
+    agreement: dimension(out.map(r => r.agreement)),
+    completeness: (opts.startsAtChainStart && opts.tailComplete && out.length > 0 ? 'pass' : 'indeterminate') as Dimension,
+  }
+  const all = Object.values(dimensions)
+  const overall = all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete'
+  return { rows: out, dimensions, overall }
 }

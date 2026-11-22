@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyStoredEvent, fromV5Transport, verifyV5EventHash, checkV5Link, checkV5Agreement,
-  V5_AUTHORITY_FIELDS,
+  verifyEvidenceSlice, V5_AUTHORITY_FIELDS, V5_PROJECTION_FIELDS,
 } from '../../supabase/functions/_shared/eventVerifyV5.ts'
 import {
-  canonicalVersionOf, eventCanonical, isSupportedHashVersion, sha256Hex,
+  canonicalVersionOf, eventCanonical, isSupportedHashVersion, sha256Hex, payloadHash,
+  HASH_VERSION, SUPPORTED_HASH_VERSIONS,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
+import { buildEventCanonicalV5 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
 
 // Strict v5 read support (row 3 step 2, Task 182). Offline, pure. Legacy rows
 // must classify exactly as before and v5 rows must never reach a legacy path.
@@ -154,47 +156,305 @@ describe('transport mapping', () => {
   })
 })
 
-describe('chain link', () => {
-  it('links only to the supplied predecessor', () => {
-    expect(checkV5Link(V5_ROW, V4_PUBLISHED.hash)).toBe('linked')
-    expect(checkV5Link(V5_ROW, D('d'))).toBe('broken')
-    expect(checkV5Link({ ...V5_ROW, prev_event_hash: 'GENESIS' }, 'GENESIS')).toBe('linked')
-    expect(checkV5Link({ ...V5_ROW, prev_event_hash: 'GENESIS' }, V4_PUBLISHED.hash)).toBe('broken')
+describe('3A: projection contract and version indicators', () => {
+  const projectedLegacy = { hash_version: 4, prev_event_hash: 'GENESIS', credential_id: null, issuer_kind: null }
+
+  it('a projected row must carry version, predecessor and both authority fields', () => {
+    expect(classifyStoredEvent(projectedLegacy, { projected: true })).toEqual({ kind: 'legacy', version: 4 })
+    for (const key of V5_PROJECTION_FIELDS) {
+      const { [key]: _omit, ...rest } = projectedLegacy
+      expect(classifyStoredEvent(rest, { projected: true }), key)
+        .toEqual({ kind: 'invalid', field: key, reason: 'projection dropped a required field' })
+      expect(classifyStoredEvent({ ...projectedLegacy, [key]: undefined }, { projected: true }), key)
+        .toMatchObject({ kind: 'invalid', field: key })
+    }
+    // Losing version and both authority fields together looks legacy unprojected, and is caught projected.
+    const stripped = { prev_event_hash: V4_PUBLISHED.hash }
+    expect(classifyStoredEvent(stripped)).toEqual({ kind: 'legacy', version: 2 })
+    expect(classifyStoredEvent(stripped, { projected: true })).toMatchObject({ kind: 'invalid' })
   })
 
-  it('an unknown predecessor or a missing link is invalid input, never linked', () => {
-    for (const expected of [null, undefined, '', 'genesis', D('A')]) {
-      expect(checkV5Link(V5_ROW, expected), String(expected)).toBe('invalid_input')
-    }
-    for (const prev of [null, undefined, '', 'genesis']) {
-      expect(checkV5Link({ ...V5_ROW, prev_event_hash: prev }, 'GENESIS'), String(prev)).toBe('invalid_input')
-    }
-    const { prev_event_hash: _omit, ...rest } = V5_ROW
-    expect(checkV5Link(rest, 'GENESIS')).toBe('invalid_input')
-    expect(checkV5Link(null, 'GENESIS')).toBe('invalid_input')
+  it('an incomplete v5 row is a candidate, never a match', async () => {
+    const incomplete = { ...V5_ROW, issuer_kind: null }
+    expect(classifyStoredEvent(incomplete, { projected: true })).toEqual({ kind: 'v5' })
+    expect(await verifyV5EventHash(incomplete, V5_HASH)).toMatchObject({ verdict: 'invalid_input', field: 'issuer_kind' })
+  })
+
+  it('inconsistent explicit version indicators are invalid; a supplied flag is never trusted', () => {
+    expect(classifyStoredEvent({ ...V5_ROW, canonical_version: 5 })).toEqual({ kind: 'v5' })
+    expect(classifyStoredEvent({ ...V5_ROW, canonical_version: 4 })).toMatchObject({ kind: 'invalid', field: 'canonical_version' })
+    expect(classifyStoredEvent({ hash_version: 4, canonical_version: 5 })).toMatchObject({ kind: 'invalid', field: 'canonical_version' })
+    expect(classifyStoredEvent({ canonical_version: 4 })).toMatchObject({ kind: 'invalid', field: 'canonical_version' })
+    expect(classifyStoredEvent({ hash_version: 4, canonical_version: '4' })).toMatchObject({ kind: 'invalid' })
+    expect(classifyStoredEvent({ hash_version: 7, canonical_version_supported: true })).toEqual({ kind: 'unsupported', version: 7 })
+  })
+
+  it('inherited values are not read', () => {
+    const inherited = Object.create({ hash_version: 5, credential_id: V5_ROW.credential_id })
+    inherited.prev_event_hash = 'GENESIS'
+    expect(classifyStoredEvent(inherited)).toEqual({ kind: 'legacy', version: 2 })
+    expect(classifyStoredEvent(inherited, { projected: true })).toMatchObject({ kind: 'invalid', field: 'hash_version' })
   })
 })
 
-describe('agreement', () => {
-  it('explicit null is pre-acceptance, never a match', () => {
-    expect(checkV5Agreement({ ...V5_ROW, agreement_hash: null }, V5_ROW.agreement_hash)).toBe('pre_acceptance')
-    expect(checkV5Agreement({ ...V5_ROW, agreement_hash: null }, null)).toBe('pre_acceptance')
+describe('3A: transport copy is allowlisted and prototype-free', () => {
+  it('a JSON block with __proto__ and hostile names cannot change the copy', async () => {
+    const json = JSON.stringify({ ...V5_ROW, prev_hash: V5_ROW.prev_event_hash, prev_event_hash: undefined })
+      .replace('{', '{"__proto__":{"credential_id":"x","hash_version":4},"constructor":1,"toString":2,"hasOwnProperty":3,')
+    const block = JSON.parse(json)
+    expect(Object.prototype.hasOwnProperty.call(block, '__proto__')).toBe(true)
+    const r = fromV5Transport(block)
+    expect(r.ok).toBe(true)
+    expect(Object.getPrototypeOf(r.row)).toBe(null)
+    expect(Object.keys(r.row).sort()).toEqual(Object.keys({ ...V5_ROW }).sort())
+    expect(r.row.credential_id).toBe(V5_ROW.credential_id)
+    expect(await verifyV5EventHash(r.row, V5_HASH)).toMatchObject({ verdict: 'match' })
   })
 
-  it('a cited digest is compared with the current agreement', () => {
-    expect(checkV5Agreement(V5_ROW, V5_ROW.agreement_hash)).toBe('match')
-    expect(checkV5Agreement(V5_ROW, D('e'))).toBe('mismatch')
+  it('missing canonical fields stay missing, explicit null stays null', async () => {
+    const { credential_id: _omit, ...rest } = V5_ROW
+    const r = fromV5Transport(JSON.parse(JSON.stringify({ ...rest, agreement_hash: null })))
+    expect('credential_id' in r.row).toBe(false)
+    expect(r.row.agreement_hash).toBe(null)
+    expect(await verifyV5EventHash(r.row, V5_HASH)).toMatchObject({ verdict: 'invalid_input', field: 'credential_id' })
   })
 
-  it('missing citation or missing current agreement is invalid input', () => {
+  it('accessors on unknown keys are never read; on known keys they are refused', () => {
+    let calls = 0
+    const block = { ...V5_ROW }
+    Object.defineProperty(block, 'hostile', { enumerable: true, get() { calls += 1; return 1 } })
+    expect(fromV5Transport(block).ok).toBe(true)
+    expect(calls).toBe(0)
+    Object.defineProperty(block, 'issuer_kind', { enumerable: true, get() { calls += 1; return 'owner_account' } })
+    expect(fromV5Transport(block)).toMatchObject({ ok: false, field: 'issuer_kind' })
+    expect(calls).toBe(0)
+  })
+})
+
+describe('3A: link check', () => {
+  it('GENESIS links only at a known chain start', () => {
+    const genesis = { ...V5_ROW, prev_event_hash: 'GENESIS' }
+    expect(checkV5Link(genesis, { kind: 'chain_start' })).toBe('linked')
+    expect(checkV5Link(genesis, { kind: 'after', hash: V4_PUBLISHED.hash })).toBe('broken')
+    expect(checkV5Link(genesis, { kind: 'unknown_boundary' })).toBe('indeterminate')
+  })
+
+  it('later links compare with the observed preceding hash', () => {
+    expect(checkV5Link(V5_ROW, { kind: 'after', hash: V4_PUBLISHED.hash })).toBe('linked')
+    expect(checkV5Link(V5_ROW, { kind: 'after', hash: D('d') })).toBe('broken')
+    expect(checkV5Link(V5_ROW, { kind: 'chain_start' })).toBe('broken')
+    expect(checkV5Link(V5_ROW, { kind: 'unknown_boundary' })).toBe('indeterminate')
+  })
+
+  it('a missing or malformed link, or a malformed expectation, is invalid input', () => {
+    for (const prev of [null, undefined, '', 'genesis', D('A')]) {
+      expect(checkV5Link({ ...V5_ROW, prev_event_hash: prev }, { kind: 'chain_start' }), String(prev)).toBe('invalid_input')
+    }
+    for (const exp of [null, undefined, {}, { kind: 'after', hash: null }, { kind: 'after', hash: 'GENESIS' }, 'GENESIS']) {
+      expect(checkV5Link(V5_ROW, exp), JSON.stringify(exp)).toBe('invalid_input')
+    }
+  })
+})
+
+describe('3A: agreement check', () => {
+  const draft = { ...V5_ROW, agreement_hash: null }
+  const accepted = V5_ROW.agreement_hash
+
+  it('explicit null alone is "no cited digest"; pre-acceptance needs a known earlier position', () => {
+    expect(checkV5Agreement(draft, { position: 'unknown' })).toBe('no_cited_digest')
+    expect(checkV5Agreement(draft, { position: 'before_acceptance' })).toBe('pre_acceptance')
+    expect(checkV5Agreement(draft, { position: 'acceptance_or_after', acceptedAgreementHash: accepted })).toBe('invalid')
+  })
+
+  it('a cited digest is compared with the accepted snapshot, never assumed', () => {
+    expect(checkV5Agreement(V5_ROW, { position: 'acceptance_or_after', acceptedAgreementHash: accepted })).toBe('match')
+    expect(checkV5Agreement(V5_ROW, { position: 'unknown', acceptedAgreementHash: accepted })).toBe('match')
+    expect(checkV5Agreement(V5_ROW, { position: 'acceptance_or_after', acceptedAgreementHash: D('e') })).toBe('mismatch')
+    expect(checkV5Agreement(V5_ROW, { position: 'acceptance_or_after' })).toBe('indeterminate')
+    expect(checkV5Agreement(V5_ROW, { position: 'before_acceptance', acceptedAgreementHash: accepted })).toBe('invalid')
+  })
+
+  it('a missing or malformed citation is invalid input', () => {
     const { agreement_hash: _omit, ...rest } = V5_ROW
-    expect(checkV5Agreement(rest, V5_ROW.agreement_hash)).toBe('invalid_input')
-    expect(checkV5Agreement({ ...V5_ROW, agreement_hash: undefined }, V5_ROW.agreement_hash)).toBe('invalid_input')
-    for (const bad of ['', 'null', D('F'), 0]) {
-      expect(checkV5Agreement({ ...V5_ROW, agreement_hash: bad }, V5_ROW.agreement_hash)).toBe('invalid_input')
+    expect(checkV5Agreement(rest, { position: 'unknown' })).toBe('invalid_input')
+    for (const bad of [undefined, '', 'null', D('F'), 0]) {
+      expect(checkV5Agreement({ ...V5_ROW, agreement_hash: bad }, { position: 'unknown' })).toBe('invalid_input')
     }
-    for (const current of [null, undefined, '', D('G')]) {
-      expect(checkV5Agreement(V5_ROW, current), String(current)).toBe('invalid_input')
+    expect(checkV5Agreement(null, { position: 'unknown' })).toBe('invalid_input')
+  })
+})
+
+// ── Slice fixtures: real hashes for a v4 → v5 → v4 chain ────────────────────
+const CID = '22222222-2222-4222-8222-222222222222'
+const GRANT = '77777777-7777-4777-8777-777777777777'
+const ACCEPTED = '2e29fa574bd127507bdd992241d409062c4c1d254664934ad1326c9366b71f66'
+let clock = Date.parse('2026-01-02T03:04:05.000Z')
+const nextTime = () => new Date((clock += 1000)).toISOString()
+const uuid = n => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`
+
+async function legacyRow(n, prev, { version = 4, hashed = true, agreement = ACCEPTED, payload = { n } } = {}) {
+  const row = {
+    id: uuid(n), type: 'note.legacy', contract_id: CID, actor_id: 'owner', dod_hash: D('1'), created_at: nextTime(),
+    prev_event_hash: prev, payload, payload_hash: version >= 3 ? await payloadHash(payload) : null,
+    agreement_hash: version >= 4 ? agreement : null, hash_version: version, credential_id: null, issuer_kind: null,
+  }
+  row.event_hash = hashed ? await sha256Hex(eventCanonical(row, version)) : null
+  return row
+}
+async function v5Row(n, prev, { agreement = ACCEPTED, payload = { n }, kind = 'owner_account' } = {}) {
+  const row = {
+    id: uuid(n), type: 'payment.reported', contract_id: CID, actor_id: uuid(6), dod_hash: D('1'), created_at: nextTime(),
+    prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement,
+    hash_version: 5, credential_id: GRANT, issuer_kind: kind,
+  }
+  const built = buildEventCanonicalV5(row)
+  if (!built.ok) throw new Error(built.field)
+  row.event_hash = await sha256Hex(built.canonical)
+  return row
+}
+async function mixedChain() {
+  const a = await legacyRow(1, 'GENESIS')
+  const b = await v5Row(2, a.event_hash)
+  const c = await legacyRow(3, b.event_hash)
+  return [a, b, c]
+}
+const COMPLETE = { startsAtChainStart: true, tailComplete: true, acceptance: 'before_slice', acceptedAgreementHash: ACCEPTED,
+  legacyAgreementHash: ACCEPTED, projected: true }
+
+describe('3A: per-reader aggregation over a slice', () => {
+  it('v4 → v5 → v4 with real hashes verifies, every check reported per row', async () => {
+    const r = await verifyEvidenceSlice(await mixedChain(), { ...COMPLETE, acceptance: { index: 0 } })
+    expect(r.rows.map(x => [x.kind, x.hash, x.link, x.payload, x.agreement])).toEqual([
+      ['legacy', 'match', 'linked', 'match', 'match'],
+      ['v5', 'match', 'linked', 'match', 'match'],
+      ['legacy', 'match', 'linked', 'match', 'match'],
+    ])
+    expect(r.dimensions).toEqual({ hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass', completeness: 'pass' })
+    expect(r.overall).toBe('verified')
+  })
+
+  it('an initially unhashed legacy event is not a failure and keeps the chain start for the next link', async () => {
+    const a = await legacyRow(1, null, { version: 1, hashed: false })
+    const b = await v5Row(2, 'GENESIS', { agreement: null })
+    const r = await verifyEvidenceSlice([a, b], { ...COMPLETE, acceptance: 'none' })
+    expect(r.rows.map(x => [x.hash, x.link, x.agreement])).toEqual([
+      ['not_recorded', 'not_recorded', 'not_bound'],
+      ['match', 'linked', 'pre_acceptance'],
+    ])
+    expect(r.overall).toBe('verified')
+  })
+
+  it('a valid v5 draft null is pre-acceptance only when position is known', async () => {
+    const a = await v5Row(1, 'GENESIS', { agreement: null })
+    expect((await verifyEvidenceSlice([a], { ...COMPLETE, acceptance: 'none' })).rows[0].agreement).toBe('pre_acceptance')
+    const unknown = await verifyEvidenceSlice([a], { ...COMPLETE, acceptance: 'unknown' })
+    expect(unknown.rows[0].agreement).toBe('no_cited_digest')
+    expect(unknown.dimensions.agreement).toBe('indeterminate')
+    expect(unknown.overall).toBe('incomplete')
+  })
+
+  it('a null digest on or after a known acceptance fails', async () => {
+    const a = await legacyRow(1, 'GENESIS')
+    const b = await v5Row(2, a.event_hash, { agreement: null })
+    for (const acceptance of [{ index: 0 }, { index: 1 }, 'before_slice']) {
+      const r = await verifyEvidenceSlice([a, b], { ...COMPLETE, acceptance })
+      expect(r.rows[1].agreement, JSON.stringify(acceptance)).toBe('invalid')
+      expect(r.overall).toBe('failed')
     }
+  })
+
+  it('a valid hash with a bad link fails on the link only', async () => {
+    const [a, , c] = await mixedChain()
+    const b = await v5Row(2, D('9'))
+    const r = await verifyEvidenceSlice([a, b, c], COMPLETE)
+    expect(r.rows[1].hash).toBe('match')
+    expect(r.rows[1].link).toBe('broken')
+    expect(r.rows[2].link).toBe('broken')
+    expect(r.dimensions.hash).toBe('pass')
+    expect(r.dimensions.link).toBe('fail')
+    expect(r.overall).toBe('failed')
+  })
+
+  it('a changed authority value with a stale stored hash is a hash mismatch', async () => {
+    const chain = await mixedChain()
+    for (const change of [{ credential_id: uuid(8) }, { issuer_kind: 'counterpart_account' }]) {
+      const rows = [chain[0], { ...chain[1], ...change }, chain[2]]
+      const r = await verifyEvidenceSlice(rows, COMPLETE)
+      expect(r.rows[1].hash, JSON.stringify(change)).toBe('mismatch')
+      expect(r.rows[1].link).toBe('linked')
+      expect(r.overall).toBe('failed')
+    }
+  })
+
+  it('unsupported and malformed rows are reported, never skipped into a pass', async () => {
+    const [a, b, c] = await mixedChain()
+    const unsupported = { ...c, hash_version: 7 }
+    const r1 = await verifyEvidenceSlice([a, b, unsupported], COMPLETE)
+    expect(r1.rows).toHaveLength(3)
+    expect(r1.rows[2]).toMatchObject({ kind: 'unsupported', hash: 'unsupported' })
+    expect(r1.overall).toBe('incomplete')
+
+    const malformed = { ...b, created_at: '2026-01-02' }
+    const r2 = await verifyEvidenceSlice([a, malformed, c], COMPLETE)
+    expect(r2.rows[1]).toMatchObject({ kind: 'v5', hash: 'invalid_input' })
+    expect(r2.overall).toBe('failed')
+
+    const legacyShaped = { ...b, hash_version: 4 }
+    const r3 = await verifyEvidenceSlice([a, legacyShaped, c], COMPLETE)
+    expect(r3.rows[1]).toMatchObject({ kind: 'invalid', hash: 'invalid_input' })
+    expect(r3.overall).toBe('failed')
+  })
+
+  it('a missing predecessor boundary is indeterminate, and later links still compare', async () => {
+    const [, b, c] = await mixedChain()
+    const r = await verifyEvidenceSlice([b, c], { ...COMPLETE, startsAtChainStart: false })
+    expect(r.rows.map(x => x.link)).toEqual(['indeterminate', 'linked'])
+    expect(r.dimensions.completeness).toBe('indeterminate')
+    expect(r.overall).toBe('incomplete')
+    const broken = { ...c, prev_event_hash: D('7') }
+    const r2 = await verifyEvidenceSlice([b, broken], { ...COMPLETE, startsAtChainStart: false })
+    expect(r2.rows[1].link).toBe('broken')
+    expect(r2.overall).toBe('failed')
+  })
+
+  it('a truncated tail is never verified', async () => {
+    const r = await verifyEvidenceSlice((await mixedChain()).slice(0, 2), { ...COMPLETE, tailComplete: false })
+    expect(r.dimensions).toMatchObject({ hash: 'pass', link: 'pass', completeness: 'indeterminate' })
+    expect(r.overall).toBe('incomplete')
+    expect((await verifyEvidenceSlice([], COMPLETE)).overall).toBe('incomplete')
+  })
+
+  it('a known mismatch stays visible while another check is indeterminate', async () => {
+    const chain = await mixedChain()
+    const tampered = { ...chain[1], payload: { n: 999 } }
+    const r = await verifyEvidenceSlice([chain[0], tampered, chain[2]], { ...COMPLETE, acceptance: 'unknown', tailComplete: false })
+    expect(r.rows[1].payload).toBe('mismatch')
+    expect(r.dimensions.payload).toBe('fail')
+    expect(r.dimensions.completeness).toBe('indeterminate')
+    expect(r.overall).toBe('failed')
+  })
+
+  it('a payload the reader does not hold is unavailable, not a pass', async () => {
+    const chain = await mixedChain()
+    const { payload: _omit, ...noPayload } = chain[1]
+    const r = await verifyEvidenceSlice([chain[0], noPayload, chain[2]], COMPLETE)
+    expect(r.rows[1].payload).toBe('unavailable')
+    expect(r.dimensions.payload).toBe('indeterminate')
+    expect(r.overall).toBe('incomplete')
+  })
+
+  it('the projection contract applies to every row in the slice', async () => {
+    const chain = await mixedChain()
+    const { credential_id: _a, issuer_kind: _b, ...dropped } = chain[2]
+    const r = await verifyEvidenceSlice([chain[0], chain[1], dropped], COMPLETE)
+    expect(r.rows[2]).toMatchObject({ kind: 'invalid', hash: 'invalid_input' })
+    expect(r.overall).toBe('failed')
+  })
+})
+
+describe('3A: legacy constants unchanged', () => {
+  it('v5 is still not a legacy-supported version and the writer stays on v4', () => {
+    expect([...SUPPORTED_HASH_VERSIONS]).toEqual([1, 2, 3, 4])
+    expect(HASH_VERSION).toBe(4)
   })
 })

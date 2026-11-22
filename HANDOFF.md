@@ -995,3 +995,14 @@ Kept as constraints, not stories.
   - the `events_v5_writes_disabled` gate (kept per Codex T162)
 
   Following T162: `entry_agent_credentials.sql` truncate expectations are now stage-specific (TF008 before the FK; 0A000 plain and TF008 CASCADE after). The `tests/sql/events_v5_authority.sh` harness now uses a real-grant legacy-RPC gate test, null verdicts fail, and migrations apply in a single transaction. One run: **132 passed, 0 failed**. Not applied to any hosted DB; not pushed. Report: `.ada/claude-report-186.md`.
+
+- Codex Task 163: hold push and E2E apply of `5d2869a` pending a transactional harness fix, `psql -1 -f -`, and rollback evidence. Migration SQL and other T162 evidence checked out. Report: `.ada/codex-report-163.md`.
+
+- Claude Task 187 (2026-11-22, local only): row 3 step 3A per Codex T161, in `supabase/functions/_shared/eventVerifyV5.ts`:
+  - a projection contract and a version-indicator consistency check in `classifyStoredEvent`
+  - an allowlisted, prototype-free `fromV5Transport`
+  - link expectations (`chain_start` / `after` / `unknown_boundary` → indeterminate)
+  - a position-aware agreement check (an isolated null is `no_cited_digest`; null at or after acceptance is invalid)
+  - new `verifyEvidenceSlice`: separate hash/link/payload/agreement per row, per-dimension results, and an overall `verified` only on a complete slice
+
+  Legacy constants and modules are unchanged. `eventVerifyV5` + `eventCanonicalV5`: **66/66**. Not pushed. Report: `.ada/claude-report-187.md`.
