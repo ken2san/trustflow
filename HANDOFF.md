@@ -112,6 +112,11 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 166 (2026-11-22, E2E browser check, test-only):
+  - `00-backend-guard` 1/1 (app and tests point at the same E2E project); `invite-persistence --grep-invert @pre-b` 9/9; `currency.spec` 15/15.
+  - New `tests/e2e/owner-create-live.spec.js` **1/1**: a verified owner fills the real New contract form with no network stubs. Send Invite issues one `rpc/create_entry_contract` POST carrying exactly the 8 parameters, answered 200 `created` with owner = the signed-in account. The stored row matches the typed terms with server-derived fields null or untouched, the form shows the invite for that token, and a signed-out browser opens the guest invite with those terms. It covers the bearer flow only; C3 verified-account matching is a separate path, not exercised. It writes one ordinary E2E draft per run.
+  - **Gap, not built:** `invite-persistence` "an expired invite fails closed" actually tests a *consumed* token. A true-expiry spec needs `invite_token_expires_at` in the past, which only the server or service role can set (the RPC derives +72 h), so it needs an app change, privileged write or permanent fixture.
+  - No app bugs found. Lint 0 errors, `make check` 779. Report: `.ada/claude-report-166.md`.
 - Claude Task 165 (2026-11-21, Kenji OK 09:30 ET, E2E only): **migration B `20261120180000` (HEAD `cbd02d3`) applied to E2E** (`yqjtawffpesplqyurlpj`) with `supabase db push --db-url`, CLI 2.105.0, one `op read` → `PGPASSWORD` only; the dry-run gate listed exactly that one file.
   - Read-only before/after catalog diff is exactly 3 lines: history gains B; `authenticated` column INSERT goes from 10 columns to none; `creator_insert_contract` dropped.
   - Unchanged: anon/authenticated/PUBLIC no table INSERT; service_role and postgres keep INSERT; 3737 contracts and 5964 events with identical row and hash digests; RLS on; the other 3 policies identical (party-only read); RPC definer, owner postgres, empty search_path, authenticated-only; 0 unselectable return columns; pg_graphql absent; no client-writable views; the only client-reachable definer inserting contracts is the RPC; row 1 inventory PASS.
