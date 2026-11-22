@@ -141,10 +141,27 @@ begin
     delete from public.entry_agent_credentials where id = v_grant_id;
     raise exception 'grant was deleted';
   exception when sqlstate 'TF008' then null; end;
-  begin
-    truncate public.entry_agent_credentials;
-    raise exception 'grants were truncated';
-  exception when sqlstate 'TF008' then null; end;
+  -- Stage-specific (Codex T162). Before events.credential_id references this
+  -- table, the no-truncate trigger refuses with TF008. Once the FK exists,
+  -- PostgreSQL refuses a plain TRUNCATE first (0A000), and CASCADE still reaches
+  -- the trigger (TF008). Any success or other error fails.
+  if exists (select 1 from pg_constraint where conname = 'events_credential_id_fkey'
+             and conrelid = to_regclass('public.events')
+             and confrelid = 'public.entry_agent_credentials'::regclass and confdeltype = 'r') then
+    begin
+      truncate public.entry_agent_credentials;
+      raise exception 'grants were truncated';
+    exception when sqlstate '0A000' then null; end;
+    begin
+      truncate public.entry_agent_credentials cascade;
+      raise exception 'grants were truncated with cascade';
+    exception when sqlstate 'TF008' then null; end;
+  else
+    begin
+      truncate public.entry_agent_credentials;
+      raise exception 'grants were truncated';
+    exception when sqlstate 'TF008' then null; end;
+  end if;
   begin
     delete from public.contracts where id = v_contract_id;
     raise exception 'draft with grant was deleted';

@@ -981,3 +981,17 @@ Kept as constraints, not stories.
 - Codex Task 160: v5 storage design conditionally sound. Must have null-safe authority and predecessor CHECKs, unchanged legacy ACL/retention, and an atomic writer gate for old schema and cross-grant replay. Reader must preserve absence and avoid inferring pre-acceptance from null alone. Report: `.ada/codex-report-160.md`.
 
 - Claude Task 184 (2026-11-22, test only): de-flaked `tests/unit/verifyReceipt.test.js`. All 22 tests spawn `verify-receipt.mjs` (about 0.2 s alone), and under the hook's parallel suite one went past vitest's 5 s default (T158, T182). Changes: a 15 s `timeout` on every `execFileSync` (a hung verifier is killed instead of blocking the worker) and a 20 s timeout on this file's four describes only; the global timeout is unchanged and no assertion changed. Three solo runs: 22/22 each. Report: `.ada/claude-report-184.md`.
+
+- Codex Task 161: mapped Row 3 step 3 into shared verification, guest API/UI/export, and owner/export/CLI slices. Synthetic reader work can start now. Explicit authority-column reads wait for verified additive storage, and all readers precede v5 writers. Report: `.ada/codex-report-161.md`.
+
+- Claude Task 185 (2026-11-22, local + disposable Docker, **blocked**, not committed): built `supabase/migrations/20261122130000_events_v5_authority_columns.sql`. It adds two nullable columns, a named FK to `entry_agent_credentials` with ON DELETE RESTRICT, the issuer, authority-pair and v5-predecessor CHECKs (null-safe, validated), and a proposed `events_v5_writes_disabled` gate, plus the evidence harness `tests/sql/events_v5_authority.sh`. The migration applies and its self-test passes. **But the existing `tests/sql/entry_agent_credentials.sql:144–147` now fails:** the new FK makes PostgreSQL refuse `truncate entry_agent_credentials` with 0A000 before the TF008 trigger fires. Grants are still not truncated, but the assertion's errcode changed. A test-change decision is needed (recommended: accept TF008 or 0A000, and add a CASCADE → TF008 case). Report: `.ada/claude-report-185.md`.
+
+- Codex Task 162: recommend keeping T185's restrictive FK and v5 write gate. Split truncate expectations by schema and require CASCADE to fail with TF008. Fix the harness's gate and null-verdict assertions before rerun. Report: `.ada/codex-report-162.md`.
+
+- Claude Task 185/186 (2026-11-22, local + disposable Docker): row 3 additive v5 authority storage. The migration `20261122130000_events_v5_authority_columns.sql` adds:
+  - two nullable columns
+  - `events_credential_id_fkey` ON DELETE RESTRICT
+  - the null-safe issuer, authority-pair and v5-predecessor CHECKs
+  - the `events_v5_writes_disabled` gate (kept per Codex T162)
+
+  Following T162: `entry_agent_credentials.sql` truncate expectations are now stage-specific (TF008 before the FK; 0A000 plain and TF008 CASCADE after). The `tests/sql/events_v5_authority.sh` harness now uses a real-grant legacy-RPC gate test, null verdicts fail, and migrations apply in a single transaction. One run: **132 passed, 0 failed**. Not applied to any hosted DB; not pushed. Report: `.ada/claude-report-186.md`.
