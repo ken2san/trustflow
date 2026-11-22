@@ -112,6 +112,15 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 173 (2026-11-22, Kenji OK 01:58 ET): **pushed to production.** `git push origin "${RELEASE_SHA}:refs/heads/main"` → `122bac2..11d2075`, exit 0; `origin/main` = `11d2075`.
+  - Vercel `dpl_GmRv2BwoHuWLsvnCyBhUFLNcxAyD` is READY for `11d2075`, target production, aliased to `project-trustflow.vercel.app` with no alias error. **The cutover gap is closed.**
+  - Read-only smoke all PASS:
+    - page and bundle HTTP 200;
+    - bundle has `fqgpzhwvvfsxswlnbbgg` (and no E2E ref) and `create_entry_contract` with the `p_*` params, and no `from("contracts").insert(` (contracts is only selected and deleted);
+    - `/llms.txt` and `/agent-protocol.md` HTTP 200, byte-identical to `public/`, with RPC instructions and no direct POST; the digest vectors are pinned by `tests/unit/shownTerms.test.js` (34/34);
+    - functions: `log-event`, `reissue-guest-access`, `validate-invite-token`, `guest-contract-events` (no credential function, so issuance is off);
+    - auth: `mailer_autoconfirm=false`, email on, Turnstile site key in the bundle. Server-side CAPTCHA enforcement is not readable here.
+  - `smoke:prod` not run (recommended as a separate OK). The HANDOFF commits `27489ca` and the T173 commit stay local. Report: `.ada/claude-report-173.md`.
 - Claude Task 172 (2026-11-22, Kenji OK 01:48 ET): **push STOPPED, nothing pushed.**
   - Preflight passed: tree clean (only `.ada/` untracked); `RELEASE_SHA` `11d2075` is HEAD and a fast-forward of `origin/main` `122bac2` (16 reviewed commits); Vercel `project-trustflow` deploys `ken2san/trustflow` main to production, live at `122bac2`.
   - The one push failed locally: `src refspec 11d2075…efs/heads/main does not match any`. zsh treated `:r` in `"$RELEASE_SHA:refs/heads/main"` as a history modifier. Remote unchanged (`origin/main` = `122bac2`, `ls-remote` confirms).
