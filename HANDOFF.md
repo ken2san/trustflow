@@ -112,6 +112,10 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 175 (2026-11-22, E2E): fresh cancellation fixture **not recorded**.
+  - `node scripts/record-cancel-fixture.mjs --check` stops: `E2E log-event is not the v14 artifact that accepts contract.cancelled`. Recording would need the old v14 `log-event` redeployed on E2E (an edge-function rollback) plus the existing `tests/e2e/.cancel-fixture.json` moved aside; both are outside the approved scope.
+  - Ran `cancellation-refusal.spec` on current E2E (refusing `log-event`, existing fixture): **4/4 passed**. Tests 1-2 refuse new owner and guest cancellations on **fresh contracts created through `rpc/create_entry_contract`** and accepted via the real invite, so the post-B entry path is covered. Tests 3-4 replay the existing fixture's recorded events; replay doesn't depend on how the fixture's contract was created (row shape and hash parity T155/T164).
+  - **Recommendation:** treat row 2's fixture item as covered without a fresh fixture. Kenji/棟梁 to decide whether to close Roadmap row 2 on that basis (not closed here). Report: `.ada/claude-report-175.md`.
 - Claude Task 174 (2026-11-22, Kenji 02:19 ET):
   - **`npm run smoke:prod` 16/16 ok, exit 0, no writes.** Bundle points at prod; OTP endpoint answers 400 and **server-side CAPTCHA is enforced** with a real site key; the 4 live functions are serving and the 5 retired ones absent; `/llms.txt` and `/agent-protocol.md` served.
   - **Gap:** `smoke:prod` has **no probe** of `POST /rest/v1/contracts` or `rpc/create_entry_contract`, so the production refusal of the old insert and of an anonymous create is still proved only by catalog checks (T171) and E2E (T165), not by an HTTP probe.
