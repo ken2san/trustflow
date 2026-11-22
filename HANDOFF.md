@@ -112,6 +112,12 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 167 (2026-11-22, Kenji OK ~01:15 ET): **row 1 `20261118214020` applied to PRODUCTION** (`fqgpzhwvvfsxswlnbbgg`) per `docs/production-apply-runbook.md`: worktree pin `6942691`, CLI 2.105.0, one `op read` → `PGPASSWORD` only. Read-only checks via psycopg (no host `psql`).
+  - Baseline history ended at `20261118010000`; the dry run listed exactly row 1; apply printed `Finished supabase db push.`
+  - Before and after are identical: 1322 contracts (original-column digest), 2397 events, and the event/agreement hash digest.
+  - Verify all PASS: history ends at row 1 and A/B are absent; `counterpart_account_id` is nullable uuid FK, null on all rows, not client-writable; `counterpart_not_owner`; the credential table is empty, RLS on, no client privilege, service_role SELECT only, with immutability triggers and a non-cascading FK; the 3 RPCs are definer, empty search_path, service_role only, and their owner can lock `auth.users`; the delete guard checks TF007 before TF004; inventory PASS; pg_graphql absent.
+  - The exit codes were not captured (zsh `PIPESTATUS` is empty); evidence is the CLI output plus history and catalog.
+  - **A, B and the push are NOT done**; each needs its own OK. The client direct insert is still open on production (as before). Report: `.ada/claude-report-167.md`.
 - Claude Task 166 (2026-11-22, E2E browser check, test-only):
   - `00-backend-guard` 1/1 (app and tests point at the same E2E project); `invite-persistence --grep-invert @pre-b` 9/9; `currency.spec` 15/15.
   - New `tests/e2e/owner-create-live.spec.js` **1/1**: a verified owner fills the real New contract form with no network stubs. Send Invite issues one `rpc/create_entry_contract` POST carrying exactly the 8 parameters, answered 200 `created` with owner = the signed-in account. The stored row matches the typed terms with server-derived fields null or untouched, the form shows the invite for that token, and a signed-out browser opens the guest invite with those terms. It covers the bearer flow only; C3 verified-account matching is a separate path, not exercised. It writes one ordinary E2E draft per run.
