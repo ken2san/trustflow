@@ -10,10 +10,18 @@ const SAMPLE = path.resolve('tests/fixtures/receipt-sample.json')
 const VERIFIER = path.resolve('scripts/verify-receipt.mjs')
 const dir = mkdtempSync(path.join(tmpdir(), 'tf-receipt-'))
 
+// Every test here starts a fresh Node process (about 0.2 s alone). Inside the
+// full parallel suite, CPU contention pushed one past vitest's 5 s default
+// (5357 ms; T158, T182). execFileSync blocks, so vitest cannot interrupt a hung
+// verifier: SPAWN_MS kills it instead, and the test budget sits above that.
+// Scoped to this file; the global testTimeout is unchanged.
+const SPAWN_MS = 15_000
+const TEST_MS = 20_000
+
 /** Run the verifier on a file. Returns { ok, out }. */
 function runVerifier(file) {
   try {
-    const out = execFileSync('node', [VERIFIER, file], { encoding: 'utf8' })
+    const out = execFileSync('node', [VERIFIER, file], { encoding: 'utf8', timeout: SPAWN_MS })
     return { ok: true, out, diagnostic: `exit=0\nstdout:\n${out}` }
   } catch (e) {
     const out = `${e.stdout ?? ''}${e.stderr ?? ''}`
@@ -30,7 +38,7 @@ function runTampered(label, mutate) {
   return runVerifier(file)
 }
 
-describe('an untampered receipt verifies offline', () => {
+describe('an untampered receipt verifies offline', { timeout: TEST_MS }, () => {
   it('passes, and needs no network or credentials', () => {
     const { ok, out } = runVerifier(SAMPLE)
     expect(out).toContain('RECEIPT VERIFIED')
@@ -49,7 +57,7 @@ describe('an untampered receipt verifies offline', () => {
 // Each of these must go red. A verifier whose rejections have never been
 // observed is not a verifier — this project's invoke-error test passed for two
 // weeks while the path it covered was broken.
-describe('tampering is detected', () => {
+describe('tampering is detected', { timeout: TEST_MS }, () => {
   const cases = [
     ['the agreed amount is changed', r => { r.agreement.snapshot.amount = 999999 }],
     ['the deadline is changed', r => { r.agreement.snapshot.deadline = '2099-01-01' }],
@@ -77,7 +85,7 @@ describe('tampering is detected', () => {
   }
 })
 
-describe('a receipt that cannot be checked is not accepted as valid', () => {
+describe('a receipt that cannot be checked is not accepted as valid', { timeout: TEST_MS }, () => {
   it('rejects an act missing its canonical inputs', () => {
     // The shape the first version of make-receipt.mjs emitted: a digest with
     // nothing to recompute it from.
@@ -107,7 +115,7 @@ describe('a receipt that cannot be checked is not accepted as valid', () => {
   })
 })
 
-describe('two receipts for one agreement are compared, which is the only equivocation check', () => {
+describe('two receipts for one agreement are compared, which is the only equivocation check', { timeout: TEST_MS }, () => {
   it('passes when both parties were shown the same acts', () => {
     const a = path.join(dir, 'same-a.json')
     const b = path.join(dir, 'same-b.json')
@@ -115,7 +123,7 @@ describe('two receipts for one agreement are compared, which is the only equivoc
     writeFileSync(a, r); writeFileSync(b, r)
     const { ok, out } = runVerifier(`${a}`) // single-file path still works
     expect(ok).toBe(true)
-    const both = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8' })
+    const both = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8', timeout: SPAWN_MS })
     expect(both).toContain('same acts, in the same order')
     expect(both).toContain('0 failed checks')
     expect(out).toContain('RECEIPT VERIFIED')
@@ -132,7 +140,7 @@ describe('two receipts for one agreement are compared, which is the only equivoc
     writeFileSync(b, JSON.stringify(other))
 
     let out = ''
-    try { out = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8' }) }
+    try { out = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8', timeout: SPAWN_MS }) }
     catch (e) { out = `${e.stdout ?? ''}${e.stderr ?? ''}` }
     // Both files verify on their own; only the comparison reveals it.
     expect(out).toMatch(/both parties were shown the same acts[\s\S]*?/)
