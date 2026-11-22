@@ -30,8 +30,11 @@
 
 import {
   type CanonicalEvent, GENESIS_HASH, canonicalVersionOf, eventCanonical,
-  isSupportedHashVersion, sha256Hex,
+  isSupportedHashVersion, sha256Hex, stableStringify,
 } from './eventCanonical.ts'
+import {
+  type SliceResult, type StoredEventKind, classifyStoredEvent, fromV5Transport, verifyEvidenceSlice,
+} from './eventVerifyV5.ts'
 
 /**
  * Every input the v4 canonical is computed over, named as the stored row names
@@ -309,4 +312,122 @@ export function chainSummary(
     payload_covered_by_hash: events.length > 0
       && events.every(e => e.integrity.substance_valid !== null),
   }
+}
+
+// ── v5 guest reader (row 3 step 3B-core, Task 190) ──────────────────────────
+//
+// Additive. Nothing above changes, so the legacy wire stays byte-identical.
+// The endpoint, UI and export adopt these once the authority columns are
+// verified on the target and the response version is decided (3B-wire).
+
+/** The v4 inputs plus the authority pair a v5 event hash is taken over. */
+export const CANONICAL_INPUTS_V5 = [...CANONICAL_INPUTS, 'credential_id', 'issuer_kind'] as const
+
+function ownData(row: object, key: string): { present: boolean, value: unknown } {
+  let desc: PropertyDescriptor | undefined
+  try { desc = Object.getOwnPropertyDescriptor(row, key) } catch { return { present: false, value: undefined } }
+  if (desc === undefined || !('value' in desc) || desc.value === undefined) return { present: false, value: undefined }
+  return { present: true, value: desc.value }
+}
+
+export interface GuestBlock {
+  kind: StoredEventKind['kind']
+  block: Record<string, unknown>
+  /** Inputs a recomputation would need and the block does not carry. */
+  missing: string[]
+}
+
+/**
+ * The canonical block a guest is given for one stored row, chosen by the RAW
+ * row's classification — before any shaping can lose a field.
+ *
+ *   legacy                      the existing `canonicalInputsOf`, unchanged
+ *   v5 / invalid / unsupported  an exact own-property projection of the v5
+ *                               inputs: nothing synthesized as null, no
+ *                               version inferred. An authority-bearing row is
+ *                               therefore never handed out as a recomputable
+ *                               legacy block.
+ *
+ * `contract_id` comes from the token-resolved contract only when the row does
+ * not carry one, as today.
+ */
+export function guestCanonicalBlock(
+  row: Record<string, unknown>,
+  contractId: string,
+  { projected = false }: { projected?: boolean } = {},
+): GuestBlock {
+  const cls = classifyStoredEvent(row, { projected })
+  if (cls.kind === 'legacy') {
+    const block = canonicalInputsOf(row, contractId)
+    return { kind: cls.kind, block, missing: missingCanonicalInputs(block) }
+  }
+  const block: Record<string, unknown> = {}
+  for (const key of CANONICAL_INPUTS_V5) {
+    const f = ownData(row, key)
+    if (f.present) block[key] = f.value
+  }
+  if (!('contract_id' in block)) block.contract_id = contractId
+  return { kind: cls.kind, block, missing: CANONICAL_INPUTS_V5.filter(k => !(k in block)) }
+}
+
+/**
+ * The accepted snapshot digest, for the SERVER (which holds full payloads).
+ * The acceptance event's recorded agreement_hash, and only if the snapshot it
+ * carries (`_agreement`) hashes to that digest; otherwise null, so agreement
+ * checks stay indeterminate. Current contract fields are never used: the
+ * historical record must not depend on a row that may have moved on.
+ */
+export async function acceptedAgreementHashOf(rows: readonly Record<string, unknown>[]): Promise<string | null> {
+  const acceptances = rows.filter(r => r?.type === 'dod.consent_recorded')
+  if (acceptances.length !== 1) return null
+  const [acceptance] = acceptances
+  const recorded = acceptance.agreement_hash
+  const snapshot = (acceptance.payload as Record<string, unknown> | null)?._agreement
+  if (typeof recorded !== 'string' || !/^[0-9a-f]{64}$/.test(recorded)) return null
+  if (snapshot === null || typeof snapshot !== 'object') return null
+  return (await sha256Hex(stableStringify(snapshot))) === recorded ? recorded : null
+}
+
+export interface GuestTrailVerdicts {
+  /** Checked by TrustFlow over the stored rows with their FULL payloads. */
+  server: SliceResult
+  /** What the guest can recompute from the blocks alone (no full payload). */
+  local: SliceResult
+  accepted_agreement_hash: string | null
+}
+
+/**
+ * Two verdicts, never merged. The endpoint reads one deal's events ascending
+ * from the first, so the start is known; the row cap cuts the TAIL, so the
+ * trail is complete only when not truncated. Acceptance is placed from the
+ * rows themselves.
+ *
+ * The local verdict gets no payload: a guest holds an allowlisted projection,
+ * not the committed payload, so its payload check is `unavailable` and the
+ * local overall can never read `verified`.
+ */
+export async function guestTrailVerdicts(
+  rawRows: readonly Record<string, unknown>[],
+  { contractId, truncated, projected = false }: { contractId: string, truncated: boolean, projected?: boolean },
+): Promise<GuestTrailVerdicts> {
+  const accepted = await acceptedAgreementHashOf(rawRows)
+  const opts = {
+    startsAtChainStart: true,
+    tailComplete: !truncated,
+    acceptance: 'unknown' as const,
+    acceptedAgreementHash: accepted,
+    legacyAgreementHash: accepted,
+  }
+  const withContract = rawRows.map(r => (ownData(r, 'contract_id').present ? r : { ...r, contract_id: contractId }))
+  const server = await verifyEvidenceSlice(withContract, { ...opts, projected })
+
+  const localRows = rawRows.map(r => {
+    const { block } = guestCanonicalBlock(r, contractId, { projected })
+    const copy = fromV5Transport({ ...block, event_hash: ownData(r, 'event_hash').value ?? null })
+    // A block the transport rejects is passed through as-is so the slice
+    // reports it as invalid rather than dropping it.
+    return copy.ok ? copy.row : block
+  })
+  const local = await verifyEvidenceSlice(localRows, opts)
+  return { server, local, accepted_agreement_hash: accepted }
 }

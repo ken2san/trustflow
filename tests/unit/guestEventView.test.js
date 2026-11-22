@@ -365,3 +365,148 @@ describe('what the guest is told about the trail as a whole', () => {
     expect(summary([]).payload_covered_by_hash).toBe(false)
   })
 })
+
+// ── 3B-core: v5 guest reader (Task 190) ─────────────────────────────────────
+import {
+  CANONICAL_INPUTS_V5, acceptedAgreementHashOf, guestCanonicalBlock, guestTrailVerdicts,
+} from '../../supabase/functions/_shared/guestEventView.ts'
+import { payloadHash, sha256Hex, stableStringify } from '../../supabase/functions/_shared/eventCanonical.ts'
+import { buildEventCanonicalV5 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
+
+const V5CID = '22222222-2222-4222-8222-222222222222'
+const hex = c => c.repeat(64)
+const vid = n => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`
+let tick = Date.parse('2026-02-01T00:00:00.000Z')
+const at = () => new Date((tick += 1000)).toISOString()
+const SNAPSHOT = { amount: 1250, currency: 'CAD', deadline: null, dod: ['Translate'], offered_by: 'Example',
+  performed_by: 'creator', project_name: 'Example', snapshot_version: 1 }
+
+// Raw rows as the guest endpoint SELECTs them: no contract_id column.
+async function rawLegacy(n, prev, { type = 'performance.asserted', payload = { note: `n${n}` }, agreement } = {}) {
+  const row = { id: vid(n), type, actor_id: 'owner', dod_hash: hex('1'), created_at: at(), prev_event_hash: prev,
+    payload, payload_hash: await payloadHash(payload), agreement_hash: agreement, hash_version: 4 }
+  row.event_hash = await sha256Hex(eventCanonical({ ...row, contract_id: V5CID }, 4))
+  return row
+}
+async function rawV5(n, prev, { agreement, payload = { note: `v5-${n}` } } = {}) {
+  const row = { id: vid(n), type: 'payment.reported', actor_id: vid(6), dod_hash: hex('1'), created_at: at(),
+    prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement, hash_version: 5,
+    credential_id: vid(7), issuer_kind: 'counterpart_account' }
+  const built = buildEventCanonicalV5({ ...row, contract_id: V5CID })
+  if (!built.ok) throw new Error(built.field)
+  row.event_hash = await sha256Hex(built.canonical)
+  return row
+}
+async function mixedTrail() {
+  const accepted = await sha256Hex(stableStringify(SNAPSHOT))
+  const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: SNAPSHOT }, agreement: accepted })
+  const b = await rawV5(2, a.event_hash, { agreement: accepted })
+  const c = await rawLegacy(3, b.event_hash, { agreement: accepted })
+  return { rows: [a, b, c], accepted }
+}
+
+describe('3B-core: guest canonical block is chosen from the raw row', () => {
+  it('legacy rows get exactly the existing block (wire unchanged)', async () => {
+    const { rows } = await mixedTrail()
+    const g = guestCanonicalBlock(rows[2], V5CID)
+    expect(g.kind).toBe('legacy')
+    expect(g.block).toEqual(canonicalInputsOf(rows[2], V5CID))
+    expect(g.missing).toEqual([])
+  })
+
+  it('v5 rows get an exact projection: nothing synthesized, nothing inferred', async () => {
+    const { rows } = await mixedTrail()
+    const g = guestCanonicalBlock(rows[1], V5CID)
+    expect(g.kind).toBe('v5')
+    expect(Object.keys(g.block).sort()).toEqual([...CANONICAL_INPUTS_V5].sort())
+    const { agreement_hash: _a, hash_version: _h, ...dropped } = rows[1]
+    const partial = guestCanonicalBlock({ ...dropped, hash_version: 5 }, V5CID)
+    expect('agreement_hash' in partial.block).toBe(false)
+    expect(partial.missing).toEqual(['agreement_hash'])
+  })
+
+  it('an authority-bearing non-v5 row is never handed out as a recomputable legacy block', async () => {
+    const { rows } = await mixedTrail()
+    const g = guestCanonicalBlock({ ...rows[2], credential_id: vid(7) }, V5CID)
+    expect(g.kind).toBe('invalid')
+    expect(g.block.credential_id).toBe(vid(7))
+    expect(g.block).not.toEqual(canonicalInputsOf(rows[2], V5CID))
+  })
+
+  it('with the projection contract, a read that dropped authority fields is invalid', async () => {
+    const { rows } = await mixedTrail()
+    expect(guestCanonicalBlock(rows[2], V5CID, { projected: true }).kind).toBe('invalid')
+    expect(guestCanonicalBlock({ ...rows[2], credential_id: null, issuer_kind: null }, V5CID, { projected: true }).kind).toBe('legacy')
+  })
+
+  it('a block carries canonical inputs only: no payload, secret or verifier', async () => {
+    const { rows } = await mixedTrail()
+    const raw = { ...rows[1], secret_hash: hex('9'), invite_hash: hex('8'), guest_access_token: vid(5) }
+    const g = guestCanonicalBlock(raw, V5CID)
+    for (const k of Object.keys(g.block)) expect(CANONICAL_INPUTS_V5).toContain(k)
+    expect(JSON.stringify(g.block)).not.toContain(hex('9'))
+  })
+})
+
+describe('3B-core: accepted agreement digest', () => {
+  it('is the acceptance digest only when its snapshot hashes to it', async () => {
+    const { rows, accepted } = await mixedTrail()
+    expect(await acceptedAgreementHashOf(rows)).toBe(accepted)
+    const altered = [{ ...rows[0], payload: { _agreement: { ...SNAPSHOT, amount: 1 } } }, ...rows.slice(1)]
+    expect(await acceptedAgreementHashOf(altered)).toBe(null)
+    expect(await acceptedAgreementHashOf([rows[0], { ...rows[0], id: vid(9) }])).toBe(null)
+    expect(await acceptedAgreementHashOf(rows.slice(1))).toBe(null)
+  })
+})
+
+describe('3B-core: server and local verdicts are separate', () => {
+  it('mixed v4 → v5 → v4: the server verifies with full payloads; the guest cannot verify payloads', async () => {
+    const { rows, accepted } = await mixedTrail()
+    const v = await guestTrailVerdicts(rows, { contractId: V5CID, truncated: false })
+    expect(v.accepted_agreement_hash).toBe(accepted)
+    expect(v.server.overall).toBe('verified')
+    expect(v.local.dimensions).toEqual({ hash: 'pass', link: 'pass', payload: 'indeterminate', agreement: 'pass', completeness: 'pass' })
+    expect(v.local.rows.every(r => r.payload === 'unavailable')).toBe(true)
+    expect(v.local.overall).toBe('incomplete')
+  })
+
+  it('a tampered payload fails on the server and is merely unavailable locally', async () => {
+    const { rows } = await mixedTrail()
+    const tampered = [rows[0], { ...rows[1], payload: { note: 'edited' } }, rows[2]]
+    const v = await guestTrailVerdicts(tampered, { contractId: V5CID, truncated: false })
+    expect(v.server.rows[1].payload).toBe('mismatch')
+    expect(v.server.overall).toBe('failed')
+    expect(v.local.rows[1].payload).toBe('unavailable')
+  })
+
+  it('an invalid v5 row among good legacy rows fails both verdicts and is not dropped', async () => {
+    const { rows } = await mixedTrail()
+    const bad = [rows[0], { ...rows[1], created_at: '2026-02-01' }, rows[2]]
+    const v = await guestTrailVerdicts(bad, { contractId: V5CID, truncated: false })
+    for (const side of [v.server, v.local]) {
+      expect(side.rows).toHaveLength(3)
+      expect(side.rows[1].hash).toBe('invalid_input')
+      expect(side.overall).toBe('failed')
+    }
+  })
+
+  it('a capped (truncated) trail is never verified', async () => {
+    const { rows } = await mixedTrail()
+    const v = await guestTrailVerdicts(rows, { contractId: V5CID, truncated: true })
+    expect(v.server.dimensions.completeness).toBe('indeterminate')
+    expect(v.server.overall).toBe('incomplete')
+  })
+
+  it('without a self-consistent accepted snapshot, agreement stays indeterminate', async () => {
+    // A self-consistent chain (every digest correct) whose acceptance carries no snapshot.
+    const accepted = await sha256Hex(stableStringify(SNAPSHOT))
+    const a = await rawLegacy(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { note: 'no snapshot' }, agreement: accepted })
+    const b = await rawV5(2, a.event_hash, { agreement: accepted })
+    const c = await rawLegacy(3, b.event_hash, { agreement: accepted })
+    const v = await guestTrailVerdicts([a, b, c], { contractId: V5CID, truncated: false })
+    expect(v.server.dimensions).toMatchObject({ hash: 'pass', link: 'pass', payload: 'pass' })
+    expect(v.accepted_agreement_hash).toBe(null)
+    expect(v.server.rows[1].agreement).toBe('indeterminate')
+    expect(v.server.overall).toBe('incomplete')
+  })
+})

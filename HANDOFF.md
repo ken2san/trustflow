@@ -1018,3 +1018,13 @@ Kept as constraints, not stories.
   - A v5 digest equal at an unknown position is `match_position_unknown`.
   - Acceptance is derived from the ordered rows (`dod.consent_recorded`). Inconsistent or out-of-range markers are rejected.
   - Regression tests added. `eventVerifyV5` + `eventCanonicalV5`: **70/70**. Not pushed. Report: `.ada/claude-report-189.md`.
+
+- Codex Task 166: `3b22f2c` closes missing legacy proof, but 3A/push remain held. Reject `before_slice` on a known-start slice and make any rejected acceptance marker block overall verified, including legacy-only slices. Report: `.ada/codex-report-166.md`.
+
+- Claude Task 190 (2026-11-22, local only): row 3 step 3B-core in `supabase/functions/_shared/guestEventView.ts`, additive (the legacy wire is unchanged):
+  - `CANONICAL_INPUTS_V5`
+  - `guestCanonicalBlock`, which classifies the raw row first; legacy rows get the existing block, and v5, invalid or unsupported rows get an exact projection with no null synthesis
+  - `acceptedAgreementHashOf`, taken only from a self-consistent acceptance snapshot
+  - `guestTrailVerdicts`, with separate `server` (full payloads) and `local` (no payload, so never verified) verdicts
+
+  Wiring into the endpoint, UI and export (3B-wire) waits for storage on E2E and the response-version decision. Tests: guestEventView + eventVerifyV5 + eventCanonicalV5 + eventRecord, **158/158**. Not pushed. Report: `.ada/claude-report-190.md`.
