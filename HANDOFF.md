@@ -112,6 +112,10 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 170 (2026-11-22, Kenji OK 01:37 ET): **migration A `20261120090000` applied to PRODUCTION** (`fqgpzhwvvfsxswlnbbgg`) per the runbook: pin `5a7f2be`, CLI 2.105.0, one `op read` → `PGPASSWORD` only. Exit codes: baseline 0, dry run 0, apply 0, verify 0.
+  - The dry run listed exactly A. Before and after are identical: 1322 contracts, 2397 events, row and hash digests, client INSERT grants (authenticated still has the 10 legacy columns, so direct create still works until B), and the 4 policies.
+  - Verify all PASS: history ends at A and B is absent; the RPC has exactly the 8 arguments and no other overload, is SECURITY DEFINER with empty search_path, owned by postgres, returns jsonb, with EXECUTE for authenticated only; postgres holds `auth.users` UPDATE; 0 contracts columns authenticated cannot SELECT; party read policy and RLS as rehearsed; inventory PASS; pg_graphql absent. No production write smoke.
+  - **B and the push are NOT done.** The production frontend stays on its current route until both are approved. Report: `.ada/claude-report-170.md`.
 - Claude Task 169 (2026-11-22, test-only): Codex T155 items in `tests/e2e/owner-create-live.spec.js`.
   - **Artifacts:** `test.use({ trace, screenshot, video: 'off' })`, so no artifact can hold the invite token.
   - **Request counting:** create and legacy-insert counting now runs in both the owner and guest contexts from before the click to the end of the test, and is asserted again after the guest check (1 and 0).
