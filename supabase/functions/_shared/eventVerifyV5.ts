@@ -23,6 +23,7 @@ import {
   payloadHash, sha256Hex,
 } from './eventCanonical.ts'
 import { V5_HASH_VERSION, verifyEventHashV5, type V5Verdict } from './eventCanonicalV5.ts'
+import { ACCEPTANCE_TYPE } from './eventRecord.ts'
 
 const HEX64 = /^[0-9a-f]{64}$/
 const isDigest = (v: unknown): v is string => typeof v === 'string' && HEX64.test(v)
@@ -187,7 +188,8 @@ export function checkV5Link(row: unknown, expectation: LinkExpectation): LinkVer
 export type AcceptancePosition = 'before_acceptance' | 'acceptance_or_after' | 'unknown'
 
 export type AgreementVerdict =
-  | 'pre_acceptance' | 'match' | 'mismatch' | 'invalid' | 'no_cited_digest' | 'indeterminate' | 'invalid_input'
+  | 'pre_acceptance' | 'match' | 'match_position_unknown' | 'mismatch' | 'invalid' | 'no_cited_digest'
+  | 'indeterminate' | 'invalid_input'
 
 /**
  * Agreement for a v5 row.
@@ -197,6 +199,9 @@ export type AgreementVerdict =
  *   - Otherwise a cited digest is compared with the accepted snapshot digest
  *     the CALLER derived under the recorded snapshot version — never the
  *     contract's current fields. Without that digest: indeterminate.
+ *   - Equality proves equality, not that a digest is legal where the row sits:
+ *     at an unknown position an equal digest is `match_position_unknown`, which
+ *     never passes (Codex T164). A different digest is a mismatch anywhere.
  */
 export function checkV5Agreement(
   row: unknown,
@@ -214,14 +219,26 @@ export function checkV5Agreement(
   }
   if (position === 'before_acceptance') return 'invalid'
   if (!isDigest(ctx?.acceptedAgreementHash)) return 'indeterminate'
-  return cited.value === ctx.acceptedAgreementHash ? 'match' : 'mismatch'
+  if (cited.value !== ctx.acceptedAgreementHash) return 'mismatch'
+  return position === 'acceptance_or_after' ? 'match' : 'match_position_unknown'
 }
 
 // ── Per-reader aggregation ──────────────────────────────────────────────────
 
-export type HashCheck = 'match' | 'mismatch' | 'not_recorded' | 'unsupported' | 'invalid_input'
-export type LinkCheck = LinkVerdict | 'not_recorded'
-export type PayloadCheck = 'match' | 'mismatch' | 'unavailable' | 'not_in_format' | 'not_recorded' | 'indeterminate'
+/**
+ * Legacy rows that carry no stored hash or link are not failures (history), but
+ * they are never proof either (Codex T164):
+ *   pre_chain     before the first hashed row of a slice known to start at the
+ *                 chain start: a genuine pre-chain prefix, honestly unverified
+ *   missing       after a hashed row was seen: proof that should be there is not
+ *   not_recorded  at an unknown boundary: cannot say which
+ *   not_in_format the check does not exist in that version (v1 has no link)
+ * Only not_in_format passes; the other three are indeterminate.
+ */
+export type MissingProof = 'pre_chain' | 'missing' | 'not_recorded'
+export type HashCheck = 'match' | 'mismatch' | 'unsupported' | 'invalid_input' | MissingProof
+export type LinkCheck = LinkVerdict | MissingProof | 'not_in_format'
+export type PayloadCheck = 'match' | 'mismatch' | 'unavailable' | 'not_in_format' | 'indeterminate' | MissingProof
 export type AgreementCheck = AgreementVerdict | 'not_bound'
 export type Dimension = 'pass' | 'fail' | 'indeterminate'
 
@@ -239,6 +256,8 @@ export interface RowResult {
 
 export interface SliceResult {
   rows: RowResult[]
+  /** How acceptance was placed: derived from the rows, taken from the caller, or rejected as inconsistent. */
+  acceptance: { status: 'derived' | 'caller' | 'rejected', index?: number, reason?: string }
   dimensions: { hash: Dimension, link: Dimension, payload: Dimension, agreement: Dimension, completeness: Dimension }
   overall: 'verified' | 'failed' | 'incomplete'
 }
@@ -268,20 +287,50 @@ export interface SliceOptions {
 }
 
 const FAIL = new Set(['mismatch', 'broken', 'invalid', 'invalid_input'])
-const PASS = new Set(['match', 'linked', 'pre_acceptance', 'not_recorded', 'not_in_format', 'not_bound'])
+const PASS = new Set(['match', 'linked', 'pre_acceptance', 'not_in_format', 'not_bound'])
 
 function dimension(values: string[]): Dimension {
   if (values.some(v => FAIL.has(v))) return 'fail'
   return values.every(v => PASS.has(v)) ? 'pass' : 'indeterminate'
 }
 
-function positionOf(index: number, opts: SliceOptions): AcceptancePosition {
-  const a = opts.acceptance
+function positionOf(index: number, a: AcceptanceMarker, startsAtChainStart: boolean): AcceptancePosition {
   if (a === 'before_slice') return 'acceptance_or_after'
-  if (a === 'none') return opts.startsAtChainStart ? 'before_acceptance' : 'unknown'
-  if (a === 'unknown' || typeof a !== 'object' || !Number.isInteger(a.index)) return 'unknown'
+  if (a === 'none') return startsAtChainStart ? 'before_acceptance' : 'unknown'
+  if (a === 'unknown' || typeof a !== 'object') return 'unknown'
   if (index >= a.index) return 'acceptance_or_after'
-  return opts.startsAtChainStart ? 'before_acceptance' : 'unknown'
+  return startsAtChainStart ? 'before_acceptance' : 'unknown'
+}
+
+/**
+ * Place acceptance from the ordered rows themselves (type ACCEPTANCE_TYPE) and
+ * check the caller's marker against them. An out-of-range marker, a marker on a
+ * row that is not an acceptance, 'none'/'before_slice' with an acceptance in
+ * the slice, a 'none' that cannot be true, or more than one acceptance, is
+ * rejected: no agreement check may then pass.
+ */
+function resolveAcceptance(rows: readonly unknown[], opts: SliceOptions):
+  { marker: AcceptanceMarker, status: SliceResult['acceptance'] } {
+  const found: number[] = []
+  rows.forEach((row, i) => {
+    if (row !== null && typeof row === 'object' && dataValue(row, 'type').value === ACCEPTANCE_TYPE) found.push(i)
+  })
+  const reject = (reason: string) => ({ marker: 'unknown' as const, status: { status: 'rejected' as const, reason } })
+  if (found.length > 1) return reject('more than one acceptance in the slice')
+  const a = opts.acceptance
+  if (!(typeof a === 'object' && a !== null) && a !== 'none' && a !== 'before_slice' && a !== 'unknown') {
+    return reject('unrecognised acceptance marker')
+  }
+  if (typeof a === 'object' && a !== null) {
+    if (!Number.isInteger(a.index) || a.index < 0 || a.index >= rows.length) return reject('acceptance index out of range')
+    if (found[0] !== a.index) return reject('acceptance index does not name the acceptance event')
+    return { marker: a, status: { status: 'caller', index: a.index } }
+  }
+  if (found.length === 1) {
+    if (a === 'none' || a === 'before_slice') return reject(`marker '${String(a)}' contradicts an acceptance in the slice`)
+    return { marker: { index: found[0] }, status: { status: 'derived', index: found[0] } }
+  }
+  return { marker: a, status: { status: 'caller' } }
 }
 
 /**
@@ -297,6 +346,10 @@ function positionOf(index: number, opts: SliceOptions): AcceptancePosition {
 export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceOptions): Promise<SliceResult> {
   let expectation: LinkExpectation = opts.startsAtChainStart ? { kind: 'chain_start' } : { kind: 'unknown_boundary' }
   const out: RowResult[] = []
+  const acceptance = resolveAcceptance(rows, opts)
+  let chainStarted = false
+  const missingProof = (): MissingProof =>
+    chainStarted ? 'missing' : opts.startsAtChainStart ? 'pre_chain' : 'not_recorded'
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index]
@@ -329,26 +382,29 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
       if (v.verdict === 'invalid_input') result.reason = `${v.field}: ${v.reason}`
       result.link = checkV5Link(row, expectation)
       result.payload = await payloadCheck()
-      result.agreement = checkV5Agreement(row, {
-        position: positionOf(index, opts), acceptedAgreementHash: opts.acceptedAgreementHash,
+      result.agreement = acceptance.status.status === 'rejected' ? 'indeterminate' : checkV5Agreement(row, {
+        position: positionOf(index, acceptance.marker, opts.startsAtChainStart),
+        acceptedAgreementHash: opts.acceptedAgreementHash,
       })
     } else {
       const version = cls.version
       const r = row as Record<string, unknown>
       result.hash = stored.value === null || stored.value === undefined
-        ? 'not_recorded'
+        ? missingProof()
         : (await sha256Hex(eventCanonical(r as never, version))) === stored.value ? 'match' : 'mismatch'
       const prev = dataValue(obj, 'prev_event_hash').value
-      if (prev === null || prev === undefined) result.link = 'not_recorded'
+      if (version < 2) result.link = 'not_in_format'
+      else if (prev === null || prev === undefined) result.link = missingProof()
       else if (expectation.kind === 'unknown_boundary') result.link = 'indeterminate'
       else result.link = prev === (expectation.kind === 'chain_start' ? GENESIS_HASH : expectation.hash) ? 'linked' : 'broken'
       // As today's export: a legacy row with no recorded payload digest was
       // never attested, which is not a failure.
       const recordedPayload = dataValue(obj, 'payload_hash').value
       result.payload = version < 3 ? 'not_in_format'
-        : recordedPayload === null || recordedPayload === undefined ? 'not_recorded'
+        : recordedPayload === null || recordedPayload === undefined ? missingProof()
         : await payloadCheck()
       if (!bindsWholeAgreement(version)) result.agreement = 'not_bound'
+      else if (acceptance.status.status === 'rejected') result.agreement = 'indeterminate'
       else if (!isDigest(opts.legacyAgreementHash)) result.agreement = 'indeterminate'
       else result.agreement = r.agreement_hash === opts.legacyAgreementHash ? 'match' : 'mismatch'
     }
@@ -356,7 +412,7 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
 
     // Advance the expected tip as today's export does: a row without a stored
     // hash leaves it where it was; a malformed one makes the next link unknown.
-    if (isDigest(stored.value)) expectation = { kind: 'after', hash: stored.value }
+    if (isDigest(stored.value)) { expectation = { kind: 'after', hash: stored.value }; chainStarted = true }
     else if (stored.value !== null && stored.value !== undefined) expectation = { kind: 'unknown_boundary' }
   }
 
@@ -369,5 +425,5 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
   }
   const all = Object.values(dimensions)
   const overall = all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete'
-  return { rows: out, dimensions, overall }
+  return { rows: out, acceptance: acceptance.status, dimensions, overall }
 }

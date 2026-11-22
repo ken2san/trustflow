@@ -8,6 +8,7 @@ import {
   HASH_VERSION, SUPPORTED_HASH_VERSIONS,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
 import { buildEventCanonicalV5 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
+import { ACCEPTANCE_TYPE } from '../../supabase/functions/_shared/eventRecord.ts'
 
 // Strict v5 read support (row 3 step 2, Task 182). Offline, pure. Legacy rows
 // must classify exactly as before and v5 rows must never reach a legacy path.
@@ -268,7 +269,9 @@ describe('3A: agreement check', () => {
 
   it('a cited digest is compared with the accepted snapshot, never assumed', () => {
     expect(checkV5Agreement(V5_ROW, { position: 'acceptance_or_after', acceptedAgreementHash: accepted })).toBe('match')
-    expect(checkV5Agreement(V5_ROW, { position: 'unknown', acceptedAgreementHash: accepted })).toBe('match')
+    // Equality at an unknown position is not legality (Codex T164).
+    expect(checkV5Agreement(V5_ROW, { position: 'unknown', acceptedAgreementHash: accepted })).toBe('match_position_unknown')
+    expect(checkV5Agreement(V5_ROW, { position: 'unknown', acceptedAgreementHash: D('e') })).toBe('mismatch')
     expect(checkV5Agreement(V5_ROW, { position: 'acceptance_or_after', acceptedAgreementHash: D('e') })).toBe('mismatch')
     expect(checkV5Agreement(V5_ROW, { position: 'acceptance_or_after' })).toBe('indeterminate')
     expect(checkV5Agreement(V5_ROW, { position: 'before_acceptance', acceptedAgreementHash: accepted })).toBe('invalid')
@@ -292,18 +295,18 @@ let clock = Date.parse('2026-01-02T03:04:05.000Z')
 const nextTime = () => new Date((clock += 1000)).toISOString()
 const uuid = n => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`
 
-async function legacyRow(n, prev, { version = 4, hashed = true, agreement = ACCEPTED, payload = { n } } = {}) {
+async function legacyRow(n, prev, { version = 4, hashed = true, agreement = ACCEPTED, payload = { n }, type = 'note.legacy' } = {}) {
   const row = {
-    id: uuid(n), type: 'note.legacy', contract_id: CID, actor_id: 'owner', dod_hash: D('1'), created_at: nextTime(),
+    id: uuid(n), type, contract_id: CID, actor_id: 'owner', dod_hash: D('1'), created_at: nextTime(),
     prev_event_hash: prev, payload, payload_hash: version >= 3 ? await payloadHash(payload) : null,
     agreement_hash: version >= 4 ? agreement : null, hash_version: version, credential_id: null, issuer_kind: null,
   }
   row.event_hash = hashed ? await sha256Hex(eventCanonical(row, version)) : null
   return row
 }
-async function v5Row(n, prev, { agreement = ACCEPTED, payload = { n }, kind = 'owner_account' } = {}) {
+async function v5Row(n, prev, { agreement = ACCEPTED, payload = { n }, kind = 'owner_account', type = 'payment.reported' } = {}) {
   const row = {
-    id: uuid(n), type: 'payment.reported', contract_id: CID, actor_id: uuid(6), dod_hash: D('1'), created_at: nextTime(),
+    id: uuid(n), type, contract_id: CID, actor_id: uuid(6), dod_hash: D('1'), created_at: nextTime(),
     prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement,
     hash_version: 5, credential_id: GRANT, issuer_kind: kind,
   }
@@ -313,17 +316,21 @@ async function v5Row(n, prev, { agreement = ACCEPTED, payload = { n }, kind = 'o
   return row
 }
 async function mixedChain() {
-  const a = await legacyRow(1, 'GENESIS')
+  // The first row is a real acceptance event (ACCEPTANCE_TYPE), as in the live writer.
+  const a = await legacyRow(1, 'GENESIS', { type: ACCEPTANCE_TYPE })
   const b = await v5Row(2, a.event_hash)
   const c = await legacyRow(3, b.event_hash)
   return [a, b, c]
 }
-const COMPLETE = { startsAtChainStart: true, tailComplete: true, acceptance: 'before_slice', acceptedAgreementHash: ACCEPTED,
+// 'unknown' lets the slice place acceptance from its own ordered rows.
+const COMPLETE = { startsAtChainStart: true, tailComplete: true, acceptance: 'unknown', acceptedAgreementHash: ACCEPTED,
   legacyAgreementHash: ACCEPTED, projected: true }
 
 describe('3A: per-reader aggregation over a slice', () => {
   it('v4 → v5 → v4 with real hashes verifies, every check reported per row', async () => {
     const r = await verifyEvidenceSlice(await mixedChain(), { ...COMPLETE, acceptance: { index: 0 } })
+    expect(r.acceptance).toEqual({ status: 'caller', index: 0 })
+    expect((await verifyEvidenceSlice(await mixedChain(), COMPLETE)).acceptance).toEqual({ status: 'derived', index: 0 })
     expect(r.rows.map(x => [x.kind, x.hash, x.link, x.payload, x.agreement])).toEqual([
       ['legacy', 'match', 'linked', 'match', 'match'],
       ['v5', 'match', 'linked', 'match', 'match'],
@@ -333,15 +340,16 @@ describe('3A: per-reader aggregation over a slice', () => {
     expect(r.overall).toBe('verified')
   })
 
-  it('an initially unhashed legacy event is not a failure and keeps the chain start for the next link', async () => {
+  it('an initially unhashed legacy event is not a failure, keeps the chain start, and is never proof', async () => {
     const a = await legacyRow(1, null, { version: 1, hashed: false })
     const b = await v5Row(2, 'GENESIS', { agreement: null })
     const r = await verifyEvidenceSlice([a, b], { ...COMPLETE, acceptance: 'none' })
     expect(r.rows.map(x => [x.hash, x.link, x.agreement])).toEqual([
-      ['not_recorded', 'not_recorded', 'not_bound'],
+      ['pre_chain', 'not_in_format', 'not_bound'],
       ['match', 'linked', 'pre_acceptance'],
     ])
-    expect(r.overall).toBe('verified')
+    expect(r.dimensions.hash).toBe('indeterminate')
+    expect(r.overall).toBe('incomplete')
   })
 
   it('a valid v5 draft null is pre-acceptance only when position is known', async () => {
@@ -354,13 +362,20 @@ describe('3A: per-reader aggregation over a slice', () => {
   })
 
   it('a null digest on or after a known acceptance fails', async () => {
-    const a = await legacyRow(1, 'GENESIS')
+    const a = await legacyRow(1, 'GENESIS', { type: ACCEPTANCE_TYPE })
     const b = await v5Row(2, a.event_hash, { agreement: null })
-    for (const acceptance of [{ index: 0 }, { index: 1 }, 'before_slice']) {
+    for (const acceptance of [{ index: 0 }, 'unknown']) {
       const r = await verifyEvidenceSlice([a, b], { ...COMPLETE, acceptance })
       expect(r.rows[1].agreement, JSON.stringify(acceptance)).toBe('invalid')
       expect(r.overall).toBe('failed')
     }
+    // The acceptance event itself citing null.
+    const acc = await v5Row(3, 'GENESIS', { agreement: null, type: ACCEPTANCE_TYPE })
+    expect((await verifyEvidenceSlice([acc], COMPLETE)).rows[0].agreement).toBe('invalid')
+    // A slice that starts after acceptance.
+    const r = await verifyEvidenceSlice([b], { ...COMPLETE, startsAtChainStart: false, acceptance: 'before_slice' })
+    expect(r.rows[0].agreement).toBe('invalid')
+    expect(r.overall).toBe('failed')
   })
 
   it('a valid hash with a bad link fails on the link only', async () => {
@@ -449,6 +464,59 @@ describe('3A: per-reader aggregation over a slice', () => {
     const r = await verifyEvidenceSlice([chain[0], chain[1], dropped], COMPLETE)
     expect(r.rows[2]).toMatchObject({ kind: 'invalid', hash: 'invalid_input' })
     expect(r.overall).toBe('failed')
+  })
+})
+
+describe('T164 regressions: no overall verified without proof', () => {
+  it('a v4 middle row missing its hash and link blocks verified without being called corrupt', async () => {
+    const a = await legacyRow(1, 'GENESIS', { type: ACCEPTANCE_TYPE })
+    const m = { ...(await legacyRow(2, a.event_hash)), event_hash: null, prev_event_hash: null }
+    const c = await legacyRow(3, a.event_hash)
+    const r = await verifyEvidenceSlice([a, m, c], COMPLETE)
+    expect(r.rows[1]).toMatchObject({ hash: 'missing', link: 'missing', payload: 'match', agreement: 'match' })
+    expect(r.rows[2].link).toBe('linked')
+    expect(r.dimensions).toMatchObject({ hash: 'indeterminate', link: 'indeterminate' })
+    expect(r.overall).toBe('incomplete')
+  })
+
+  it('an all-unhashed legacy prefix stays unverified, never a passing hash dimension', async () => {
+    const rows = [await legacyRow(1, null, { version: 1, hashed: false }), await legacyRow(2, null, { version: 1, hashed: false })]
+    const r = await verifyEvidenceSlice(rows, { ...COMPLETE, acceptance: 'none' })
+    expect(r.rows.map(x => x.hash)).toEqual(['pre_chain', 'pre_chain'])
+    expect(r.dimensions.hash).toBe('indeterminate')
+    expect(r.overall).toBe('incomplete')
+    const unknown = await verifyEvidenceSlice(rows, { ...COMPLETE, startsAtChainStart: false, acceptance: 'unknown' })
+    expect(unknown.rows.map(x => x.hash)).toEqual(['not_recorded', 'not_recorded'])
+  })
+
+  it('a full-boundary slice whose v5 digest matches at an unknown acceptance position is not verified', async () => {
+    const only = await v5Row(1, 'GENESIS')
+    const r = await verifyEvidenceSlice([only], { ...COMPLETE, acceptance: 'unknown' })
+    expect(r.acceptance).toEqual({ status: 'caller' })
+    expect(r.rows[0]).toMatchObject({ hash: 'match', link: 'linked', payload: 'match', agreement: 'match_position_unknown' })
+    expect(r.dimensions).toMatchObject({ hash: 'pass', link: 'pass', payload: 'pass', completeness: 'pass', agreement: 'indeterminate' })
+    expect(r.overall).toBe('incomplete')
+  })
+
+  it('inconsistent or out-of-range acceptance markers are rejected and nothing about agreement passes', async () => {
+    const chain = await mixedChain()
+    const second = await legacyRow(9, chain[2].event_hash, { type: ACCEPTANCE_TYPE })
+    for (const [acceptance, rows, reason] of [
+      [{ index: 3 }, chain, 'out of range'],
+      [{ index: -1 }, chain, 'out of range'],
+      [{ index: 1.5 }, chain, 'out of range'],
+      [{ index: 1 }, chain, 'does not name'],
+      ['none', chain, 'contradicts'],
+      ['before_slice', chain, 'contradicts'],
+      ['unknown', [...chain, second], 'more than one'],
+      ['sometimes', chain, 'unrecognised'],
+    ]) {
+      const r = await verifyEvidenceSlice(rows, { ...COMPLETE, acceptance })
+      expect(r.acceptance.status, JSON.stringify(acceptance)).toBe('rejected')
+      expect(r.acceptance.reason).toContain(reason)
+      expect(r.rows.filter(x => x.kind !== 'invalid').every(x => x.agreement === 'indeterminate'), JSON.stringify(acceptance)).toBe(true)
+      expect(r.overall).not.toBe('verified')
+    }
   })
 })
 

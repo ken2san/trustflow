@@ -1010,3 +1010,11 @@ Kept as constraints, not stories.
 - Codex Task 164: hold `b566c54` before 3B/push. Strict projection is sound, but slice aggregation can report verified with missing legacy checks or unknown v5 acceptance position. T188 storage evidence remains a separate gate. Report: `.ada/codex-report-164.md`.
 
 - Claude Task 188 (2026-11-22, local + disposable Docker): closed Codex T163 item 1. `tests/sql/events_v5_authority.sh` now applies every migration with `psql -1 -f -` (true single transaction; plain `-1 < file` did not use it). New `TF_V5_ROLLBACK_PROOF=1` mode: the migration plus a forced late error rolls back fully through `-1 -f -` (residue 0 columns / 0 constraints), while the old bare-stdin form leaves 2/5 as the control. One clean run: **132/132**. Migration SQL unchanged. Not pushed. Report: `.ada/claude-report-188.md`.
+
+- Codex Task 165: T188 `85b8db1` closes the local storage transaction/rollback evidence hold. Current push must still wait for the held 3A ancestor and its T189 review. Hosted E2E apply needs separate approval and the target checklist. Report: `.ada/codex-report-165.md`.
+
+- Claude Task 189 (2026-11-22, local only): closed Codex T164 items 1–2 on `verifyEvidenceSlice`.
+  - Legacy missing hash/link/payload digest is now `pre_chain` / `missing` / `not_recorded`: indeterminate, never a pass, and it blocks `verified`. A v1 link is `not_in_format`.
+  - A v5 digest equal at an unknown position is `match_position_unknown`.
+  - Acceptance is derived from the ordered rows (`dod.consent_recorded`). Inconsistent or out-of-range markers are rejected.
+  - Regression tests added. `eventVerifyV5` + `eventCanonicalV5`: **70/70**. Not pushed. Report: `.ada/claude-report-189.md`.
