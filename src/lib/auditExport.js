@@ -22,6 +22,10 @@ import {
   GENESIS_HASH, eventCanonical, canonicalVersionOf, bindsWholeAgreement,
   isSupportedHashVersion, payloadHash, sha256Hex,
 } from '../../supabase/functions/_shared/eventCanonical.ts'
+import {
+  classifyStoredEvent, verifyEvidenceSlice, verifyV5EventHash,
+} from '../../supabase/functions/_shared/eventVerifyV5.ts'
+import { acceptedAgreementHashOf } from '../../supabase/functions/_shared/guestEventView.ts'
 
 const EXPORT_VERSION = '2.0'
 
@@ -33,8 +37,12 @@ const EXPORT_VERSION = '2.0'
  * @param {string}   params.dodHash      - SHA-256 of the original DoD
  * @param {object[]} params.events       - array of event objects from eventLog
  * @param {object}   [params.meta]       - optional extra metadata (title, parties, etc.)
+ * @param {object}   [params.evidence]   - what the caller can prove about the read, used only
+ *   when the trail holds v5 (or v5-shaped invalid) rows: `start` is 'first_event' only if the
+ *   read provably began at the deal's first event, `tailComplete` only if nothing after the
+ *   last row was left out. Absent means unknown, so completeness is never claimed by omission.
  */
-export async function buildAuditDocument({ contractId, dodHash, events, meta = {} }) {
+export async function buildAuditDocument({ contractId, dodHash, events, meta = {}, evidence = {} }) {
   // Chain verification depends on chronological order — the events array as
   // received isn't guaranteed to be in that order (fetchContractEvents
   // returns newest-first; realtime-appended events may be mixed in).
@@ -134,6 +142,60 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
   // false, and the export therefore came out VERIFIED — the one word a reader
   // takes at face value — for a row nothing had checked. So unsupported rows
   // are counted separately and they dominate the aggregate.
+  // ── Strict v5 rows (row 3 step 3C-core) ──────────────────────────────────
+  // Gated: a trail with no v5 or v5-shaped row produces exactly today's
+  // document. A strict row is never hashed through the legacy canonical — an
+  // authority-bearing row labelled v4 would otherwise recompute as legacy.
+  const strictKinds = chronological.map(ev => classifyStoredEvent(ev))
+  const hasStrict = strictKinds.some(k => k.kind === 'v5' || k.kind === 'invalid')
+  let v5Verification = null
+  let slice = null
+  if (hasStrict) {
+    const accepted = await acceptedAgreementHashOf(chronological)
+    slice = await verifyEvidenceSlice(chronological, {
+      startsAtChainStart: evidence.start === 'first_event',
+      tailComplete: evidence.tailComplete === true,
+      acceptance: 'unknown',
+      acceptedAgreementHash: accepted.hash,
+      legacyAgreementHash: accepted.hash,
+    })
+    const tri = (value, yes, no) => (value === yes ? true : value === no ? false : null)
+    for (let i = 0; i < chronological.length; i++) {
+      const kind = strictKinds[i].kind
+      if (kind !== 'v5' && kind !== 'invalid') continue
+      const row = slice.rows[i]
+      const ev = chronological[i]
+      const v = kind === 'v5' ? await verifyV5EventHash(ev, ev.event_hash) : null
+      verifiedEvents[i]._export_verification = {
+        ...verifiedEvents[i]._export_verification,
+        canonical_version: kind === 'v5' ? 5 : verifiedEvents[i]._export_verification.canonical_version,
+        // Supported means this build verified the row under strict v5 rules;
+        // an invalid row is not an unsupported version, it is invalid evidence.
+        canonical_version_supported: kind === 'v5' ? true : null,
+        substance_match: tri(row.payload, 'match', 'mismatch'),
+        binds_whole_agreement: kind === 'v5',
+        recomputed_hash: v && v.verdict !== 'invalid_input' ? v.hash : null,
+        hash_match: tri(row.hash, 'match', 'mismatch'),
+        chain_link_match: tri(row.link, 'linked', 'broken'),
+        payload_hash_in_format: kind === 'v5' ? true : null,
+        strict_v5: { kind, hash: row.hash, link: row.link, payload: row.payload, agreement: row.agreement,
+          reason: row.reason ?? null },
+      }
+    }
+    v5Verification = {
+      evidence: { start: evidence.start === 'first_event' ? 'first_event' : 'unknown',
+        tail_complete: evidence.tailComplete === true },
+      accepted_agreement: accepted,
+      overall: slice.overall,
+      dimensions: slice.dimensions,
+      acceptance: slice.acceptance,
+      meaning: 'Strict canonical v5 verification over the whole trail: event hash, chain link, full payload '
+        + 'and accepted agreement are separate checks, and VERIFIED requires every one to pass on a trail '
+        + 'known to start at the first event and to be complete. The credential_id and issuer_kind in a v5 '
+        + 'hash are recorded inputs, not proof of who acted.',
+    }
+  }
+
   const unsupportedEvents = verifiedEvents.filter(
     ev => ev._export_verification.canonical_version_supported === false
   )
@@ -179,11 +241,21 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
       // A detected mismatch still outranks an unverifiable row: a broken hash
       // is a finding, while an unknown version is an absence of one. But
       // VERIFIED is reserved for a trail where every row was actually checked.
-      integrity_status:
-        !allHashesMatch ? 'HASH_MISMATCH_DETECTED'
-        : !chainIntact ? 'CHAIN_LINK_BROKEN'
-        : unsupportedEvents.length > 0 ? 'INDETERMINATE_UNSUPPORTED_VERSION'
-        : 'VERIFIED',
+      integrity_status: !hasStrict
+        ? (!allHashesMatch ? 'HASH_MISMATCH_DETECTED'
+          : !chainIntact ? 'CHAIN_LINK_BROKEN'
+          : unsupportedEvents.length > 0 ? 'INDETERMINATE_UNSUPPORTED_VERSION'
+          : 'VERIFIED')
+        // With strict rows a known mismatch still ranks first, and VERIFIED
+        // additionally needs the strict slice verdict, never an omission.
+        : (!allHashesMatch || slice.rows.some(r => r.hash === 'mismatch' || r.payload === 'mismatch')
+            ? 'HASH_MISMATCH_DETECTED'
+          : slice.rows.some(r => r.hash === 'invalid_input' || r.kind === 'invalid') ? 'INVALID_EVIDENCE_DETECTED'
+          : !chainIntact || slice.dimensions.link === 'fail' ? 'CHAIN_LINK_BROKEN'
+          : slice.dimensions.agreement === 'fail' ? 'AGREEMENT_MISMATCH_DETECTED'
+          : unsupportedEvents.length > 0 ? 'INDETERMINATE_UNSUPPORTED_VERSION'
+          : slice.overall !== 'verified' ? 'INDETERMINATE_INCOMPLETE_EVIDENCE'
+          : 'VERIFIED'),
       // Named so a reader does not have to scan every event to find out why.
       unsupported_canonical_versions: unsupportedEvents.length === 0 ? null : {
         count: unsupportedEvents.length,
@@ -194,6 +266,7 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
           + 'versions, so their hashes were neither confirmed nor refuted. '
           + 'Verify them with a build that supports the version.',
       },
+      ...(hasStrict ? { v5_verification: v5Verification } : {}),
       counterparty_consent: counterpartyConsent,
       meta,
       events:               verifiedEvents,
@@ -207,6 +280,9 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
         '7. Nothing in this export establishes who wrote an event or when. actor_id and created_at are the values recorded in each row; any client could set them before 2026-09-24, and an operator with database access could rewrite rows and recompute the chain at any time. A hash that recomputes shows the recorded fields agree with it, not that they are true. Exports before version 2.0 carried _export_verification.trust_model: "server_attested" meant canonical_version 2 or later and "client_asserted" meant below 2; neither identified who wrote an event.',
         '8. tsa_token_present only means a token was returned at logging time — it has not been cryptographically verified here. To actually verify one, check its RFC 3161 signature against FreeTSA\'s public certificate. No event in this system currently carries one.',
         '9. dod_hash is the recorded digest of the Definition of Done. Whether it matches a given text is a separate comparison; the event hash covers the digest, not the text.',
+        ...(hasStrict ? [
+          '10. For events with canonical_version 5, recompute SHA-256 over exactly {domain: "trustflow.event", hash_version: 5, id, type, contract_id, actor_id, dod_hash, created_at, prev_hash, payload_hash, agreement_hash, credential_id, issuer_kind} in that key order, compact JSON, UTF-8, where created_at is the UTC instant with exactly three fractional digits and a trailing Z, and prev_hash is the event\'s own prev_event_hash (never defaulted). Every field is required; only agreement_hash may be null, and null means no agreement was cited, not that one was accepted. A missing or malformed input is invalid evidence, not a mismatch. _export_verification.strict_v5 and v5_verification report each check separately.',
+        ] : []),
       ],
     },
   }

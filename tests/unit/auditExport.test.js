@@ -369,7 +369,9 @@ describe('event ordering', () => {
  * stored hash is deliberately well-formed and its chain link correct: the point
  * is that everything *checkable* checks out and the version still cannot be.
  */
-function futureVersionEvent({ id, type, actorId, createdAt, prevHash, version = 5 }) {
+// Version 6, not 5: since Task 193 this build verifies v5 strictly, so 5 is no
+// longer a version it cannot verify. The malformed "v5" shape is covered below.
+function futureVersionEvent({ id, type, actorId, createdAt, prevHash, version = 6 }) {
   return {
     id, type, contract_id: CONTRACT, actor_id: actorId, dod_hash: null,
     created_at: createdAt, prev_event_hash: prevHash, hash_version: version,
@@ -487,5 +489,123 @@ describe('a canonical version this build cannot verify', () => {
     expect(ev._export_verification.canonical_version).toBe(1)
     expect(ev._export_verification.canonical_version_supported).toBe(true)
     expect(ev._export_verification.hash_match).toBe(true)
+  })
+})
+
+// ── 3C-core: strict v5 rows in the owner export (Task 193) ──────────────────
+import { eventCanonical, payloadHash, sha256Hex } from '../../supabase/functions/_shared/eventCanonical.ts'
+import { buildEventCanonicalV5 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
+
+const V5_SNAPSHOT = { amount: 1250, currency: 'CAD', deadline: null, dod: ['Translate'], offered_by: 'Example',
+  performed_by: 'creator', project_name: 'Example', snapshot_version: 1 }
+const vuid = n => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`
+let v5clock = Date.parse('2026-03-01T00:00:00.000Z')
+const v5at = () => new Date((v5clock += 1000)).toISOString()
+
+async function ownerV4(n, prev, { type = 'performance.asserted', payload = { note: `v4-${n}` }, agreement, extra = {} } = {}) {
+  const row = { id: vuid(n), type, contract_id: CONTRACT, actor_id: 'owner', dod_hash: 'd'.repeat(64), created_at: v5at(),
+    prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement, hash_version: 4,
+    tsa_token: null, ...extra }
+  row.event_hash = await sha256Hex(eventCanonical(row, 4))
+  return row
+}
+async function ownerV5(n, prev, { agreement, payload = { note: `v5-${n}` } } = {}) {
+  const row = { id: vuid(n), type: 'payment.reported', contract_id: CONTRACT, actor_id: vuid(6), dod_hash: 'd'.repeat(64),
+    created_at: v5at(), prev_event_hash: prev, payload, payload_hash: await payloadHash(payload), agreement_hash: agreement,
+    hash_version: 5, credential_id: vuid(7), issuer_kind: 'owner_account', tsa_token: null }
+  const built = buildEventCanonicalV5(row)
+  if (!built.ok) throw new Error(built.field)
+  row.event_hash = await sha256Hex(built.canonical)
+  return row
+}
+async function ownerTrail() {
+  const accepted = await sha256Hex(stableStringify(V5_SNAPSHOT))
+  const a = await ownerV4(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: V5_SNAPSHOT }, agreement: accepted })
+  const b = await ownerV5(2, a.event_hash, { agreement: accepted })
+  return { rows: [a, b], accepted }
+}
+const COMPLETE_READ = { start: 'first_event', tailComplete: true }
+const doc = async (events, evidence) =>
+  (await buildAuditDocument({ contractId: CONTRACT, dodHash: 'd'.repeat(64), events, evidence })).trustflow_audit_trail
+
+describe('3C-core: owner export with strict v5 rows', () => {
+  it('a legacy-only trail is unchanged: no v5 section, the original nine instructions', async () => {
+    const a = await ownerV4(1, 'GENESIS')
+    const t = await doc([a])
+    expect('v5_verification' in t).toBe(false)
+    expect(t.verification_instructions).toHaveLength(9)
+    expect(t.events[0]._export_verification).not.toHaveProperty('strict_v5')
+    expect(t.integrity_status).toBe('VERIFIED')
+  })
+
+  it('a mixed v4 → v5 trail read completely is VERIFIED, with each check reported', async () => {
+    const { rows, accepted } = await ownerTrail()
+    const t = await doc(rows, COMPLETE_READ)
+    expect(t.integrity_status).toBe('VERIFIED')
+    expect(t.v5_verification).toMatchObject({ overall: 'verified', accepted_agreement: { hash: accepted, status: 'ok' } })
+    expect(t.events[1]._export_verification).toMatchObject({
+      canonical_version: 5, canonical_version_supported: true, hash_match: true, chain_link_match: true,
+      substance_match: true, recomputed_hash: rows[1].event_hash,
+      strict_v5: { kind: 'v5', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' },
+    })
+    expect(t.unsupported_canonical_versions).toBe(null)
+    expect(t.verification_instructions).toHaveLength(10)
+  })
+
+  it('without evidence of a complete read, the same trail is never VERIFIED', async () => {
+    const { rows } = await ownerTrail()
+    expect((await doc(rows)).integrity_status).toBe('INDETERMINATE_INCOMPLETE_EVIDENCE')
+    expect((await doc(rows, { start: 'first_event', tailComplete: false })).integrity_status).toBe('INDETERMINATE_INCOMPLETE_EVIDENCE')
+  })
+
+  it('a tampered v5 payload is a hash mismatch, and outranks incompleteness', async () => {
+    const { rows } = await ownerTrail()
+    const tampered = [rows[0], { ...rows[1], payload: { note: 'edited' } }]
+    expect((await doc(tampered, COMPLETE_READ)).integrity_status).toBe('HASH_MISMATCH_DETECTED')
+    expect((await doc(tampered)).integrity_status).toBe('HASH_MISMATCH_DETECTED')
+  })
+
+  it('an incomplete v5 row is invalid evidence, not unsupported and not verified', async () => {
+    const { rows } = await ownerTrail()
+    const t = await doc([rows[0], { ...rows[1], credential_id: null }], COMPLETE_READ)
+    expect(t.integrity_status).toBe('INVALID_EVIDENCE_DETECTED')
+    expect(t.events[1]._export_verification.strict_v5).toMatchObject({ kind: 'v5', hash: 'invalid_input' })
+    expect(t.unsupported_canonical_versions).toBe(null)
+  })
+
+  it('an authority-bearing row labelled v4 never recomputes as legacy', async () => {
+    const accepted = await sha256Hex(stableStringify(V5_SNAPSHOT))
+    const a = await ownerV4(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: V5_SNAPSHOT }, agreement: accepted })
+    // Its legacy v4 hash is genuinely correct, because v4 ignores the authority fields.
+    const b = await ownerV4(2, a.event_hash, { agreement: accepted, extra: { credential_id: vuid(7), issuer_kind: 'owner_account' } })
+    const t = await doc([a, b], COMPLETE_READ)
+    expect(t.integrity_status).toBe('INVALID_EVIDENCE_DETECTED')
+    expect(t.events[1]._export_verification.strict_v5.kind).toBe('invalid')
+  })
+
+  it('a v5 broken link and a null digest after acceptance are reported as such', async () => {
+    const { rows, accepted } = await ownerTrail()
+    const broken = await ownerV5(3, 'e'.repeat(64), { agreement: accepted })
+    expect((await doc([rows[0], broken], COMPLETE_READ)).integrity_status).toBe('CHAIN_LINK_BROKEN')
+    const nullAfter = await ownerV5(4, rows[0].event_hash, { agreement: null })
+    const t = await doc([rows[0], nullAfter], COMPLETE_READ)
+    expect(t.events[1]._export_verification.strict_v5.agreement).toBe('invalid')
+    expect(t.integrity_status).toBe('AGREEMENT_MISMATCH_DETECTED')
+  })
+})
+
+describe('3C-core: a malformed row labelled v5 is invalid evidence, never VERIFIED', () => {
+  it('the former future-version v5 fixture now fails strict v5 validation', async () => {
+    const first = attestedEvent({
+      id: 'e1', type: 'contract.accepted', actorId: 'a', createdAt: '2026-11-01T00:00:00.000Z',
+      prevHash: 'GENESIS',
+    })
+    const second = futureVersionEvent({
+      id: 'e2', type: 'performance.asserted', actorId: 'a',
+      createdAt: '2026-11-02T00:00:00.000Z', prevHash: first.event_hash, version: 5,
+    })
+    const t = (await build([first, second], )).trustflow_audit_trail
+    expect(t.integrity_status).toBe('INVALID_EVIDENCE_DETECTED')
+    expect(t.events[1]._export_verification.strict_v5).toMatchObject({ kind: 'v5', hash: 'invalid_input' })
   })
 })
