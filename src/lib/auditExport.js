@@ -72,17 +72,25 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
   // untampered event as altered — which is exactly what this function used to
   // do to every historical row. The canonical itself is defined once, in
   // _shared/eventCanonical.ts, and shared with the server that writes it.
+  // Classified BEFORE dispatch (Codex T170): a strict row (v5, or a v5-shaped
+  // invalid row such as authority values on a v4 row) never reaches the legacy
+  // canonical or payload check; its fields come only from the strict slice.
+  const strictKinds = chronological.map(ev => classifyStoredEvent(ev))
+  const isStrictRow = i => strictKinds[i].kind === 'v5' || strictKinds[i].kind === 'invalid'
+  const hasStrict = strictKinds.some((_, i) => isStrictRow(i))
+
   let prevHash = GENESIS_HASH
   const verifiedEvents = []
-  for (const ev of chronological) {
+  for (const [index, ev] of chronological.entries()) {
     const hashVersion = canonicalVersionOf(ev)
+    const legacyCheckable = !isStrictRow(index)
     // A version this build cannot produce is reported as unsupported, not
     // hashed under a guess. eventCanonical throws rather than falling through
     // to the newest shape, so an export must ask first — otherwise one row
     // from a future build would make the whole export fail, and a guessed
     // digest would read as a verification.
     const versionSupported = isSupportedHashVersion(hashVersion)
-    const recomputedHash = versionSupported
+    const recomputedHash = versionSupported && legacyCheckable
       ? await sha256Hex(eventCanonical(ev, hashVersion))
       : null
 
@@ -94,7 +102,7 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
     // result as a check. Caught by its own test, after the same fix had been
     // made in the guest view and missed here — which is the argument for
     // testing both readers rather than the shared primitive.
-    const substanceMatch = versionSupported && hashVersion >= 3 && ev.payload_hash
+    const substanceMatch = versionSupported && legacyCheckable && hashVersion >= 3 && ev.payload_hash
       ? (await payloadHash(ev.payload ?? {})) === ev.payload_hash
       : null
     const hashMatch = ev.event_hash && recomputedHash !== null
@@ -146,8 +154,6 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
   // Gated: a trail with no v5 or v5-shaped row produces exactly today's
   // document. A strict row is never hashed through the legacy canonical — an
   // authority-bearing row labelled v4 would otherwise recompute as legacy.
-  const strictKinds = chronological.map(ev => classifyStoredEvent(ev))
-  const hasStrict = strictKinds.some(k => k.kind === 'v5' || k.kind === 'invalid')
   let v5Verification = null
   let slice = null
   if (hasStrict) {
@@ -182,6 +188,18 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
           reason: row.reason ?? null },
       }
     }
+    // Links come from the slice for EVERY row on a strict trail, and the
+    // expected predecessor mirrors it: GENESIS only at a known start, then the
+    // last stored digest; unknown (null) at an unknown boundary.
+    const isDigest = v => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)
+    let expected = evidence.start === 'first_event' ? GENESIS_HASH : null
+    for (let i = 0; i < chronological.length; i++) {
+      verifiedEvents[i]._export_verification.expected_prev_hash = expected
+      verifiedEvents[i]._export_verification.chain_link_match = tri(slice.rows[i].link, 'linked', 'broken')
+      const stored = chronological[i].event_hash
+      if (isDigest(stored)) expected = stored
+      else if (stored !== null && stored !== undefined) expected = null
+    }
     v5Verification = {
       evidence: { start: evidence.start === 'first_event' ? 'first_event' : 'unknown',
         tail_complete: evidence.tailComplete === true },
@@ -189,10 +207,31 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
       overall: slice.overall,
       dimensions: slice.dimensions,
       acceptance: slice.acceptance,
+      findings: [],
       meaning: 'Strict canonical v5 verification over the whole trail: event hash, chain link, full payload '
         + 'and accepted agreement are separate checks, and VERIFIED requires every one to pass on a trail '
         + 'known to start at the first event and to be complete. The credential_id and issuer_kind in a v5 '
         + 'hash are recorded inputs, not proof of who acted.',
+    }
+  }
+
+  // Every proven finding on a strict trail, in priority order; the headline
+  // status is the first. Listing all of them keeps a proven link or agreement
+  // failure visible beside invalid rows (Codex T170).
+  if (hasStrict) {
+    const rows = slice.rows
+    const has = (dim, values) => rows.some(r => values.includes(r[dim]))
+    const candidates = [
+      ['HASH_MISMATCH_DETECTED', has('hash', ['mismatch']) || has('payload', ['mismatch'])],
+      ['INVALID_EVIDENCE_DETECTED', rows.some(r => r.kind === 'invalid'
+        || ['hash', 'link', 'payload', 'agreement'].some(d => r[d] === 'invalid_input'))],
+      ['CHAIN_LINK_BROKEN', has('link', ['broken'])],
+      ['AGREEMENT_MISMATCH_DETECTED', has('agreement', ['mismatch', 'invalid'])],
+      ['INDETERMINATE_UNSUPPORTED_VERSION', rows.some(r => r.kind === 'unsupported')],
+    ]
+    v5Verification.findings = candidates.filter(([, present]) => present).map(([name]) => name)
+    if (v5Verification.findings.length === 0 && slice.overall !== 'verified') {
+      v5Verification.findings.push('INDETERMINATE_INCOMPLETE_EVIDENCE')
     }
   }
 
@@ -248,14 +287,7 @@ export async function buildAuditDocument({ contractId, dodHash, events, meta = {
           : 'VERIFIED')
         // With strict rows a known mismatch still ranks first, and VERIFIED
         // additionally needs the strict slice verdict, never an omission.
-        : (!allHashesMatch || slice.rows.some(r => r.hash === 'mismatch' || r.payload === 'mismatch')
-            ? 'HASH_MISMATCH_DETECTED'
-          : slice.rows.some(r => r.hash === 'invalid_input' || r.kind === 'invalid') ? 'INVALID_EVIDENCE_DETECTED'
-          : !chainIntact || slice.dimensions.link === 'fail' ? 'CHAIN_LINK_BROKEN'
-          : slice.dimensions.agreement === 'fail' ? 'AGREEMENT_MISMATCH_DETECTED'
-          : unsupportedEvents.length > 0 ? 'INDETERMINATE_UNSUPPORTED_VERSION'
-          : slice.overall !== 'verified' ? 'INDETERMINATE_INCOMPLETE_EVIDENCE'
-          : 'VERIFIED'),
+        : (v5Verification.findings[0] ?? (slice.overall === 'verified' ? 'VERIFIED' : 'INDETERMINATE_INCOMPLETE_EVIDENCE')),
       // Named so a reader does not have to scan every event to find out why.
       unsupported_canonical_versions: unsupportedEvents.length === 0 ? null : {
         count: unsupportedEvents.length,

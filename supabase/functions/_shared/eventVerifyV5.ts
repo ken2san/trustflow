@@ -238,7 +238,7 @@ export function checkV5Agreement(
 export type MissingProof = 'pre_chain' | 'missing' | 'not_recorded'
 export type HashCheck = 'match' | 'mismatch' | 'unsupported' | 'invalid_input' | MissingProof
 export type LinkCheck = LinkVerdict | MissingProof | 'not_in_format'
-export type PayloadCheck = 'match' | 'mismatch' | 'unavailable' | 'not_in_format' | 'indeterminate' | MissingProof
+export type PayloadCheck = 'match' | 'mismatch' | 'unavailable' | 'not_in_format' | 'indeterminate' | 'invalid_input' | MissingProof
 export type AgreementCheck = AgreementVerdict | 'not_bound'
 export type Dimension = 'pass' | 'fail' | 'indeterminate'
 
@@ -376,11 +376,13 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
       hash: 'invalid_input', link: 'invalid_input', payload: 'indeterminate', agreement: 'invalid_input',
     }
     const payload = dataValue(obj, 'payload')
-    const payloadCheck = async (): Promise<PayloadCheck> => {
+    const payloadCheck = async (strict: boolean): Promise<PayloadCheck> => {
       if (payload.accessor) return 'indeterminate'
       if (!payload.present || payload.value === undefined) return 'unavailable'
       const recorded = dataValue(obj, 'payload_hash').value
-      if (!isDigest(recorded)) return 'mismatch'
+      // A v5 row with no usable digest is invalid evidence, not a proven
+      // mismatch (Codex T170); legacy rows keep today's reading.
+      if (!isDigest(recorded)) return strict ? 'invalid_input' : 'mismatch'
       return (await payloadHash(payload.value)) === recorded ? 'match' : 'mismatch'
     }
 
@@ -395,7 +397,7 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
       result.hash = v.verdict === 'invalid_input' ? 'invalid_input' : v.verdict
       if (v.verdict === 'invalid_input') result.reason = `${v.field}: ${v.reason}`
       result.link = checkV5Link(row, expectation)
-      result.payload = await payloadCheck()
+      result.payload = await payloadCheck(true)
       result.agreement = acceptance.status.status === 'rejected' ? 'indeterminate' : checkV5Agreement(row, {
         position: positionOf(index, acceptance.marker, opts.startsAtChainStart),
         acceptedAgreementHash: opts.acceptedAgreementHash,
@@ -416,7 +418,7 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
       const recordedPayload = dataValue(obj, 'payload_hash').value
       result.payload = version < 3 ? 'not_in_format'
         : recordedPayload === null || recordedPayload === undefined ? missingProof()
-        : await payloadCheck()
+        : await payloadCheck(false)
       if (!bindsWholeAgreement(version)) result.agreement = 'not_bound'
       else if (acceptance.status.status === 'rejected') result.agreement = 'indeterminate'
       else if (!isDigest(opts.legacyAgreementHash)) result.agreement = 'indeterminate'

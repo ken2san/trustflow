@@ -567,6 +567,19 @@ describe('T166 regressions: acceptance markers cannot buy a verified slice', () 
   })
 })
 
+describe('T170: payload digest semantics', () => {
+  it('a v5 row with an unusable payload digest is invalid input; a legacy row keeps its mismatch reading', async () => {
+    const chain = await mixedChain()
+    for (const bad of [null, 'X'.repeat(64)]) {
+      const r = await verifyEvidenceSlice([chain[0], { ...chain[1], payload_hash: bad }, chain[2]], COMPLETE)
+      expect(r.rows[1].payload, String(bad)).toBe('invalid_input')
+      expect(r.overall).toBe('failed')
+    }
+    const legacy = await verifyEvidenceSlice([chain[0], chain[1], { ...chain[2], payload_hash: 'X'.repeat(64) }], COMPLETE)
+    expect(legacy.rows[2].payload).toBe('mismatch')
+  })
+})
+
 describe('3A: legacy constants unchanged', () => {
   it('v5 is still not a legacy-supported version and the writer stays on v4', () => {
     expect([...SUPPORTED_HASH_VERSIONS]).toEqual([1, 2, 3, 4])

@@ -622,3 +622,83 @@ describe('T169: owner export with a self-consistently hashed wrong-type snapshot
     expect(t.integrity_status).toBe('INDETERMINATE_INCOMPLETE_EVIDENCE')
   })
 })
+
+// ── T170: strict owner-export dispatch, links and invalid digests ───────────
+// A pass-through wrapper records which rows reach the legacy canonical and
+// payload functions, so the tests below check the execution path itself.
+const legacyCalls = vi.hoisted(() => ({ canonical: [], payload: [] }))
+vi.mock('../../supabase/functions/_shared/eventCanonical.ts', async (importOriginal) => {
+  const orig = await importOriginal()
+  return {
+    ...orig,
+    eventCanonical: (ev, version) => { legacyCalls.canonical.push(ev?.id); return orig.eventCanonical(ev, version) },
+    payloadHash: (payload) => { legacyCalls.payload.push(payload); return orig.payloadHash(payload) },
+  }
+})
+
+describe('T170: strict rows never reach the legacy checks', () => {
+  it('an authority-bearing v4 row is classified before dispatch and skips the legacy canonical and payload check', async () => {
+    const accepted = await sha256Hex(stableStringify(V5_SNAPSHOT))
+    const a = await ownerV4(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: V5_SNAPSHOT }, agreement: accepted })
+    const bPayload = { note: 'authority-bearing' }
+    const b = await ownerV4(2, a.event_hash, { agreement: accepted, payload: bPayload,
+      extra: { credential_id: vuid(7), issuer_kind: 'owner_account' } })
+    legacyCalls.canonical.length = 0
+    legacyCalls.payload.length = 0
+    const t = await doc([a, b], COMPLETE_READ)
+    // Control: the wrapper does observe the legacy row.
+    expect(legacyCalls.canonical).toContain(a.id)
+    // The strict row never reaches either legacy function.
+    expect(legacyCalls.canonical).not.toContain(b.id)
+    expect(legacyCalls.payload.some(p => p === b.payload)).toBe(false)
+    expect(t.events[1]._export_verification).toMatchObject({ recomputed_hash: null, hash_match: null,
+      strict_v5: { kind: 'invalid' } })
+    expect(t.integrity_status).toBe('INVALID_EVIDENCE_DETECTED')
+  })
+})
+
+describe('T170: links on strict trails come from the slice', () => {
+  it('a suffix starting with a v4 row whose predecessor is outside the read is not CHAIN_LINK_BROKEN', async () => {
+    const accepted = await sha256Hex(stableStringify(V5_SNAPSHOT))
+    const a = await ownerV4(1, 'f'.repeat(64), { agreement: accepted })
+    const b = await ownerV5(2, a.event_hash, { agreement: accepted })
+    const t = await doc([a, b], { start: 'unknown', tailComplete: true })
+    expect(t.events[0]._export_verification).toMatchObject({ expected_prev_hash: null, chain_link_match: null })
+    expect(t.events[1]._export_verification).toMatchObject({ expected_prev_hash: a.event_hash, chain_link_match: true })
+    expect(t.integrity_status).toBe('INDETERMINATE_INCOMPLETE_EVIDENCE')
+    expect(t.v5_verification.findings).toEqual(['INDETERMINATE_INCOMPLETE_EVIDENCE'])
+  })
+
+  it('a proven broken link on a strict trail is still CHAIN_LINK_BROKEN', async () => {
+    const { rows, accepted } = await ownerTrail()
+    const broken = await ownerV5(3, 'e'.repeat(64), { agreement: accepted })
+    const t = await doc([rows[0], broken], COMPLETE_READ)
+    expect(t.events[1]._export_verification).toMatchObject({ expected_prev_hash: rows[0].event_hash, chain_link_match: false })
+    expect(t.integrity_status).toBe('CHAIN_LINK_BROKEN')
+  })
+})
+
+describe('T170: an unusable v5 payload digest is invalid evidence', () => {
+  it('missing or malformed payload_hash on a v5 row is INVALID_EVIDENCE_DETECTED, not a hash mismatch', async () => {
+    const { rows } = await ownerTrail()
+    for (const bad of [null, 'X'.repeat(64), '']) {
+      const t = await doc([rows[0], { ...rows[1], payload_hash: bad }], COMPLETE_READ)
+      expect(t.events[1]._export_verification.strict_v5, String(bad)).toMatchObject({ payload: 'invalid_input', hash: 'invalid_input' })
+      expect(t.integrity_status, String(bad)).toBe('INVALID_EVIDENCE_DETECTED')
+    }
+  })
+
+  it('proven failures beside invalid rows stay visible, and a proven mismatch ranks first', async () => {
+    const { rows, accepted } = await ownerTrail()
+    const broken = await ownerV5(3, 'e'.repeat(64), { agreement: accepted })
+    const invalidAfter = { ...(await ownerV5(4, broken.event_hash, { agreement: accepted })), credential_id: null }
+    const t = await doc([rows[0], broken, invalidAfter], COMPLETE_READ)
+    expect(t.integrity_status).toBe('INVALID_EVIDENCE_DETECTED')
+    expect(t.v5_verification.findings).toEqual(['INVALID_EVIDENCE_DETECTED', 'CHAIN_LINK_BROKEN'])
+
+    const tampered = { ...rows[1], payload: { note: 'edited' } }
+    const t2 = await doc([rows[0], tampered, { ...rows[1], id: vuid(5), credential_id: null }], COMPLETE_READ)
+    expect(t2.integrity_status).toBe('HASH_MISMATCH_DETECTED')
+    expect(t2.v5_verification.findings).toContain('INVALID_EVIDENCE_DETECTED')
+  })
+})
