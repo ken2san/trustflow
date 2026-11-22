@@ -718,3 +718,19 @@ describe('T169: acceptance snapshot values are validated before the digest is ac
     expect(v.server.overall).toBe('failed')
   })
 })
+
+describe('T197: an unusable v5 payload digest through both guest verdicts', () => {
+  it('the server verdict reports payload invalid_input and fails; the local verdict stays unavailable, not promoted', async () => {
+    const { rows } = await mixedTrail()
+    for (const bad of [null, 'X'.repeat(64), '']) {
+      const trail = [rows[0], { ...rows[1], payload_hash: bad }, rows[2]]
+      const v = await guestTrailVerdicts(trail, { contractId: V5CID, truncated: false, start: 'first_event', sentSnapshot: SNAPSHOT })
+      const label = JSON.stringify(bad)
+      expect(v.server.rows[1], label).toMatchObject({ kind: 'v5', hash: 'invalid_input', payload: 'invalid_input' })
+      expect(v.server.overall, label).toBe('failed')
+      expect(v.local.rows[1].payload, label).toBe('unavailable')
+      expect(v.local.rows[1].hash, label).toBe('invalid_input')
+      expect(v.local.overall, label).toBe('failed')
+    }
+  })
+})

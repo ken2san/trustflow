@@ -13,17 +13,19 @@
 // THE LIMIT, WHICH IS INSIDE THE FILE AND NOT IN A README
 // A receipt verifies that the log is internally consistent and that every act
 // is bound to the same agreement terms. It does NOT verify that the text of a
-// statement matches what was committed to, because canonical v4 commits to a
-// single `payload_hash` over the whole payload: disclosing one field would mean
-// disclosing the preimage of all of them, so the parties are shown an
-// allowlisted projection instead and cannot reproduce that digest from it —
-// measured, 0 of 4 events.
+// statement matches what was committed to, because the event hash (v3 and
+// later) commits to a single `payload_hash` over the whole payload: disclosing
+// one field would mean disclosing the preimage of all of them, so the parties
+// are shown an allowlisted projection instead and cannot reproduce that digest
+// from it — measured, 0 of 4 events.
 //
 // That gap is real, is not closed by this script, and is therefore stated in
 // the emitted JSON under `not_verifiable_here`. Closing it needs per-claim
-// salted commitments, which is a canonical v5 and a separate decision. Writing
-// a receipt that implied otherwise would be the exact failure this product is
-// supposed to be against.
+// salted commitments: a separate, undecided commitment format. It is NOT the
+// event-hash v5 of row 3 (`hash_version` 5, which binds the credential id and
+// issuer kind; docs/v5-preimage-review.md) and does not use that number.
+// Writing a receipt that implied otherwise would be the exact failure this
+// product is supposed to be against.
 //
 // Owner-side only for now: the guest's endpoint does not yet return the three
 // digests their half would need. No deploy is implied by this file.
