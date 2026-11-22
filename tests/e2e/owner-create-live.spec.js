@@ -10,11 +10,13 @@
 //
 // WHAT IT CHECKS
 //   0. It writes only to the authorized E2E project: the configured target is
-//      checked before a session is acquired, and the served app's backend
-//      before the session is seeded or anything is submitted.
-//   1. One Send Invite issues exactly one create request (every matching
-//      request is counted, from before the click until the flow has settled)
-//      and no legacy direct insert. The answer is 200 "created", owned by the
+//      checked before a session is acquired; from before the app boots, any
+//      request to another Supabase project is aborted and fails the test, and
+//      no write reaches E2E until the served app's backend is checked, which
+//      happens before the session is seeded or anything is submitted.
+//   1. One Send Invite issues exactly one create request and no legacy direct
+//      insert: every matching request is counted in both browser contexts from
+//      before the click to the end of the test. The answer is 200 "created", owned by the
 //      signed-in account, with each sent parameter equal to what was typed.
 //   2. Independently of that response, the owner can see exactly one draft
 //      carrying this run's unique marker, with the typed terms unchanged and
@@ -24,8 +26,9 @@
 //      guest bearer flow only; C3's verified-account matching is a separate
 //      path, not exercised here.
 //
-// The invite token is a bearer credential: it is compared only as booleans and
-// never placed in an assertion message, a locator or a navigation diagnostic.
+// The invite token is a bearer credential: it is compared only as booleans,
+// never placed in an assertion message, a locator or a navigation diagnostic,
+// and no trace, screenshot or video is kept.
 //
 // WRITES one ordinary draft on the E2E project, as the other live suites do.
 
@@ -35,6 +38,9 @@ import { SUPABASE_URL, SUPABASE_KEY, LIVE_SKIPPED } from './liveEnv.js';
 import { assertE2EProject } from '../../scripts/lib/e2eGuard.mjs';
 
 test.skip(LIVE_SKIPPED, 'TF_LIVE_E2E=skip — the live-API suites were deliberately disabled.');
+// Traces, screenshots and videos would record the invitation URL and page, and
+// with them the bearer token; this spec keeps no artifacts.
+test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 const STORAGE_KEY = `sb-${new URL(SUPABASE_URL ?? 'https://unset.invalid').hostname.split('.')[0]}-auth-token`;
 const LAST_EMAIL_KEY = 'tf_last_earner_email';
@@ -55,12 +61,28 @@ test('a verified owner creates exactly one draft through the real form and its s
   assertE2EProject(SUPABASE_URL);
   const backendOrigin = new URL(SUPABASE_URL).origin;
 
-  // 0b. The served app must call that same backend before it gets a session or a submit.
+  // 0b. Before the app even boots, no request may reach any Supabase project but
+  //     E2E (aborted and recorded), and until the served backend is checked
+  //     only reads may reach E2E.
+  const foreignBackend = [];
+  const preCheckWrites = [];
+  let targetChecked = false;
+  await page.context().route(/\.supabase\.(co|in)\//, (route) => {
+    const r = route.request();
+    const u = new URL(r.url());
+    if (u.origin !== backendOrigin) { foreignBackend.push(u.host); return route.abort(); }
+    if (!targetChecked && !['GET', 'HEAD', 'OPTIONS'].includes(r.method())) preCheckWrites.push(`${r.method()} ${u.pathname}`);
+    return route.continue();
+  });
+  // The served app must call that same backend before it gets a session or a submit.
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
   await page.goto('/');
   const appBackend = await page.evaluate(() => window.__TF_SUPABASE_URL__ ?? null);
   expect(appBackend, 'the served app must call the E2E backend the tests use').toBe(SUPABASE_URL);
   assertE2EProject(appBackend);
+  expect(foreignBackend, 'requests to a Supabase project other than E2E').toEqual([]);
+  expect(preCheckWrites, 'backend writes before the target check').toEqual([]);
+  targetChecked = true;
 
   const { session, token, userId } = await getEarnerSession(request);
   const marker = `Live form create ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -86,16 +108,18 @@ test('a verified owner creates exactly one draft through the real form and its s
   await page.getByLabel('Amount').fill(terms.amount);
   await page.getByLabel('What counts as complete').fill(terms.dod.join('\n'));
 
-  // 1. Count every create-shaped request from before the click until the flow settles.
+  // 1. Count every create-shaped request from before the click to the end of the
+  //    test, owner and guest contexts alike; asserted again after the guest check.
   const createRequests = [];
   const legacyInserts = [];
-  page.on('request', (r) => {
+  const countCreates = (r) => {
     if (r.method() !== 'POST') return;
     let u;
     try { u = new URL(r.url()); } catch { return; }
     if (u.origin === backendOrigin && u.pathname === CREATE_PATH) createRequests.push(r);
     if (u.origin === backendOrigin && u.pathname === '/rest/v1/contracts') legacyInserts.push(r);
-  });
+  };
+  page.context().on('request', countCreates);
   const firstResponse = page.waitForResponse((r) => {
     const u = new URL(r.url());
     return r.request().method() === 'POST' && u.origin === backendOrigin && u.pathname === CREATE_PATH;
@@ -164,6 +188,7 @@ test('a verified owner creates exactly one draft through the real form and its s
     'the displayed invitation carries the created invite token').toBe(true);
 
   const guest = await browser.newContext();
+  guest.on('request', countCreates);
   try {
     const guestPage = await guest.newPage();
     await guestPage.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
@@ -175,4 +200,9 @@ test('a verified owner creates exactly one draft through the real form and its s
   } finally {
     await guest.close();
   }
+
+  // Nothing created anything after the first check, in either context.
+  expect(createRequests.length, 'create requests by the end of the test').toBe(1);
+  expect(legacyInserts.length, 'legacy direct inserts by the end of the test').toBe(0);
+  expect(foreignBackend, 'requests to a Supabase project other than E2E').toEqual([]);
 });

@@ -112,6 +112,11 @@ from the implementation unnoticed.
 deployed on E2E (Task 73) and production (Task 79, 2026-11-16).** The
 published reissue copy and `agent-protocol.md` now match production's backend.
 
+- Claude Task 169 (2026-11-22, test-only): Codex T155 items in `tests/e2e/owner-create-live.spec.js`.
+  - **Artifacts:** `test.use({ trace, screenshot, video: 'off' })`, so no artifact can hold the invite token.
+  - **Request counting:** create and legacy-insert counting now runs in both the owner and guest contexts from before the click to the end of the test, and is asserted again after the guest check (1 and 0).
+  - **Target before boot:** a context route installed before the first page load aborts and records any request to a non-E2E Supabase host, and records any non-read request to E2E before the served-app target check; both must be empty.
+  - Live 1/1 with no token in the output; backend guard 1/1; lint 0 errors; `make check` 779. Report: `.ada/claude-report-169.md`.
 - Claude Task 168 (2026-11-22, test-only): fixed `tests/e2e/owner-create-live.spec.js` per Codex T154 (BLOCK).
   - **Target:** the configured target is checked as E2E before any session; the served app's backend (`window.__TF_SUPABASE_URL__`) is checked before seeding or submit. The matcher requires the E2E origin and the exact `/rest/v1/rpc/create_entry_contract` path.
   - **Requests:** every matching POST is counted from before the click until the shown invite appears and the network is idle: exactly 1 create, 0 legacy `POST /rest/v1/contracts`. Every sent parameter value equals the form input (including null deadline and `creator`).
