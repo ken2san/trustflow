@@ -92,6 +92,9 @@ const ok = (cond, label, detail = '') => {
 
 const REQUIRED_CANONICAL_V5 = [...REQUIRED_CANONICAL, 'credential_id', 'issuer_kind'];
 let indeterminate = null;
+// Set by verifyV2 for a valid draft: the success headline must say it covers a
+// pre-acceptance chain only, with the agreement status stated.
+let preAcceptanceOnly = null;
 
 async function verify(receipt) {
   if (receipt?.receipt_version === 2) return verifyV2(receipt);
@@ -177,11 +180,18 @@ async function verifyV2(receipt) {
   ok(Boolean(read) && ['first_event', 'unknown'].includes(read.start) && typeof read.tail_complete === 'boolean',
     'the receipt states what its read can prove');
 
+  // The receipt is bound to ONE deal: the envelope names it and every act's
+  // canonical inputs (which its hash covers) must name the same one. A label
+  // that can be changed alone would verify a receipt under another deal.
+  const dealId = receipt.agreement?.contract_id;
+  ok(typeof dealId === 'string' && dealId.length > 0, 'the receipt names the deal it is for', String(dealId));
+
   const current = receipt.agreement?.current;
+  let currentHash = null;
   if (current?.snapshot && current?.agreement_hash) {
     const h = await sha256Hex(stableStringify(current.snapshot));
-    ok(h === current.agreement_hash, 'the current-terms digest follows from its snapshot',
-      `${h.slice(0, 12)} vs ${String(current.agreement_hash).slice(0, 12)}`);
+    if (ok(h === current.agreement_hash, 'the current-terms digest follows from its snapshot',
+      `${h.slice(0, 12)} vs ${String(current.agreement_hash).slice(0, 12)}`)) currentHash = h;
   } else {
     ok(false, 'the receipt carries the current terms and their digest');
   }
@@ -194,6 +204,8 @@ async function verifyV2(receipt) {
     if (Object.prototype.hasOwnProperty.call(c, 'prev_hash')) {
       ok(false, `${label} uses only prev_event_hash`, 'a prev_hash alias is not part of the format');
     }
+    ok(c.contract_id === dealId, `${label} belongs to the deal this receipt names`,
+      c.contract_id === dealId ? '' : `${String(c.contract_id)} vs ${String(dealId)}`);
     const kind = classifyStoredEvent(c).kind;
     const required = kind === 'v5' || kind === 'invalid' ? REQUIRED_CANONICAL_V5 : REQUIRED_CANONICAL;
     const missing = required.filter(k => !(k in c));
@@ -203,16 +215,33 @@ async function verifyV2(receipt) {
     blocks.push(copy.ok ? copy.row : c);
   }
 
+  // The agreement baseline is the ACCEPTED digest, proven here from its
+  // snapshot and the acceptance act — never the current terms (Codex T174).
+  // Current terms are a drift comparison only.
   let acceptedHash = null;
   const accepted = receipt.agreement?.accepted;
+  const hasAcceptanceAct = blocks.some(b => b?.type === 'dod.consent_recorded');
   if (accepted) {
     const ag = await acceptedAgreementOf(blocks, () => accepted.snapshot);
     const same = ag.status === 'ok' && ag.hash === accepted.agreement_hash
       && blocks[ag.acceptance_index]?.id === accepted.acceptance_event_id;
     ok(same, 'the accepted agreement follows from its snapshot and the acceptance act', ag.status);
+    ok(accepted.snapshot_version === accepted.snapshot?.snapshot_version,
+      'the accepted snapshot_version matches the snapshot it describes',
+      `${String(accepted.snapshot_version)} vs ${String(accepted.snapshot?.snapshot_version)}`);
     if (same) acceptedHash = ag.hash;
+  } else if (hasAcceptanceAct) {
+    // An acceptance happened, so the record must carry what was accepted. A
+    // missing or unprovable block cannot be read as "nothing to check".
+    ok(false, 'an acceptance act is present, so the receipt carries its validated accepted agreement',
+      receipt.agreement?.accepted_status ?? 'accepted block missing');
   } else {
     console.log(` --  no accepted agreement in this receipt (${receipt.agreement?.accepted_status ?? 'unstated'})`);
+  }
+  if (acceptedHash && currentHash) {
+    console.log(acceptedHash === currentHash
+      ? ' --  current terms match the accepted agreement'
+      : ' --  current terms differ from the accepted agreement (drift since acceptance; not a failure of the record)');
   }
 
   const slice = await verifyEvidenceSlice(blocks, {
@@ -222,7 +251,10 @@ async function verifyV2(receipt) {
     acceptance: read?.start === 'first_event' && read?.tail_complete === true
       && !blocks.some(b => b?.type === 'dod.consent_recorded') ? 'none' : 'unknown',
     acceptedAgreementHash: acceptedHash,
-    legacyAgreementHash: current?.agreement_hash ?? null,
+    // v1–v4 acts are checked against the accepted digest too. With no proven
+    // acceptance there is no baseline, so their agreement check is
+    // indeterminate rather than passed against today's terms.
+    legacyAgreementHash: acceptedHash,
   });
   for (const r of slice.rows) {
     const failed = r.kind === 'invalid'
@@ -237,6 +269,9 @@ async function verifyV2(receipt) {
   if (!verified && !indeterminate) {
     indeterminate = `dimensions ${JSON.stringify(d)}; acceptance ${slice.acceptance.status}`;
   }
+  if (verified && !accepted && !hasAcceptanceAct) {
+    preAcceptanceOnly = receipt.agreement?.accepted_status ?? 'no_acceptance';
+  }
 
   const limits = Array.isArray(receipt.not_verifiable_here) ? receipt.not_verifiable_here : [];
   ok(limits.length > 0, 'the receipt states its own limits rather than implying none', `${limits.length} stated`);
@@ -244,8 +279,14 @@ async function verifyV2(receipt) {
 }
 
 /** Two parties' receipts for one agreement must agree, or the operator equivocated. */
-async function compare(a, b) {
+async function compare(a, b, { bothValid }) {
   console.log('\n--- comparing two receipts for the same agreement ---');
+  // Only validated receipts for the same deal are compared: two consistent
+  // histories under different deal labels are not an equivocation check.
+  if (!ok(bothValid, 'both receipts verified on their own before comparing')) return;
+  const deal = r => r.agreement?.contract_id;
+  if (!ok(deal(a) != null && deal(a) === deal(b), 'both receipts name the same deal',
+    `${String(deal(a))} vs ${String(deal(b))}`)) return;
   // v2 compares the ACCEPTED agreement; v1 carried only one digest.
   const agreementOf = r => (r.receipt_version === 2 ? r.agreement?.accepted?.agreement_hash : r.agreement?.agreement_hash);
   ok(agreementOf(a) != null && agreementOf(a) === agreementOf(b),
@@ -270,7 +311,7 @@ async function main() {
     receipts.push(r);
     await verify(r);
   }
-  if (receipts.length === 2) await compare(receipts[0], receipts[1]);
+  if (receipts.length === 2) await compare(receipts[0], receipts[1], { bothValid: failures === 0 });
 
   console.log(`\n${failures} failed check${failures === 1 ? '' : 's'}`);
   if (failures === 0 && indeterminate) {
@@ -278,8 +319,19 @@ async function main() {
     console.log('Nothing in it was found to be wrong, but this file does not prove a whole, complete history.');
     process.exit(3);
   }
+  if (failures === 0 && preAcceptanceOnly) {
+    console.log(`RECEIPT VERIFIED — pre-acceptance chain only (agreement: ${preAcceptanceOnly}).`);
+    console.log('Recomputed offline over the read boundary the issuer asserts. No agreement was');
+    console.log('accepted in it, so it proves nothing about accepted terms. The hashes cannot');
+    console.log('show that no later valid act was left out of this file.');
+    process.exit(0);
+  }
   if (failures === 0) {
     console.log('RECEIPT VERIFIED — recomputed offline, from this file alone.');
+    if (receipts.some(r => r?.receipt_version === 2)) {
+      console.log('Completeness is the issuer\'s asserted read boundary: the hashes cannot show');
+      console.log('that no later valid act was left out of this file.');
+    }
     console.log('This says nothing about identity, performance, payment, intent,');
     console.log('the text behind any payload_hash, or whether the operator showed');
     console.log('the other party a different history.');

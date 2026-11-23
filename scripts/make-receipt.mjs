@@ -77,9 +77,23 @@ async function main() {
     acceptance: read.start === 'first_event' && read.tail_complete
       && !rows.some(r => r.type === 'dod.consent_recorded') ? 'none' : 'unknown',
     acceptedAgreementHash: receipt.agreement.accepted?.agreement_hash ?? null,
-    legacyAgreementHash: await deriveAgreementHash(contract),
+    // The accepted digest is the baseline for v1–v4 acts too, never today's
+    // terms (Codex T174). Current terms are reported as drift below.
+    legacyAgreementHash: receipt.agreement.accepted?.agreement_hash ?? null,
   });
-  const chainIntact = slice.overall === 'verified';
+  // An acceptance act without a validated accepted agreement is not a record
+  // the issuer can stand behind, whatever the chain says.
+  const acceptanceUnproven = rows.some(r => r.type === 'dod.consent_recorded') && !receipt.agreement.accepted;
+  if (acceptanceUnproven) {
+    console.error(`FAIL: an acceptance act is present but its accepted agreement does not validate (${receipt.agreement.accepted_status}).`);
+  }
+  const currentHash = await deriveAgreementHash(contract);
+  if (receipt.agreement.accepted) {
+    console.log(receipt.agreement.accepted.agreement_hash === currentHash
+      ? 'current terms match the accepted agreement'
+      : 'current terms differ from the accepted agreement (drift since acceptance; not a failure of the record)');
+  }
+  const chainIntact = slice.overall === 'verified' && !acceptanceUnproven;
   const acts = receipt.acts;
 
   // A receipt carries the agreement terms, both parties' roles and an address

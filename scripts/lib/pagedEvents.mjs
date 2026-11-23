@@ -5,8 +5,15 @@
 // A single PostgREST request is silently capped by the project's max-rows
 // setting. A verifier that read one capped page and reported "verified" would
 // be verifying a prefix while calling it the chain. So the read pages until a
-// short page ends it, and it reports `tail_complete: false` — never complete —
-// if it stops at its own row cap first.
+// successful EMPTY page ends it, and it reports `tail_complete: false` — never
+// complete — if it stops at its own row cap first.
+//
+// WHY A SHORT PAGE IS NOT THE END (Codex T174)
+// A page shorter than the requested limit proves nothing: a server row ceiling
+// below `limit` (say PostgREST max-rows 100 under a 500-row request) returns a
+// short page with a tail behind it. So the offset advances by the rows actually
+// returned, and only an empty page — the server saying there is nothing at
+// that offset — ends the read as complete. It costs one extra request.
 //
 // WHY OFFSET PAGING IS SAFE HERE
 // Evidence is append-only, and a deal's created_at is enforced monotonic by the
@@ -33,9 +40,12 @@ export async function fetchAllEvents(fetchPage, contractId, columns, { pageSize 
     if (r.status < 200 || r.status >= 300 || !Array.isArray(r.body)) {
       throw new Error(`events read failed (HTTP ${r.status}); refusing to treat a partial read as the chain`)
     }
+    if (r.body.length > limit) {
+      throw new Error(`events read returned ${r.body.length} rows for a limit of ${limit}; refusing an unbounded page`)
+    }
     pages += 1
+    if (r.body.length === 0) { tailComplete = true; break }
     rows.push(...r.body)
-    if (r.body.length < limit) { tailComplete = true; break }
   }
   // Reaching the cap exactly is not proof of the end: the next page might exist.
   return { rows, read: { start: 'first_event', tail_complete: tailComplete, pages, row_cap: rowCap } }

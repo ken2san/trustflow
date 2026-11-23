@@ -189,9 +189,11 @@ async function mixedRows(snapshot = buildAgreementSnapshot(CONTRACT_V2)) {
   const c = await v4Row(3, b.event_hash, { agreement: current })
   return [a, b, c]
 }
-async function receiptOf(rows, read = COMPLETE_READ) {
-  return buildReceiptV2({ contract: CONTRACT_V2, rows, read, source: SOURCE, issuedAt: '2026-04-01T00:00:00.000Z' })
+async function receiptOf(rows, read = COMPLETE_READ, contract = CONTRACT_V2) {
+  return buildReceiptV2({ contract, rows, read, source: SOURCE, issuedAt: '2026-04-01T00:00:00.000Z' })
 }
+// The same deal with its terms changed after acceptance.
+const CONTRACT_B = { ...CONTRACT_V2, amount_minor: 9999 }
 function runReceipt(label, receipt) {
   const file = path.join(dir, `v2-${label.replace(/\W+/g, '-')}.json`)
   writeFileSync(file, JSON.stringify(receipt, null, 2))
@@ -210,6 +212,9 @@ describe('receipt v2 round trip', { timeout: TEST_MS }, () => {
     expect(Object.keys(receipt.acts[0].canonical)).not.toContain('credential_id')
     const { status, out } = runReceipt('mixed', receipt)
     expect(out).toContain('RECEIPT VERIFIED')
+    expect(out).toContain('current terms match the accepted agreement')
+    expect(out).toMatch(/issuer's asserted read boundary/)
+    expect(out).not.toMatch(/pre-acceptance chain only/)
     expect(status).toBe(0)
   })
 
@@ -273,6 +278,8 @@ describe('receipt v2 round trip', { timeout: TEST_MS }, () => {
     expect(receipt.agreement.accepted_status).toBe('no_acceptance')
     const { status, out } = runReceipt('draft', receipt)
     expect(out).toMatch(/no accepted agreement in this receipt/)
+    expect(out).toContain('RECEIPT VERIFIED — pre-acceptance chain only (agreement: no_acceptance)')
+    expect(out).toMatch(/proves nothing about accepted terms/)
     expect(status).toBe(0)
   })
 
@@ -303,5 +310,91 @@ describe('receipt v2 round trip', { timeout: TEST_MS }, () => {
     const same = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8', timeout: SPAWN_MS })
     expect(same).toContain('both receipts describe the same agreement')
     expect(same).toContain('same acts, in the same order')
+  })
+})
+
+// ── T205: Codex T174's must-fix items for c51de66 ───────────────────────────
+describe('T205: the agreement baseline is the accepted digest, never current terms', { timeout: TEST_MS }, () => {
+  it('a later valid v4 act citing changed terms fails even when current terms equal them', async () => {
+    const snapshot = buildAgreementSnapshot(CONTRACT_V2)
+    const accepted = await sha256Hex(stableStringify(snapshot))
+    const changed = await deriveAgreementHash(CONTRACT_B)
+    const a = await v4Row(8, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: snapshot }, agreement: accepted })
+    const b = await v5Row(9, a.event_hash, { agreement: accepted })
+    const c = await v4Row(5, b.event_hash, { agreement: changed })
+    const { status, out } = runReceipt('baseline-attack', await receiptOf([a, b, c], COMPLETE_READ, CONTRACT_B))
+    expect(out).toMatch(/FAIL \[2\] legacy .*agreement=mismatch/)
+    expect(out).not.toContain('RECEIPT VERIFIED')
+    expect(status).toBe(1)
+  })
+
+  it('terms changed after acceptance are reported as drift, not as a failure of the record', async () => {
+    const { status, out } = runReceipt('drift', await receiptOf(await mixedRows(), COMPLETE_READ, CONTRACT_B))
+    expect(out).toContain('current terms differ from the accepted agreement (drift since acceptance; not a failure of the record)')
+    expect(out).toContain('RECEIPT VERIFIED')
+    expect(status).toBe(0)
+  })
+
+  it('an acceptance act with its accepted block removed fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    receipt.agreement.accepted = null
+    const { status, out } = runReceipt('accepted-removed', receipt)
+    expect(out).toMatch(/FAIL an acceptance act is present, so the receipt carries its validated accepted agreement/)
+    expect(status).toBe(1)
+  })
+
+  it('a v4 draft with no acceptance has no baseline: incomplete, never verified against today\'s terms', async () => {
+    const d = await v4Row(14, 'GENESIS', { type: 'contract.initiated', agreement: await deriveAgreementHash(CONTRACT_V2) })
+    const { status, out } = runReceipt('v4-draft', await receiptOf([d]))
+    expect(out).toContain('RECEIPT NOT VERIFIED — incomplete')
+    expect(status).toBe(3)
+  })
+})
+
+describe('T205: a receipt is bound to one deal', { timeout: TEST_MS }, () => {
+  it('relabelling the envelope deal id fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    receipt.agreement.contract_id = ruid(9)
+    const { status, out } = runReceipt('relabel', receipt)
+    expect(out).toMatch(/FAIL \[0\] .* belongs to the deal this receipt names/)
+    expect(status).toBe(1)
+  })
+
+  it('a missing deal id fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    delete receipt.agreement.contract_id
+    const { status, out } = runReceipt('no-deal', receipt)
+    expect(out).toMatch(/FAIL the receipt names the deal it is for/)
+    expect(status).toBe(1)
+  })
+
+  it('an act from another deal fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    receipt.acts[2].canonical.contract_id = ruid(9)
+    const { status, out } = runReceipt('foreign-act', receipt)
+    expect(out).toMatch(/FAIL \[2\] .* belongs to the deal this receipt names/)
+    expect(status).toBe(1)
+  })
+
+  it('a duplicate snapshot_version that disagrees with the snapshot fails', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    receipt.agreement.accepted.snapshot_version = 2
+    const { status, out } = runReceipt('snapshot-version', receipt)
+    expect(out).toMatch(/FAIL the accepted snapshot_version matches the snapshot it describes/)
+    expect(status).toBe(1)
+  })
+
+  it('compare refuses when a receipt did not verify on its own', async () => {
+    const good = await receiptOf(await mixedRows())
+    const relabelled = JSON.parse(JSON.stringify(good))
+    relabelled.agreement.contract_id = ruid(9)
+    const a = path.join(dir, 'v2-cmp-label-a.json')
+    const b = path.join(dir, 'v2-cmp-label-b.json')
+    writeFileSync(a, JSON.stringify(good)); writeFileSync(b, JSON.stringify(relabelled))
+    let out = ''
+    try { out = execFileSync('node', [VERIFIER, a, b], { encoding: 'utf8', timeout: SPAWN_MS }) }
+    catch (e) { out = `${e.stdout ?? ''}${e.stderr ?? ''}` }
+    expect(out).toMatch(/FAIL both receipts verified on their own before comparing/)
+    expect(out).not.toContain('same acts, in the same order')
   })
 })

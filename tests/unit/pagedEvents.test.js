@@ -14,13 +14,37 @@ const pager = (sizes, status = 200) => {
 }
 
 describe('fetchAllEvents', () => {
-  it('pages in order with explicit limit/offset until a short page ends the read', async () => {
-    const { fetchPage, queries } = pager([500, 500, 123])
+  it('pages in order with explicit limit/offset until an empty page ends the read', async () => {
+    const { fetchPage, queries } = pager([500, 500, 123, 0])
     const { rows, read } = await fetchAllEvents(fetchPage, 'c-1', 'id,type')
     expect(rows).toHaveLength(1123)
-    expect(read).toEqual({ start: 'first_event', tail_complete: true, pages: 3, row_cap: 10000 })
+    expect(read).toEqual({ start: 'first_event', tail_complete: true, pages: 4, row_cap: 10000 })
     expect(queries[0]).toBe('events?contract_id=eq.c-1&select=id,type&order=created_at.asc,id.asc&limit=500&offset=0')
     expect(queries[2]).toContain('&offset=1000')
+    expect(queries[3]).toContain('&offset=1123')
+  })
+
+  it('a short page is not the end: a server ceiling below the limit still reads the tail (Codex T174)', async () => {
+    // PostgREST max-rows 100 under a 500-row request; the deal has 101 rows.
+    const { fetchPage, queries } = pager([100, 1, 0])
+    const { rows, read } = await fetchAllEvents(fetchPage, 'c', 'id')
+    expect(rows).toHaveLength(101)
+    expect(read.tail_complete).toBe(true)
+    expect(queries[1]).toContain('&offset=100')
+    expect(queries[2]).toContain('&offset=101')
+  })
+
+  it('a short page followed by a failed page is an error, never a complete prefix', async () => {
+    let call = 0
+    const fetchPage = async () => (call++ === 0
+      ? { status: 200, body: Array.from({ length: 100 }, (_, i) => ({ id: i })) }
+      : { status: 500, body: null })
+    await expect(fetchAllEvents(fetchPage, 'c', 'id')).rejects.toThrow(/refusing to treat a partial read/)
+  })
+
+  it('a page larger than the limit is refused', async () => {
+    const { fetchPage } = pager([501])
+    await expect(fetchAllEvents(fetchPage, 'c', 'id')).rejects.toThrow(/refusing an unbounded page/)
   })
 
   it('an empty first page is a complete, empty read', async () => {

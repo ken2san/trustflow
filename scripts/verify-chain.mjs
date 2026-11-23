@@ -112,8 +112,15 @@ async function main() {
       // Complete read (checked above): no acceptance act means pre-acceptance.
       startsAtChainStart: true, tailComplete: true,
       acceptance: rows.some(r => r.type === 'dod.consent_recorded') ? 'unknown' : 'none',
-      acceptedAgreementHash: accepted.hash, legacyAgreementHash: await deriveAgreementHash(contract),
+      // The validated accepted digest is the baseline for every act, v1–v4
+      // included; today's terms are a separate drift check (Codex T174). The
+      // legacy-only branch below keeps its current-terms comparison.
+      acceptedAgreementHash: accepted.hash, legacyAgreementHash: accepted.hash,
     });
+    const acceptanceUnproven = rows.some(r => r.type === 'dod.consent_recorded') && accepted.status !== 'ok';
+    if (acceptanceUnproven) {
+      console.log(`FAIL an acceptance act is present but its accepted agreement does not validate (${accepted.status})`);
+    }
     for (const r of slice.rows) {
       const bad = [r.hash, r.link, r.payload, r.agreement]
         .some(v => ['mismatch', 'broken', 'invalid', 'invalid_input'].includes(v));
@@ -123,7 +130,12 @@ async function main() {
     }
     console.log(`\naccepted agreement: ${accepted.status}${accepted.hash ? ` ${accepted.hash.slice(0, 16)}…` : ''}`);
     console.log(`dimensions: ${JSON.stringify(slice.dimensions)}  acceptance: ${slice.acceptance.status}`);
-    if (slice.overall !== 'verified') {
+    if (accepted.hash) {
+      console.log(accepted.hash === await deriveAgreementHash(contract)
+        ? 'current terms match the accepted agreement'
+        : 'current terms differ from the accepted agreement (drift since acceptance; not a failure of the record)');
+    }
+    if (slice.overall !== 'verified' || acceptanceUnproven) {
       console.log(`\nCHAIN NOT VERIFIED — strict result: ${slice.overall}`);
       process.exit(1);
     }

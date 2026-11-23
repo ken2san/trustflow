@@ -1086,3 +1086,10 @@ Kept as constraints, not stories.
   - The frontend parser requires the strict fields on v2 and refuses them on v1; the export carries the verdict basis, the three-way strict result and invalid rows' authority fields. Public doc: v2 still "planned, not deployed".
   - Unit tests: six files, 172/172. `deno check` not run (no deno locally). E2E stub edited, not run.
   - **Deploy gates:** `deno check`; an E2E-only deploy and guest specs, each under its own OK; production storage `20261122130000` before any production function deploy. Reports: `.ada/claude-report-202.md`/`203.md`/`204.md`.
+
+- Codex Task 176: option D and scoped count OK in `0dc28ce`; Deno check may proceed, E2E deploy held for v2 guest presentation and parser consistency. Report: `.ada/codex-report-176.md`.
+- Claude Task 205 (Codex T174 must-fix on `c51de66`; local commit only, **not pushed**):
+  - The receipt v2, issuer and strict verify-chain agreement checks now use the validated accepted digest; current terms are only a drift report. An acceptance act without a proven accepted block fails.
+  - Receipt v2 is bound to its deal: the envelope `contract_id` must match every act, and `snapshot_version` must match the snapshot. Compare runs only on verified, same-deal receipts.
+  - Paging ends only on an empty page. Offline success states the issuer's asserted read boundary; a draft says "pre-acceptance chain only".
+  - verifyReceipt and pagedEvents tests: 49/49. make-receipt and verify-chain are untested here (network). Report: `.ada/claude-report-205.md`.
