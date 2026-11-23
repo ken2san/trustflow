@@ -104,8 +104,7 @@ Deno.serve(async (req: Request) => {
     // The token IS the contract identity. Nothing in the request selects it.
     const { data: contract, error: contractError } = await admin
       .from('contracts')
-      .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, performed_by, '
-        + 'earner_user_id, earner_display_name, hirer_email, guest_access_token_expires_at')
+      .select('id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, performed_by, earner_user_id, earner_display_name, hirer_email, guest_access_token_expires_at')
       .eq('guest_access_token', guestToken)
       .maybeSingle()
 

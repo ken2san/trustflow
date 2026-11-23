@@ -113,13 +113,17 @@ function strictOf(integrity, { agreementChecked }) {
   const supported = integrity.canonical_version_supported === true;
   const version = integrity.canonical_version;
   const tri = (v, pass, fail, otherwise) => (v === true ? pass : v === false ? fail : otherwise);
+  // The slice's fixed labels for a format it does not understand, whatever the
+  // fixture's legacy flags claim (Codex T179).
+  if (!supported) {
+    return { kind: 'unsupported', hash: 'unsupported', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' };
+  }
   return {
-    kind: supported ? 'legacy' : 'unsupported',
-    hash: tri(integrity.hash_valid, 'match', 'mismatch', supported ? 'missing' : 'unsupported'),
+    kind: 'legacy',
+    hash: tri(integrity.hash_valid, 'match', 'mismatch', 'missing'),
     link: tri(integrity.chain_linked, 'linked', 'broken', 'indeterminate'),
-    payload: tri(integrity.substance_valid, 'match', 'mismatch', supported && version < 3 ? 'not_in_format' : 'indeterminate'),
-    agreement: !supported ? 'indeterminate'
-      : version < 4 ? 'not_bound'
-        : agreementChecked ? 'match' : 'indeterminate',
+    payload: tri(integrity.substance_valid, 'match', 'mismatch', version < 3 ? 'not_in_format' : 'indeterminate'),
+    agreement: version < 4 ? 'not_bound'
+      : agreementChecked ? 'match' : 'indeterminate',
   };
 }

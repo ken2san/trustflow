@@ -421,5 +421,18 @@ describe('T208: endpoint v2 bodies satisfy the row/aggregate rules', () => {
     }
     expect(variants.empty.body.chain.verified).toBe(false)
   })
+
+  it('T210: an unsupported row and a rejected acceptance marker parse, and neither is verified', async () => {
+    const rows = await mixedTrail()
+    const unsupported = await serve2([...rows.slice(0, 2), { ...rows[2], hash_version: 9 }])
+    expect(unsupported.body.events[2].integrity.strict).toMatchObject({ kind: 'unsupported', hash: 'unsupported' })
+    // Two acceptances in one slice: the strict reader rejects the marker.
+    const rejected = await serve2([...rows, { ...rows[0], id: vid(8) }])
+    expect(rejected.body.strict_verification.server.acceptance.status).toBe('rejected')
+    for (const [name, { body }] of Object.entries({ unsupported, rejected })) {
+      expect(parseGuestEvidence(body), name).toEqual({ ok: true, version: 2 })
+      expect(body.chain.verified, name).toBe(false)
+    }
+  })
 })
 

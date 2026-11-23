@@ -570,7 +570,7 @@ type StoredRow = Record<string, any>
 export async function shapeGuestEventsV1(
   rows: readonly StoredRow[],
   contract: Record<string, unknown> & { id: string },
-): Promise<Record<string, unknown>[]> {
+): Promise<(Record<string, unknown> & ShapedEvent)[]> {
   let expectedPrev = GENESIS_HASH
   const events = []
 

@@ -52,6 +52,13 @@ const TAIL_VALUES = ['complete', 'truncated', 'unknown']
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isTriState = v => v === true || v === false || v === null
 
+const UNSUPPORTED_ROW = { hash: 'unsupported', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' }
+const ACCEPTANCE_STATUSES = ['derived', 'caller', 'rejected']
+// Under a rejected acceptance marker the slice gives every row one of these
+// agreement labels: v1–v3 not_bound, invalid rows invalid_input, all others
+// indeterminate.
+const REJECTED_ROW_AGREEMENT = ['indeterminate', 'not_bound', 'invalid_input']
+
 /** The reason a `strict` block is not understood, or null when it is. */
 function strictRowProblem(strict) {
   if (!isPlainObject(strict)) return ''
@@ -61,6 +68,16 @@ function strictRowProblem(strict) {
     if (!allowed.includes(v)) return `.${key}`
   }
   if ('reason' in strict && typeof strict.reason !== 'string') return '.reason'
+  // An unsupported row carries exactly the slice's labels for it, and only it
+  // carries hash 'unsupported' (eventVerifyV5.ts; Codex T179): a row whose
+  // format was not understood cannot also claim a passing check.
+  if (strict.kind === 'unsupported') {
+    for (const [key, expected] of Object.entries(UNSUPPORTED_ROW)) {
+      if (strict[key] !== expected) return `.${key}`
+    }
+  } else if (strict.hash === 'unsupported') {
+    return '.hash'
+  }
   return null
 }
 
@@ -100,6 +117,14 @@ function strictRowsProblem(sv, events) {
   if (events.some(ev => ev.integrity.strict.kind === 'invalid') && sv.server.overall !== 'failed') {
     return 'strict_verification.server.overall'
   }
+  // A rejected acceptance marker means no agreement check could pass, so the
+  // trail can never be verified (Codex T166/T179).
+  if (sv.server.acceptance.status === 'rejected') {
+    if (dims.agreement === 'pass') return 'strict_verification.server.dimensions.agreement'
+    if (events.some(ev => !REJECTED_ROW_AGREEMENT.includes(ev.integrity.strict.agreement))) {
+      return 'strict_verification.server.acceptance'
+    }
+  }
   return null
 }
 
@@ -129,6 +154,9 @@ function strictVerificationProblem(sv, events, chain) {
   if (!isPlainObject(b) || b.start !== 'first_event' || !TAIL_VALUES.includes(b.tail)
     || !(b.recorded_count === null || (Number.isSafeInteger(b.recorded_count) && b.recorded_count >= 0))) {
     return 'strict_verification.server.read_boundary'
+  }
+  if (!isPlainObject(sv.server.acceptance) || !ACCEPTANCE_STATUSES.includes(sv.server.acceptance.status)) {
+    return 'strict_verification.server.acceptance'
   }
   // The aggregate must be the one its dimensions give, and the boundary must
   // be the one its count gives for the events this body actually carries

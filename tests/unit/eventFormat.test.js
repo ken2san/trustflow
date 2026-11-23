@@ -590,3 +590,63 @@ describe('T208: a version 2 aggregate cannot contradict its own rows', () => {
   })
 })
 
+
+// ── T210: unsupported rows and a rejected acceptance marker (Codex T179) ────
+describe('T210: an unsupported row or a rejected marker cannot read as verified', () => {
+  const clone = b => JSON.parse(JSON.stringify(b))
+  const UNSUPPORTED = { kind: 'unsupported', hash: 'unsupported', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' }
+  it('Codex T179: a row turned unsupported but keeping its passing labels is refused', () => {
+    const b = asV2(evidence([ev('a'), ev('b')]))
+    expect(b.strict_verification.server.overall).toBe('verified')
+    b.events[1].integrity.canonical_version_supported = false
+    b.events[1].integrity.strict.kind = 'unsupported'
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'events[1].integrity.strict.hash' })
+  })
+  it('an unsupported row must carry every one of the slice\'s labels for it', () => {
+    for (const key of ['link', 'payload', 'agreement']) {
+      const b = asV2(evidence([ev('a')]), { dims: { hash: 'indeterminate', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' } })
+      b.events[0].integrity.strict = { ...UNSUPPORTED, [key]: key === 'link' ? 'linked' : 'match' }
+      expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: `events[0].integrity.strict.${key}` })
+    }
+  })
+  it('hash \'unsupported\' on a row that is not unsupported is refused', () => {
+    const b = asV2(evidence([ev('a')]), { dims: { hash: 'indeterminate' } })
+    b.events[0].integrity.strict.hash = 'unsupported'
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'events[0].integrity.strict.hash' })
+  })
+  it('the honest unsupported row parses, and the trail is incomplete', () => {
+    const b = asV2(evidence([ev('a'), ev('b', { canonical_version: 9, canonical_version_supported: false, hash_valid: null, chain_linked: null, substance_valid: null })]),
+      { dims: { hash: 'indeterminate', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' } })
+    b.events[1].integrity.strict = { ...UNSUPPORTED }
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
+    expect(b.strict_verification.server.overall).toBe('incomplete')
+    expect(b.chain.verified).toBe(false)
+  })
+  it('Codex T179: a rejected acceptance marker under a verified trail is refused', () => {
+    const b = asV2(evidence([ev('a')]))
+    b.strict_verification.server.acceptance = { status: 'rejected', reason: 'x' }
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.dimensions.agreement' })
+  })
+  it('a rejected marker with a row agreement that passed is refused, even when the aggregate is downgraded', () => {
+    const b = asV2(evidence([ev('a')]), { dims: { agreement: 'indeterminate' } })
+    b.events[0].integrity.strict.agreement = 'match'
+    b.strict_verification.server.acceptance = { status: 'rejected', reason: 'x' }
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.acceptance' })
+  })
+  it('the honest rejected body (rows and aggregate indeterminate) parses as incomplete', () => {
+    const b = asV2(evidence([ev('a')]), { dims: { agreement: 'indeterminate' } })
+    b.strict_verification.server.acceptance = { status: 'rejected', reason: 'x' }
+    expect(b.events[0].integrity.strict.agreement).toBe('indeterminate')
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
+    expect(b.strict_verification.server.overall).toBe('incomplete')
+  })
+  it('a missing or unknown acceptance status is refused', () => {
+    const b = asV2(evidence([ev('a')]))
+    for (const acceptance of [undefined, null, {}, { status: 'accepted' }]) {
+      const c = clone(b)
+      if (acceptance === undefined) delete c.strict_verification.server.acceptance
+      else c.strict_verification.server.acceptance = acceptance
+      expect(parseGuestEvidence(c)).toEqual({ ok: false, reason: 'strict_verification.server.acceptance' })
+    }
+  })
+})
