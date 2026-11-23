@@ -1,7 +1,7 @@
 # TrustFlow Roadmap
 
 _The canonical roadmap. Rebuilt 2026-11-18; maintained by 棟梁 (Kenji, 2026-11-20).
-Last updated **2026-11-21 09:31 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 164 / Codex 150._
+Last updated **2026-11-23 16:10 ET**, against `docs/schedule.md` rev 3 and HANDOFF through Task 225 / Codex 186._
 
 `HANDOFF.md` holds the current state and `Decisions.md` holds the reasons. If this file
 disagrees with either of them, this file is wrong. The longer product-strategy text that
@@ -42,6 +42,17 @@ entry path never wait for real deals or real users (`Decisions.md` 2026-11-18).
 
 ## Now: where we are against the schedule (rev 3)
 
+**Row 3 (v5 canonical + readers), planned 2026-11-25: started 2026-11-22, production-complete 2026-11-23, about 2 working days early.**
+v5 canonical module + KAT/tamper tests, strict core v5 reader, shared verify, guest reader/wire, owner/export/CLI, and guest response v2
+(behind `?response_version=2`) are built and reviewed. Storage migration `20261122130000` (v5 authority columns) applied to hosted E2E 11-22
+and to **production 11-23 16:03 ET** (T224, after the gated check set T217–T223, Codex T182–T186, E2E read-only validation PASS).
+Production `guest-contract-events` **v14 from `1011b99`** deployed 11-23 16:06 ET (T225, Kenji OK; same bytes as E2E v13, OPTIONS 200).
+**v5 writes stay gated off**; writers come with later rows. Deferred nonblocking hardening: Codex T186 (RNG exit check in the check-set E2E wrapper).
+
+**Next: row 4 (owner delegated append + resolver), planned 2026-11-26..27**, then 5–8 to M1 on 12-04.
+
+_Row 2 history below._
+
 **Row 2 (C5 server-side create), planned 2026-11-23..24: started 2026-11-20, released to production 2026-11-22 (T173), about 1 working day early
 (Monday–Friday calendar). Closed 2026-11-22:** cancel fixture closed as covered by `cancellation-refusal` 4/4 (T175; Kenji 11:39 ET); prod refusal probes added and both refused 401/42501 (T176 `d747cff`, smoke:prod 18/18); Codex T157 must-fix on the probe classifier (2xx hard stop, 400 vs 23514, scoped no-write claim) fixed by Claude T177 `5b1a2a5` (pushed, Vercel READY; create probes now gated on pinned target + `--backstops-verified`; prod catalog readback 8/9 + ws-stripped md5 match, then smoke:prod --backstops-verified 18/18, both create probes db_refused (T179/T180 `63e72b7`, local)). Claude T178 = row 3 step 1 (freeze v5 contract + KAT/tamper tests, local). **Next: row 3 (v5 canonical), preimage confirmed by Kenji 2026-11-22 11:39 ET (Codex T156 `d53fc5e`).** Revised estimate 3–4 working days (Codex T131), so the finish may spill
 1–2 days past 11-24; Kenji accepted that (2026-11-20). M1 2026-12-04 unchanged.
@@ -58,8 +69,7 @@ entry path never wait for real deals or real users (`Decisions.md` 2026-11-18).
 **Deploy order:** apply and verify migration A on the target **before** pushing any frontend
 with the RPC client; a push auto-deploys the production frontend.
 
-Next rows: 3 (v5 canonical, opens with an independent review of the v5 preimage) 11-25,
-4 (owner delegated append + resolver) 11-26..27, then 5–8 to M1 on 12-04.
+Next rows: 4 (owner delegated append + resolver) 11-26..27, then 5–8 to M1 on 12-04 (row 3 done 11-23, see above).
 
 **C5 decided:** build server-side creation and close direct client inserts. C2 binds credential ID
 and issuer kind in v5; C3 applies normalized email matching to relevant RLS checks as well.
