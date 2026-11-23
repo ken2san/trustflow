@@ -438,8 +438,42 @@ Planned version 2 changes, against version 1:
   on every event. No event carries per-event evidence of who wrote it.
 - `verification` notes no longer say authorship, timing or binding are
   "unaltered"; they say what a recomputation shows and what it does not.
-- `chain.verified`, the per-event `hash_valid`, `chain_linked` and
-  `substance_valid`, and the `canonical` blocks are unchanged.
+- `chain.verified` **changes meaning**. In version 1 it checks only events in
+  format 2 or later, and ignores payload checks, malformed events and agreement
+  failures. In version 2 it is true only when the server's strict check passed
+  every dimension (hash, link, payload, agreement, completeness) **and** the
+  read is established: it began at the deal's first event and is proven to
+  have reached its last. It equals
+  `strict_verification.server.overall == "verified"`; a client must refuse a
+  body where the two disagree. A trail version 1 calls verified can therefore
+  be `false` in version 2.
+- `chain.truncated` is true whenever the end of the read is not proven, not
+  only at the 500-row cap. A page shorter than the cap is not taken as proof
+  of the end; the server proves it with an exact count taken in the same
+  statement as the read.
+- The per-event `hash_valid`, `chain_linked` and `substance_valid`, and the
+  `canonical` blocks, are unchanged for events in formats 1 to 4.
+- An event recorded as format 5, or carrying a credential id or issuer kind,
+  gets a `canonical` block holding exactly the recorded values of the twelve
+  format 5 inputs (the format 4 inputs plus `credential_id` and
+  `issuer_kind`): an input that was not recorded is absent, never null. A
+  malformed one is reported unchecked, with every check `null`, and keeps its
+  recorded authority values.
+- Every event carries `integrity.strict`: the server's strict check of that
+  event as `{kind, hash, link, payload, agreement}`, plus `reason` for an
+  invalid event. Required in version 2.
+- Every version 2 body carries `strict_verification`:
+  `{server: {overall, dimensions, acceptance, read_boundary}, server_agreement,
+  local_note}`. `overall` is `verified`, `failed` or `incomplete`, so a false
+  `chain.verified` can be read as a proven failure or as a check that could
+  not complete. `read_boundary` is `{start: "first_event", tail, recorded_count}`
+  with `tail` one of `complete`, `truncated` or `unknown`. Required in version
+  2; a version 1 body never carries it.
+- These are the server's checks over the stored rows with their full
+  payloads. From the response, a guest can recompute supported hashes, links
+  and the agreement digest, but not the payload digest, so a guest's own
+  result is incomplete at best. Identity, delivery, payment and an
+  independent timestamp stay outside the proof.
 
 Planned errors, none of which the deployed function returns yet: errors are
 JSON `{"error": ...}`. Credential refusals (`missing_guest_token`,

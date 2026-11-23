@@ -30,8 +30,58 @@ export const RECORDED_ID_CLASSES = ['matches_contract_earner_id', 'guest_prefixe
 
 const TRI_STATE_CHECKS = ['hash_valid', 'chain_linked', 'substance_valid']
 
+// The strict reader's labels (supabase/functions/_shared/eventVerifyV5.ts), as
+// response version 2 carries them. A version 2 body must carry them, on the
+// trail and on every event, and its `chain.verified` must be exactly
+// `strict_verification.server.overall === 'verified'` (option D, Codex T175).
+// A version 1 body must not carry them: its boolean follows the older rule,
+// and the two verdicts side by side would disagree in meaning.
+const STRICT_KINDS = ['legacy', 'v5', 'unsupported', 'invalid']
+const STRICT_ROW_CHECKS = {
+  hash:      ['match', 'mismatch', 'unsupported', 'invalid_input', 'pre_chain', 'missing', 'not_recorded'],
+  link:      ['linked', 'broken', 'indeterminate', 'invalid_input', 'pre_chain', 'missing', 'not_recorded', 'not_in_format'],
+  payload:   ['match', 'mismatch', 'unavailable', 'not_in_format', 'indeterminate', 'invalid_input', 'pre_chain', 'missing', 'not_recorded'],
+  agreement: ['pre_acceptance', 'match', 'match_position_unknown', 'mismatch', 'invalid', 'no_cited_digest',
+    'indeterminate', 'invalid_input', 'not_bound'],
+}
+const STRICT_OVERALL = ['verified', 'failed', 'incomplete']
+const STRICT_DIMENSIONS = ['hash', 'link', 'payload', 'agreement', 'completeness']
+const DIMENSION_VALUES = ['pass', 'fail', 'indeterminate']
+const TAIL_VALUES = ['complete', 'truncated', 'unknown']
+
 const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isTriState = v => v === true || v === false || v === null
+
+/** The reason a `strict` block is not understood, or null when it is. */
+function strictRowProblem(strict) {
+  if (!isPlainObject(strict)) return ''
+  if (!STRICT_KINDS.includes(strict.kind)) return '.kind'
+  for (const [key, allowed] of Object.entries(STRICT_ROW_CHECKS)) {
+    const v = strict[key]
+    if (!allowed.includes(v)) return `.${key}`
+  }
+  if ('reason' in strict && typeof strict.reason !== 'string') return '.reason'
+  return null
+}
+
+/** The reason `strict_verification` is not understood, or null when it is. */
+function strictVerificationProblem(sv) {
+  if (!isPlainObject(sv) || !isPlainObject(sv.server)) return 'strict_verification'
+  if (!STRICT_OVERALL.includes(sv.server.overall)) return 'strict_verification.server.overall'
+  const dims = sv.server.dimensions
+  if (!isPlainObject(dims)) return 'strict_verification.server.dimensions'
+  for (const key of STRICT_DIMENSIONS) {
+    if (!DIMENSION_VALUES.includes(dims[key])) return `strict_verification.server.dimensions.${key}`
+  }
+  const b = sv.server.read_boundary
+  if (!isPlainObject(b) || b.start !== 'first_event' || !TAIL_VALUES.includes(b.tail)
+    || !(b.recorded_count === null || (Number.isSafeInteger(b.recorded_count) && b.recorded_count >= 0))) {
+    return 'strict_verification.server.read_boundary'
+  }
+  // The one decision: verified only over an established boundary.
+  if (sv.server.overall === 'verified' && b.tail !== 'complete') return 'strict_verification.server.overall'
+  return null
+}
 
 /**
  * Validate a guest-contract-events success body.
@@ -56,6 +106,13 @@ export function parseGuestEvidence(body) {
   if (!isPlainObject(body.chain)) return bad('chain')
   if (typeof body.chain.verified !== 'boolean') return bad('chain.verified')
   if (typeof body.chain.truncated !== 'boolean') return bad('chain.truncated')
+  if (version === 2) {
+    const problem = strictVerificationProblem(body.strict_verification)
+    if (problem) return bad(problem)
+    if (body.chain.verified !== (body.strict_verification.server.overall === 'verified')) return bad('chain.verified')
+  } else if ('strict_verification' in body) {
+    return bad('strict_verification')
+  }
 
   for (let i = 0; i < body.events.length; i++) {
     const ev = body.events[i]
@@ -69,6 +126,12 @@ export function parseGuestEvidence(body) {
     }
     for (const key of TRI_STATE_CHECKS) {
       if (!(key in integrity) || !isTriState(integrity[key])) return bad(`${at}.integrity.${key}`)
+    }
+    if (version === 2) {
+      const problem = strictRowProblem(integrity.strict)
+      if (problem !== null) return bad(`${at}.integrity.strict${problem}`)
+    } else if ('strict' in integrity) {
+      return bad(`${at}.integrity.strict`)
     }
     if ('canonical' in ev && ev.canonical !== null && !isPlainObject(ev.canonical)) {
       return bad(`${at}.canonical`)
@@ -292,6 +355,9 @@ const COVERAGE_BY_FORMAT = {
     + 'payload-digest field (which may be empty). They do not bind an agreement digest.',
   4: `Format v4 hashes bind ${BASE_FIELDS}, ${PREDECESSOR}, the recorded `
     + 'payload-digest field and the recorded agreement-digest field (either may be empty).',
+  5: `Format v5 hashes bind ${BASE_FIELDS}, ${PREDECESSOR}, the recorded `
+    + 'payload-digest and agreement-digest fields, and the recorded credential id and issuer kind. '
+    + 'A credential id names the access credential the event was recorded under, not a verified person.',
 }
 
 // What a format binds is an input, not a finding. Shown once beside the
@@ -376,6 +442,23 @@ export function guestChainStatus(events, chain) {
   if (verdicts.some(v => v.chain_linked === false)) return 'CHAIN_LINK_BROKEN'
   return chain.verified ? 'VERIFIED' : 'NOT_VERIFIED'
 }
+
+/**
+ * The status note for a document built from a version 2 response. The order
+ * is the same; what VERIFIED rests on is not: the server's verdict there is
+ * its strict check over a read whose start and end are both established.
+ */
+export const STATUS_NOTE_V2 =
+  'status keeps the order of earlier documents: NO_EVENTS_FORMAT_V2_OR_LATER is '
+  + 'reported before any mismatch is examined, then a hash, payload or link '
+  + 'mismatch in any event, then the server\'s verdict. In a version 2 response '
+  + 'that verdict is true only when the server\'s strict check passed every '
+  + 'dimension (hash, link, payload, agreement, completeness) over a read that '
+  + 'began at the deal\'s first event and is proven to have reached its last. '
+  + 'It is the server\'s check over the stored rows with their full payloads; '
+  + 'a reader of this file can repeat the hash, link and agreement checks but '
+  + 'not the payload check. server_strict_verdict says whether a false verdict '
+  + 'is a failure or an incomplete check.'
 
 /** The notice for documents downloaded before these versions. */
 export const EARLIER_DOCUMENTS_NOTICE =

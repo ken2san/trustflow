@@ -1079,3 +1079,10 @@ Kept as constraints, not stories.
   - **Deploy-order hazard:** do NOT deploy this function to production before production storage `20261122130000`; every guest read would fail.
   - **Response-version options** are in the report; option 1 (v2 behind `?response_version=2`) is recommended.
   - Report: `.ada/claude-report-201.md`.
+
+- Codex Task 174: push NO through `3260609` pending receipt v2 agreement/deal binding and completeness fixes. Edge deploy is separate and production storage must precede it. Pick opt-in response v2. Report: `.ada/codex-report-174.md`.
+- Claude Tasks 202-204 (Kenji: option 1 then option D, 2026-11-22): guest response v2 behind `?response_version=2`, **local commit only; not pushed, not deployed**.
+  - v1 is byte-identical: the literal moved verbatim into `_shared/guestResponse.ts` and never runs the strict reader. v2 adds the exact 12-input v5 canonical, `integrity.strict` and `strict_verification`; `chain.verified` is true only when the strict check passes over an established read (exact count = rows; a short page is not the end). The shadow strict log never throws (Codex T174).
+  - The frontend parser requires the strict fields on v2 and refuses them on v1; the export carries the verdict basis, the three-way strict result and invalid rows' authority fields. Public doc: v2 still "planned, not deployed".
+  - Unit tests: six files, 172/172. `deno check` not run (no deno locally). E2E stub edited, not run.
+  - **Deploy gates:** `deno check`; an E2E-only deploy and guest specs, each under its own OK; production storage `20261122130000` before any production function deploy. Reports: `.ada/claude-report-202.md`/`203.md`/`204.md`.

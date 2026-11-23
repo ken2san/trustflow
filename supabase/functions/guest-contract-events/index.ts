@@ -51,12 +51,7 @@
 // on its own.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
-import {
-  isSupportedSnapshotVersion, buildAgreementSnapshot,
-} from '../_shared/eventCanonical.ts'
-import {
-  chainSummary, guestStrictVerdicts, guestVerificationNotes, shapeGuestEventsV1,
-} from '../_shared/guestEventView.ts'
+import { guestResponse, requestedResponseVersion, shadowStrictLog } from '../_shared/guestResponse.ts'
 
 // CORS is per request now, from ../_shared/cors.ts: the allowed origin depends
 // on who asked, so there is no constant to share. A caller that sends no Origin
@@ -71,43 +66,8 @@ const MAX_EVENTS = 500
 // _shared/guestEventView.ts, where they can be exercised without a live
 // request. See that file for why.
 
-/**
- * Which agreed terms the contract row no longer matches.
- *
- * Built by re-deriving the snapshot from the CURRENT row under THE VERSION THE
- * AGREEMENT WAS ACCEPTED UNDER, so this comparison cannot drift from what the
- * hash actually binds. An empty list means the row still says what was agreed;
- * a non-empty one means the record moved and the accepted terms are the ones
- * the evidence proves.
- *
- * THE VERSION IS READ FROM THE ACCEPTED SNAPSHOT, and that is the whole point
- * of this change. It used to build with the CURRENT version, which was correct
- * only while there has only ever been one. Codex's data-model review found what
- * happens on the day there are two: a v2 builder that adds, say,
- * `deadline_zone: null` would make every v1 agreement look CHANGED to its own
- * counterparty — `undefined` on the accepted side, `null` on the rebuilt one —
- * and the screen would tell them their terms had moved when nobody touched
- * them. For a product whose only claim is the record, that is the claim
- * failing.
- *
- * An accepted snapshot whose version this build does not know returns `null`:
- * "cannot say", which is what the field means elsewhere. It is not an empty
- * list, because an empty list asserts the terms are unchanged.
- */
-function termsChangedSinceAcceptance(
-  accepted: Record<string, unknown> | null,
-  contract: Record<string, unknown>,
-): string[] | null {
-  if (!accepted) return null
-  const acceptedVersion = accepted.snapshot_version
-  if (!isSupportedSnapshotVersion(acceptedVersion)) return null
-  const current = buildAgreementSnapshot(
-    contract, acceptedVersion as number,
-  ) as unknown as Record<string, unknown>
-  return Object.keys(current)
-    .filter(key => key !== 'snapshot_version')
-    .filter(key => JSON.stringify(current[key]) !== JSON.stringify(accepted[key]))
-}
+// termsChangedSinceAcceptance and the response body now live in
+// _shared/guestResponse.ts, where both response versions can be tested.
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(req) })
@@ -159,17 +119,26 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'guest_token_expired' }, 403)
     }
 
+    // After the credential refusals, which come first. Absent means version 1.
+    const requested = requestedResponseVersion(req.url)
+    if (!requested.ok) return json({ error: requested.error }, requested.status)
+
     // Scoped to this contract by its id. runtime.snapshot rows carry
     // contract_id 'runtime' and legacy demo rows carry marketplace fixture ids
     // ('1', 'mock'), so neither can match a real contract's uuid — but the
     // snapshot type is excluded explicitly as well, because "it cannot happen"
     // is a weaker guarantee than "it is not selected".
-    const { data: rows, error: eventsError } = await admin
+    const { data: rows, error: eventsError, count } = await admin
       .from('events')
       // The v5 authority pair is selected explicitly (row 3). These columns
       // exist on E2E (T199); deploying this to a database without them makes
       // every read fail, so production storage must come first.
-      .select('id, type, actor_id, payload, dod_hash, created_at, event_hash, prev_event_hash, hash_version, payload_hash, agreement_hash, credential_id, issuer_kind')
+      //
+      // `count: 'exact'` is the tail evidence for version 2: PostgREST counts
+      // in the same statement, under the same filters, as the page. A short
+      // page is not evidence of the end (Codex T174). Version 1 ignores it.
+      .select('id, type, actor_id, payload, dod_hash, created_at, event_hash, prev_event_hash, hash_version, payload_hash, agreement_hash, credential_id, issuer_kind',
+        { count: 'exact' })
       .eq('contract_id', contract.id)
       .neq('type', 'runtime.snapshot')
       // The same ordering the writers use to pick the tip, read backwards.
@@ -183,85 +152,19 @@ Deno.serve(async (req: Request) => {
 
     if (eventsError) return json({ error: 'events_lookup_failed' }, 500)
 
-    // Version 1, unchanged: shaped by the moved, now-tested loop.
-    const events = await shapeGuestEventsV1(rows ?? [], contract)
+    // Both versions are built in _shared/guestResponse.ts. Version 1 is the
+    // literal that used to be here, moved verbatim, and never runs the strict
+    // reader; version 2 fails closed if it throws.
+    const response = await guestResponse(rows ?? [], contract, {
+      version: requested.version, maxEvents: MAX_EVENTS, count,
+    })
 
-    // The deal as it stood when it was accepted, taken from the acceptance
-    // event rather than from the contract row. The row may legitimately have
-    // moved on, and the historical record must not depend on it.
-    const acceptance = (rows ?? []).find(r => r.type === 'dod.consent_recorded')
-    const acceptedAgreement = (acceptance?.payload as Record<string, unknown> | null)?._agreement ?? null
-    const invitedRecipient = (acceptance?.payload as Record<string, unknown> | null)?._invited_recipient ?? null
-    const claimedIdentity = (acceptance?.payload as Record<string, unknown> | null)?._claimed_identity ?? null
+    // The shadow strict log, after the body exists. It never throws, so a
+    // strict-only failure cannot turn a version 1 read into a 500.
+    const log = await shadowStrictLog(rows ?? [], contract, response, { version: requested.version, count })
+    if (log) console.warn(JSON.stringify(log))
 
-    // The strict v5 reader, server-side with full payloads. NOT serialized:
-    // what a response carries waits for the response-version decision. It is
-    // logged only when it sees v5-shaped rows or disagrees with v1's headline,
-    // neither of which can happen while v5 writes are closed. Counts and
-    // labels only — no ids, tokens or addresses.
-    const truncated = (rows?.length ?? 0) >= MAX_EVENTS
-    const chain = chainSummary(events, { truncated })
-    const strict = await guestStrictVerdicts(rows ?? [], contract, { truncated, acceptedAgreement })
-    const strictRows = strict.server.rows.filter(r => r.kind === 'v5' || r.kind === 'invalid').length
-    if (strictRows > 0 || (chain.verified === true && strict.server.overall === 'failed')) {
-      console.warn(JSON.stringify({
-        event: 'guest_strict_reader', strict_rows: strictRows,
-        v1_verified: chain.verified, strict_overall: strict.server.overall, dimensions: strict.server.dimensions,
-      }))
-    }
-
-    return json({
-      // What was ACCEPTED, recorded at the time. Null for agreements accepted
-      // before the snapshot existed — absent, not reconstructed.
-      accepted_agreement: acceptedAgreement,
-      // Terms on which the current row and the accepted agreement disagree.
-      // Empty when they still match; null when there is no accepted snapshot
-      // to compare against.
-      terms_changed_since_acceptance: termsChangedSinceAcceptance(
-        acceptedAgreement as Record<string, unknown> | null, contract),
-      // Kept apart: an invitation can be forwarded, and the divergence is
-      // itself evidence. Neither address is verified.
-      acceptance_identity: acceptance ? {
-        invited_recipient: invitedRecipient,
-        claimed_identity: claimedIdentity,
-        claimed_identity_verified: false,
-        // How the accepting party got in — which for an acceptance is always
-        // a consumed invitation and never an authentication event. Both the
-        // coarse legacy string and the structured record are returned; the
-        // latter is absent on acceptances written before it existed, and that
-        // absence is a fact rather than a gap to fill in.
-        authentication: (acceptance.payload as Record<string, unknown>)?._auth_method ?? null,
-        authentication_detail: (acceptance.payload as Record<string, unknown>)?._authentication ?? null,
-      } : null,
-      // The CURRENT row. May differ from accepted_agreement.
-      contract: {
-        id:                  contract.id,
-        project_name:        contract.project_name,
-        dod:                 contract.dod,
-        amount_jpy:          contract.amount_jpy,
-        amount_minor:        contract.amount_minor,
-        currency:            contract.currency,
-        deadline:            contract.deadline,
-        state:               contract.state,
-        // Which side does the work. The guest needs it to know whether the
-        // next action is theirs, and it is a term of the deal rather than
-        // anything internal.
-        performed_by:        contract.performed_by,
-        // The guest is always the counterparty; saying so plainly saves the
-        // client from re-deriving it.
-        viewer_role:         contract.performed_by === 'counterparty' ? 'performer' : 'receiver',
-        earner_display_name: contract.earner_display_name,
-        // The address that accepted — this guest's own, echoed back so the
-        // trail is self-describing in an export.
-        hirer_email:         contract.hirer_email,
-      },
-      events,
-      // What the guest can establish for themselves from this response, and
-      // what no amount of hashing in it will establish. Carried in the data
-      // because a machine reader has no README.
-      verification: guestVerificationNotes(),
-      chain,
-    }, 200)
+    return json(response.body, 200)
 
   } catch (err) {
     return json({ error: 'internal_error', detail: String(err) }, 500)

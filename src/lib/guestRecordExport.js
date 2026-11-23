@@ -43,10 +43,12 @@
 // response of either version. Recorded VALUES inside allowed keys (canonical
 // fields, payload text, the accepted snapshot) are kept exactly as received.
 
-import { CANONICAL_INPUTS, guestVerificationNotesV2 } from '../../supabase/functions/_shared/guestEventView.ts'
+import {
+  CANONICAL_INPUTS, CANONICAL_INPUTS_V5, guestVerificationNotesV2,
+} from '../../supabase/functions/_shared/guestEventView.ts'
 import {
   parseGuestEvidence, formatPartition, guestChainStatus, checkSummary,
-  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE, STATUS_NOTE,
+  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE, STATUS_NOTE, STATUS_NOTE_V2,
 } from './eventFormat.js'
 
 const DOCUMENT_VERSION = '2.0'
@@ -56,6 +58,10 @@ const SERVER_VERIFICATION_KEYS = [
   'hash_valid', 'chain_linked', 'substance_valid', 'canonical_version',
   'canonical_version_supported', 'binds_whole_agreement', 'event_hash', 'prev_event_hash',
 ]
+
+/** The strict reader's per-event labels (response version 2), when sent. */
+const STRICT_ROW_KEYS = ['kind', 'hash', 'link', 'payload', 'agreement', 'reason']
+const STRICT_DIMENSION_KEYS = ['hash', 'link', 'payload', 'agreement', 'completeness']
 
 const ACCEPTANCE_IDENTITY_KEYS = [
   'invited_recipient', 'claimed_identity', 'claimed_identity_verified',
@@ -81,11 +87,45 @@ function pick(source, keys) {
  * mismatch or look complete when it is not. The missing keys are listed.
  */
 function canonicalOf(ev) {
-  if (!ev.canonical) return { canonical: null, canonical_missing: [...CANONICAL_INPUTS] }
-  const canonical = pick(ev.canonical, CANONICAL_INPUTS)
+  // A format 5 hash is also taken over the credential id and issuer kind.
+  // Picking only the ten earlier inputs would drop them and then list nothing
+  // as missing, presenting a block that cannot recompute as complete. The
+  // strict kind decides first: an authority-bearing row labelled format 4 is
+  // invalid, and dropping its authority fields would make it look legacy.
+  const strictKind = ev.integrity.strict?.kind
+  const authority = (strictKind !== undefined && strictKind !== 'legacy') || ev.integrity.canonical_version === 5
+  const inputs = authority ? CANONICAL_INPUTS_V5 : CANONICAL_INPUTS
+  if (!ev.canonical) return { canonical: null, canonical_missing: [...inputs] }
+  const canonical = pick(ev.canonical, inputs)
   return {
     canonical,
-    canonical_missing: CANONICAL_INPUTS.filter(k => !(k in canonical)),
+    canonical_missing: inputs.filter(k => !(k in canonical)),
+  }
+}
+
+/** The server's strict verdict for one act, from fixed keys; absent when not sent. */
+function strictRowOf(integrity) {
+  return integrity.strict && typeof integrity.strict === 'object'
+    ? { strict: pick(integrity.strict, STRICT_ROW_KEYS) }
+    : {}
+}
+
+/**
+ * The server's strict verdict over the trail, from fixed keys; absent when the
+ * response carried none. Kept beside `server_verdict`, never merged with it.
+ */
+function strictTrailOf(evidence) {
+  const server = evidence.strict_verification?.server
+  if (!server || typeof server !== 'object') return {}
+  return {
+    server_strict_verdict: {
+      // Three-way, so a false server_verdict can be read as a failure or as
+      // a check that could not complete.
+      overall:       server.overall,
+      dimensions:    pick(server.dimensions, STRICT_DIMENSION_KEYS),
+      read_boundary: pick(server.read_boundary, ['start', 'tail', 'recorded_count']),
+      computed_over: 'the stored rows with their full payloads, which this file does not carry',
+    },
   }
 }
 
@@ -161,8 +201,14 @@ export function buildGuestRecordDocument(evidence) {
         // in format v2 or later only; the status and the per-event results
         // cover every row.
         server_verdict: chain.verified,
+        // Which rule produced server_verdict. Version 1's ignores payload
+        // checks and invalid rows; version 2's is the strict decision.
+        server_verdict_basis: parsed.version === 2
+          ? 'strict_check_over_established_read'
+          : 'version_1_rule_format_v2_or_later_rows',
+        ...strictTrailOf(evidence),
         status:         guestChainStatus(events, chain),
-        status_note:    STATUS_NOTE,
+        status_note:    parsed.version === 2 ? STATUS_NOTE_V2 : STATUS_NOTE,
         // Every row's results, independent of the status's precedence: a
         // mismatch in an older-format row is here even when the status
         // reports NO_EVENTS_FORMAT_V2_OR_LATER or VERIFIED.
@@ -256,7 +302,7 @@ export function buildGuestRecordDocument(evidence) {
         payload:    ev.payload === undefined ? null : copyJson(ev.payload),
         dod_hash:   ev.dod_hash ?? null,
         ...canonicalOf(ev),
-        server_verification: pick(ev.integrity, SERVER_VERIFICATION_KEYS),
+        server_verification: { ...pick(ev.integrity, SERVER_VERIFICATION_KEYS), ...strictRowOf(ev.integrity) },
       })),
     },
   }

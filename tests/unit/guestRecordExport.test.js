@@ -74,6 +74,19 @@ function v1Evidence(overrides = {}) {
   }
 }
 
+// Version 2 must carry the strict verdicts (option D, Codex T175).
+const STRICT_LEGACY = { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' }
+const STRICT_VERIFIED = {
+  server: {
+    overall: 'verified',
+    dimensions: { hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass', completeness: 'pass' },
+    acceptance: { status: 'derived', index: 0 },
+    read_boundary: { start: 'first_event', tail: 'complete', recorded_count: 1 },
+  },
+  server_agreement: { status: 'ok', hash: 'a'.repeat(64), acceptance_index: 0 },
+  local_note: 'x',
+}
+
 /** The same record as a version 2 body. */
 function v2Evidence(overrides = {}) {
   const base = v1Evidence()
@@ -84,12 +97,13 @@ function v2Evidence(overrides = {}) {
       ...base.events[0],
       actor: { id: 'guest:claimed@example.test', attribution: 'as_recorded_not_verified', recorded_id_class: 'guest_prefixed' },
       provenance: { writer: 'unknown', basis: 'none_recorded' },
-      integrity: integrity(),
+      integrity: { ...integrity(), strict: STRICT_LEGACY },
     }],
     chain: {
       event_count: 1, events_format_v2_or_later: 1, events_format_below_v2: 0,
       verified: true, truncated: false, payload_covered_by_hash: true,
     },
+    strict_verification: STRICT_VERIFIED,
     ...overrides,
   }
 }
@@ -198,7 +212,16 @@ describe('built, not copied: a version 1 response cannot carry its overclaims th
     // After a function rollback, a client asking for version 2 gets version 1.
     const fromV1 = rec(v1Evidence())
     const fromV2 = rec(v2Evidence())
-    const strip = d => ({ ...d, generated_at: null, response_version: null, events: d.events.map(e => ({ ...e, actor: { ...e.actor, recorded_id_class: null } })) })
+    // The server-verdict fields differ by design: version 2's verdict is the
+    // strict decision and says so (Task 203). Everything else is the same.
+    const strip = d => {
+      const { server_verdict_basis: _b, server_strict_verdict: _s, status_note: _n, ...verification } = d.verification
+      return { ...d, generated_at: null, response_version: null, verification,
+        events: d.events.map(e => {
+          const { strict: _x, ...server_verification } = e.server_verification
+          return { ...e, server_verification, actor: { ...e.actor, recorded_id_class: null } }
+        }) }
+    }
     expect(strip(fromV1)).toEqual(strip(fromV2))
     expect(fromV1.response_version).toBe(1)
     expect(fromV2.response_version).toBe(2)

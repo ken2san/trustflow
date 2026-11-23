@@ -51,8 +51,38 @@ export function toV2(body) {
           recorded_id_class: actor?.id == null ? 'missing' : 'other',
         },
         provenance: { writer: 'unknown', basis: 'none_recorded' },
-        integrity: rest,
+        integrity: { ...rest, strict: strictOf(rest) },
       };
     }),
+    // Version 2 must carry the trail verdict, and chain.verified must equal
+    // overall === 'verified' (option D, Task 203). A stub has no stored rows,
+    // so an unverified trail is reported as incomplete, never as failed.
+    strict_verification: {
+      server: {
+        overall: chain.verified ? 'verified' : 'incomplete',
+        dimensions: {
+          hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass',
+          completeness: chain.verified ? 'pass' : 'indeterminate',
+        },
+        acceptance: { status: 'caller' },
+        read_boundary: chain.verified
+          ? { start: 'first_event', tail: 'complete', recorded_count: (body.events ?? []).length }
+          : { start: 'first_event', tail: 'unknown', recorded_count: null },
+      },
+      server_agreement: { status: 'no_acceptance', hash: null, acceptance_index: null },
+      local_note: 'Stubbed response; no strict check ran.',
+    },
+  };
+}
+
+/** A per-event strict block consistent with the stub's tri-state results. */
+function strictOf(integrity) {
+  const tri = (v, pass, fail, otherwise) => (v === true ? pass : v === false ? fail : otherwise);
+  return {
+    kind: integrity.canonical_version_supported ? 'legacy' : 'unsupported',
+    hash: tri(integrity.hash_valid, 'match', 'mismatch', 'unsupported'),
+    link: tri(integrity.chain_linked, 'linked', 'broken', 'indeterminate'),
+    payload: tri(integrity.substance_valid, 'match', 'mismatch', 'not_in_format'),
+    agreement: 'not_bound',
   };
 }

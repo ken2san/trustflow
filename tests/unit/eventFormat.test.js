@@ -17,6 +17,24 @@ const integrity = (over = {}) => ({
   ...over,
 })
 const ev = (id, over = {}) => ({ id, type: 'performance.asserted', integrity: integrity(over) })
+/** A version 2 body: strict verdicts on every row and on the trail. */
+const asV2 = body => ({
+  ...body,
+  response_version: 2,
+  events: body.events.map(e => ({ ...e, integrity: { ...e.integrity,
+    strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' } } })),
+  strict_verification: {
+    server: {
+      overall: body.chain.verified ? 'verified' : 'incomplete',
+      dimensions: { hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass',
+        completeness: body.chain.verified ? 'pass' : 'indeterminate' },
+      acceptance: { status: 'caller' },
+      read_boundary: { start: 'first_event', tail: 'complete', recorded_count: body.events.length },
+    },
+    server_agreement: { status: 'no_acceptance', hash: null, acceptance_index: null },
+    local_note: 'x',
+  },
+})
 const evidence = (events, chain = {}) => ({
   contract: { id: 'c1' },
   events,
@@ -26,7 +44,23 @@ const evidence = (events, chain = {}) => ({
 describe('parseGuestEvidence: a response is understood whole or refused', () => {
   it('reads an absent response_version as 1 and exactly 2 as 2', () => {
     expect(parseGuestEvidence(evidence([ev('a')]))).toEqual({ ok: true, version: 1 })
-    expect(parseGuestEvidence({ ...evidence([ev('a')]), response_version: 2 })).toEqual({ ok: true, version: 2 })
+    expect(parseGuestEvidence(asV2(evidence([ev('a')])))).toEqual({ ok: true, version: 2 })
+  })
+
+  it('version 2 must carry the strict verdicts, consistent with chain.verified; version 1 must not', () => {
+    const body = asV2(evidence([ev('a')]))
+    const { strict_verification: _s, ...noTrail } = body
+    expect(parseGuestEvidence(noTrail).reason).toBe('strict_verification')
+    const noRow = JSON.parse(JSON.stringify(body))
+    delete noRow.events[0].integrity.strict
+    expect(parseGuestEvidence(noRow).reason).toBe('events[0].integrity.strict')
+    expect(parseGuestEvidence({ ...body, chain: { ...body.chain, verified: false } }).reason).toBe('chain.verified')
+    const unbounded = JSON.parse(JSON.stringify(body))
+    unbounded.strict_verification.server.read_boundary.tail = 'unknown'
+    expect(parseGuestEvidence(unbounded).reason).toBe('strict_verification.server.overall')
+    // An unversioned body is version 1, and v2-only verdicts do not belong in it.
+    const { response_version: _v, ...v1 } = body
+    expect(parseGuestEvidence(v1).reason).toBe('strict_verification')
   })
 
   it('refuses any other response_version rather than guessing a shape', () => {
