@@ -364,7 +364,7 @@ test('a guest accepts an invite and can then read the record in the UI', async (
   // The summary states each check's result over the events returned, never a
   // verdict paraphrased from `verified` (rank-1 provenance fix). An untouched
   // record reads as no mismatch found, and no row is called server-attested.
-  await expect(page.getByText('No check that ran found a mismatch.')).toBeVisible();
+  await expect(page.getByText(/strict check passed every dimension/)).toBeVisible();
   await expect(page.getByText(/Server-attested/)).toHaveCount(0);
   // The trail names no one: no event carries server-recorded provenance, so
   // every entry reads "by a party", the earner's and the guest's alike
