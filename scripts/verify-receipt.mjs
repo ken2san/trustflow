@@ -91,7 +91,6 @@ const ok = (cond, label, detail = '') => {
 };
 
 const REQUIRED_CANONICAL_V5 = [...REQUIRED_CANONICAL, 'credential_id', 'issuer_kind'];
-let indeterminate = null;
 // Set by verifyV2 for a valid draft: the success headline must say it covers a
 // pre-acceptance chain only, with the agreement status stated.
 let preAcceptanceOnly = null;
@@ -266,9 +265,6 @@ async function verifyV2(receipt) {
   }
   const d = slice.dimensions;
   const verified = ['hash', 'link', 'agreement', 'completeness'].every(k => d[k] === 'pass') && d.payload !== 'fail';
-  if (!verified && !indeterminate) {
-    indeterminate = `dimensions ${JSON.stringify(d)}; acceptance ${slice.acceptance.status}`;
-  }
   if (verified && !accepted && !hasAcceptanceAct) {
     preAcceptanceOnly = receipt.agreement?.accepted_status ?? 'no_acceptance';
   }
@@ -276,14 +272,14 @@ async function verifyV2(receipt) {
   const limits = Array.isArray(receipt.not_verifiable_here) ? receipt.not_verifiable_here : [];
   ok(limits.length > 0, 'the receipt states its own limits rather than implying none', `${limits.length} stated`);
   ok(!('verified_here' in receipt), 'the receipt contains no self-assessed verdict');
+  return verified ? null : `dimensions ${JSON.stringify(d)}; acceptance ${slice.acceptance.status}`;
 }
 
 /** Two parties' receipts for one agreement must agree, or the operator equivocated. */
-async function compare(a, b, { bothValid }) {
+async function compare(a, b) {
   console.log('\n--- comparing two receipts for the same agreement ---');
   // Only validated receipts for the same deal are compared: two consistent
   // histories under different deal labels are not an equivocation check.
-  if (!ok(bothValid, 'both receipts verified on their own before comparing')) return;
   const deal = r => r.agreement?.contract_id;
   if (!ok(deal(a) != null && deal(a) === deal(b), 'both receipts name the same deal',
     `${String(deal(a))} vs ${String(deal(b))}`)) return;
@@ -307,11 +303,21 @@ async function main() {
   const receipts = [];
   for (const f of files) {
     console.log(`\n${f}`);
-    const r = JSON.parse(await readFile(f, 'utf8'));
-    receipts.push(r);
-    await verify(r);
+    const receipt = JSON.parse(await readFile(f, 'utf8'));
+    const previousFailures = failures;
+    const incomplete = await verify(receipt);
+    receipts.push({ receipt, incomplete, failed: failures > previousFailures });
   }
-  if (receipts.length === 2) await compare(receipts[0], receipts[1], { bothValid: failures === 0 });
+  const indeterminate = receipts.find(result => result.incomplete)?.incomplete;
+  if (receipts.length === 2) {
+    if (receipts.some(result => result.failed)) {
+      ok(false, 'both receipts verified on their own before comparing');
+    } else if (indeterminate) {
+      console.log('Comparison skipped: both receipts must verify individually.');
+    } else {
+      await compare(receipts[0].receipt, receipts[1].receipt);
+    }
+  }
 
   console.log(`\n${failures} failed check${failures === 1 ? '' : 's'}`);
   if (failures === 0 && indeterminate) {
@@ -328,7 +334,7 @@ async function main() {
   }
   if (failures === 0) {
     console.log('RECEIPT VERIFIED — recomputed offline, from this file alone.');
-    if (receipts.some(r => r?.receipt_version === 2)) {
+    if (receipts.some(({ receipt }) => receipt?.receipt_version === 2)) {
       console.log('Completeness is the issuer\'s asserted read boundary: the hashes cannot show');
       console.log('that no later valid act was left out of this file.');
     }

@@ -1102,6 +1102,7 @@ Kept as constraints, not stories.
 - Codex Task 177: E2E deploy NO pending v2 row/aggregate consistency and faithful stub coverage. T174 core receipt fixes pass; incomplete receipt comparison still needs a separate fix. Report: `.ada/codex-report-177.md`.
 - Claude Task 207 (checks only; no edits, not committed): `deno check` was not run (deno isn't installed; install needs a decision). The stubbed E2E run of 4 specs gave 26 passed, 14 failed, none a product bug: 2 are the expected v2-prose change under D (test expectation), 4 are a stale `/CANNOT be reproduced/` assertion from `b5eebd3`, and 8 are first-wave timeouts (re-run with `--workers=1`). Report: `.ada/claude-report-207.md`.
 
+- Codex Task 178: receipt compare now requires two individually verified receipts. Incomplete pairs skip comparison and retain exit 3. Receipt and pager unit suites 50/50. Report: `.ada/codex-report-178.md`.
 - Claude Tasks 208-209 (Codex T177 must-fix; local commit only, **not pushed**):
   - The v2 parser now requires the trail verdict to follow from its own rows: completeness passes only for a complete tail with at least one event, hash/link/payload/agreement match the rows' strict labels (allowing the server's agreement downgrade), and any invalid row means failed.
   - The E2E stub `toV2` builds conservative row labels and derives the trail from them. A v4 agreement is unproven unless the fixture states `agreementChecked`.

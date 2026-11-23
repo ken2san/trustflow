@@ -194,11 +194,14 @@ async function receiptOf(rows, read = COMPLETE_READ, contract = CONTRACT_V2) {
 }
 // The same deal with its terms changed after acceptance.
 const CONTRACT_B = { ...CONTRACT_V2, amount_minor: 9999 }
-function runReceipt(label, receipt) {
-  const file = path.join(dir, `v2-${label.replace(/\W+/g, '-')}.json`)
-  writeFileSync(file, JSON.stringify(receipt, null, 2))
+function runReceipt(label, ...receipts) {
+  const files = receipts.map((receipt, index) => {
+    const file = path.join(dir, `v2-${label.replace(/\W+/g, '-')}-${index}.json`)
+    writeFileSync(file, JSON.stringify(receipt, null, 2))
+    return file
+  })
   try {
-    return { status: 0, out: execFileSync('node', [VERIFIER, file], { encoding: 'utf8', timeout: SPAWN_MS }) }
+    return { status: 0, out: execFileSync('node', [VERIFIER, ...files], { encoding: 'utf8', timeout: SPAWN_MS }) }
   } catch (e) {
     return { status: e.status, out: `${e.stdout ?? ''}${e.stderr ?? ''}` }
   }
@@ -396,5 +399,19 @@ describe('T205: a receipt is bound to one deal', { timeout: TEST_MS }, () => {
     catch (e) { out = `${e.stdout ?? ''}${e.stderr ?? ''}` }
     expect(out).toMatch(/FAIL both receipts verified on their own before comparing/)
     expect(out).not.toContain('same acts, in the same order')
+  })
+
+  it('skips comparison of unequal incomplete prefixes and preserves exit 3', async () => {
+    const rows = await mixedRows()
+    const read = { ...COMPLETE_READ, tail_complete: false }
+    const shorter = await receiptOf(rows.slice(0, 1), read)
+    const longer = await receiptOf(rows.slice(0, 2), read)
+
+    const { status, out } = runReceipt('incomplete-compare', shorter, longer)
+    expect(status).toBe(3)
+    expect(out).toContain('Comparison skipped: both receipts must verify individually.')
+    expect(out).not.toContain('same acts, in the same order')
+    expect(out).toContain('0 failed checks')
+    expect(out).toContain('RECEIPT NOT VERIFIED — incomplete')
   })
 })
