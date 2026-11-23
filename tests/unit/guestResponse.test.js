@@ -400,3 +400,26 @@ describe('T206: endpoint v2 bodies and the guest prose', () => {
   })
 })
 
+// ── T208: every real endpoint body variant passes the stricter parser ───────
+describe('T208: endpoint v2 bodies satisfy the row/aggregate rules', () => {
+  it('complete, unknown, truncated, empty, invalid row, payload and agreement mismatch', async () => {
+    const rows = await mixedTrail()
+    const [a, , c] = rows
+    const editedPayload = [...rows]; editedPayload[1] = { ...rows[1], payload: { note: 'edited' } }
+    const other = await rawLegacy(5, rows[2].event_hash, { agreement: 'f'.repeat(64), actor: OWNER })
+    const variants = {
+      complete: await serve2(rows),
+      unknown: await serve2(rows, { count: null }),
+      truncated: await serve2(rows, { count: rows.length + 1 }),
+      empty: await serve2([]),
+      invalid: await serve2([a, { ...c, credential_id: vid(7), issuer_kind: 'counterpart_account' }]),
+      payload: await serve2(editedPayload),
+      agreement: await serve2([...rows, nullAuthority(other)]),
+    }
+    for (const [name, { body }] of Object.entries(variants)) {
+      expect(parseGuestEvidence(body), name).toEqual({ ok: true, version: 2 })
+    }
+    expect(variants.empty.body.chain.verified).toBe(false)
+  })
+})
+

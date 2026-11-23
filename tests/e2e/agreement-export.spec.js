@@ -202,7 +202,9 @@ test(`a guest is given the server-verified record, not the owner document (${sha
   };
   await page.route(GUEST_EVENTS_ROUTE, route => {
     calls.guestEventUrls.push(route.request().url());
-    return json(route, shape === 'v2' ? toV2(v1Body) : v1Body);
+    // The one v4 acceptance row's agreement was compared by the server; v1
+    // cannot express that, so the v2 fixture states it (Codex T177).
+    return json(route, shape === 'v2' ? toV2(v1Body, { agreementChecked: true }) : v1Body);
   });
 
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
@@ -248,7 +250,8 @@ test(`a guest is given the server-verified record, not the owner document (${sha
 
   // It does not ask the reader to do what would fail, and says so.
   expect(record.verification_instructions).toBeUndefined();
-  expect(JSON.stringify(record.what_this_document_is)).toMatch(/CANNOT be reproduced/);
+  // Wording since b5eebd3 (Codex 115): no whole-payload claim.
+  expect(JSON.stringify(record.what_this_document_is)).toMatch(/payload digest cannot generally be checked from this file/);
 
   // The accepted deal is preserved, and the claimed identity is not upgraded.
   expect(record.accepted_agreement.amount).toBe(ACCEPTED.amount);

@@ -118,7 +118,10 @@ async function openTheRecord(page, { invite = {}, trail = {}, shape = 'v1', raw 
   };
   await page.route(GUEST_EVENTS_ROUTE, route => {
     calls.guestEventUrls.push(route.request().url());
-    return json(route, raw ?? (shape === 'v2' ? toV2(v1Body) : v1Body));
+    // The single v4 acceptance row's agreement digest is the one the server
+    // compares with the accepted snapshot, so the v2 fixture states it was
+    // checked (Codex T177: v1 alone cannot express that evidence).
+    return json(route, raw ?? (shape === 'v2' ? toV2(v1Body, { agreementChecked: true }) : v1Body));
   });
 
   await page.addInitScript(() => localStorage.setItem('tf_onboarded', '1'));
@@ -240,49 +243,64 @@ test('the record names the hash format, never a writer, from a version 1 body', 
   await expect(page.getByText(/trust_model "server_attested"/)).toBeVisible();
 });
 
-test('a version 2 body reads the same way', async ({ page }) => {
+test('a version 2 body reads its strict verdict (option D)', async ({ page }) => {
   await openTheRecord(page, { shape: 'v2' });
   await acceptAndOpen(page);
 
   await expect(page.getByText('What was accepted')).toBeVisible();
   await expect(page.getByText('Hash format v4')).toBeVisible();
-  await expect(page.getByText('No check that ran found a mismatch.')).toBeVisible();
+  await expect(page.getByText(/strict check passed every dimension/)).toBeVisible();
+  await expect(page.getByText('No check that ran found a mismatch.')).toHaveCount(0);
   await expect(page.locator('ol').getByText('by a party', { exact: true })).toBeVisible();
 });
 
-test('a truncated record says more events may exist, and an old mismatch is shown', async ({ page }) => {
-  await openTheRecord(page, {
-    trail: {
-      events: [
-        {
-          id: '55555555-5555-4555-8555-555555555555', type: 'contract.initiated',
-          created_at: '2026-09-20T12:00:00.000Z', actor: { id: 'x' }, payload: {},
-          integrity: {
-            trust_model: 'client_asserted', canonical_version: 1, canonical_version_supported: true,
-            hash_valid: false, chain_linked: null, substance_valid: null,
-          },
-        },
-        {
-          id: '44444444-4444-4444-8444-444444444444', type: 'dod.consent_recorded',
-          created_at: '2026-09-24T12:00:00.000Z', actor: { id: null }, payload: {},
-          integrity: {
-            trust_model: 'server_attested', canonical_version: 4, canonical_version_supported: true,
-            hash_valid: true, chain_linked: true, substance_valid: true,
-          },
-        },
-      ],
-      chain: {
-        event_count: 2, server_attested: 1, client_asserted: 1,
-        verified: true, truncated: true, payload_covered_by_hash: false,
+// A format 1 row whose hash did not match beside a clean format 4 row, read
+// with the cap reached. Served as version 1 (the default) and, separately, as
+// version 2 below.
+const TRUNCATED_MIXED_TRAIL = {
+  events: [
+    {
+      id: '55555555-5555-4555-8555-555555555555', type: 'contract.initiated',
+      created_at: '2026-09-20T12:00:00.000Z', actor: { id: 'x' }, payload: {},
+      integrity: {
+        trust_model: 'client_asserted', canonical_version: 1, canonical_version_supported: true,
+        hash_valid: false, chain_linked: null, substance_valid: null,
       },
     },
-  });
+    {
+      id: '44444444-4444-4444-8444-444444444444', type: 'dod.consent_recorded',
+      created_at: '2026-09-24T12:00:00.000Z', actor: { id: null }, payload: {},
+      integrity: {
+        trust_model: 'server_attested', canonical_version: 4, canonical_version_supported: true,
+        hash_valid: true, chain_linked: true, substance_valid: true,
+      },
+    },
+  ],
+  chain: {
+    event_count: 2, server_attested: 1, client_asserted: 1,
+    verified: true, truncated: true, payload_covered_by_hash: false,
+  },
+};
+
+test('a truncated record says more events may exist, and an old mismatch is shown', async ({ page }) => {
+  await openTheRecord(page, { trail: TRUNCATED_MIXED_TRAIL });
   await acceptAndOpen(page);
 
   // verified is true here (the server checks v2+ only); the screen still says.
   await expect(page.getByText(/^1 event has a check that did not match/)).toBeVisible();
   await expect(page.getByText(/Additional events may exist and were not checked here/)).toBeVisible();
   await expect(page.getByText(/chain holds|tampered/)).toHaveCount(0);
+});
+
+test('version 2 of the same truncated record: the strict check failed, and the read is not proven complete', async ({ page }) => {
+  await openTheRecord(page, { trail: TRUNCATED_MIXED_TRAIL, shape: 'v2' });
+  await acceptAndOpen(page);
+
+  await expect(page.getByText(/strict check found a problem in: event hash, on 1 event/)).toBeVisible();
+  await expect(page.getByText(/could not establish that this response reaches the last event/)).toBeVisible();
+  // A missing count is not proof the server's cap was reached.
+  await expect(page.getByText(/most events the server returns/)).toHaveCount(0);
+  await expect(page.getByText('No check that ran found a mismatch.')).toHaveCount(0);
 });
 
 test('a response the page cannot validate is refused, not partly shown', async ({ page }) => {

@@ -64,6 +64,45 @@ function strictRowProblem(strict) {
   return null
 }
 
+// The strict slice's label sets (eventVerifyV5.ts): a row label in FAIL fails
+// its dimension; a dimension passes only when every row's label is in PASS.
+const STRICT_FAIL = ['mismatch', 'broken', 'invalid', 'invalid_input']
+const STRICT_PASS = ['match', 'linked', 'pre_acceptance', 'not_in_format', 'not_bound']
+const ROW_DIMENSIONS = ['hash', 'link', 'payload', 'agreement']
+
+/** One dimension from the rows' own strict labels, by the slice's rule. */
+const dimensionFromRows = (events, key) => {
+  const labels = events.map(ev => ev.integrity.strict[key])
+  if (labels.some(v => STRICT_FAIL.includes(v))) return 'fail'
+  return labels.every(v => STRICT_PASS.includes(v)) ? 'pass' : 'indeterminate'
+}
+
+/**
+ * The reason a version 2 trail verdict could not have come from its own rows,
+ * or null (Codex T177). Run after every row's labels are validated.
+ *   - completeness passes exactly when the tail is complete AND there is at
+ *     least one event: an empty history is never verified
+ *   - hash, link and payload equal the dimension the rows give
+ *   - agreement equals it too, except that a row-derived pass may be declared
+ *     indeterminate (the server's downgrade for a rejected acceptance marker,
+ *     which never makes a body more verified)
+ *   - any invalid row means the trail failed
+ */
+function strictRowsProblem(sv, events) {
+  const dims = sv.server.dimensions
+  const completeness = sv.server.read_boundary.tail === 'complete' && events.length > 0 ? 'pass' : 'indeterminate'
+  if (dims.completeness !== completeness) return 'strict_verification.server.dimensions.completeness'
+  for (const key of ROW_DIMENSIONS) {
+    const derived = dimensionFromRows(events, key)
+    const downgraded = key === 'agreement' && derived === 'pass' && dims[key] === 'indeterminate'
+    if (dims[key] !== derived && !downgraded) return `strict_verification.server.dimensions.${key}`
+  }
+  if (events.some(ev => ev.integrity.strict.kind === 'invalid') && sv.server.overall !== 'failed') {
+    return 'strict_verification.server.overall'
+  }
+  return null
+}
+
 /** The strict slice's own aggregate rule (eventVerifyV5.ts verifyEvidenceSlice). */
 const overallFromDimensions = dims => {
   const all = STRICT_DIMENSIONS.map(k => dims[k])
@@ -160,6 +199,10 @@ export function parseGuestEvidence(body) {
     if ('payload' in ev && ev.payload !== null && !isPlainObject(ev.payload)) {
       return bad(`${at}.payload`)
     }
+  }
+  if (version === 2) {
+    const problem = strictRowsProblem(body.strict_verification, body.events)
+    if (problem) return bad(problem)
   }
   return { ok: true, version }
 }

@@ -33,8 +33,17 @@ export function askedForV2(url) {
 /**
  * A version 1 body (what today's function, or one rolled back, returns even
  * when version 2 is asked for) rewritten as the version 2 shape.
+ *
+ * NOT A v2 ORACLE BY ITSELF (Codex T177). A version 1 body cannot carry the
+ * evidence a strict pass needs, so each row's strict labels are built
+ * conservatively from its tri-states and anything v1 cannot express stays
+ * indeterminate. The trail verdict is then derived from those rows by the
+ * same rule the page's parser enforces. `agreementChecked: true` is the
+ * fixture stating that the server compared every format 4 row's agreement
+ * digest with the accepted snapshot and it matched; without it, a v4 row's
+ * agreement is indeterminate and the record cannot verify.
  */
-export function toV2(body) {
+export function toV2(body, { agreementChecked = false } = {}) {
   const { server_attested: v2OrLater = 0, client_asserted: belowV2 = 0, ...chain } = body.chain ?? {};
   const events = (body.events ?? []).map(({ actor, integrity, ...ev }) => {
     const rest = { ...integrity };
@@ -47,7 +56,7 @@ export function toV2(body) {
         recorded_id_class: actor?.id == null ? 'missing' : 'other',
       },
       provenance: { writer: 'unknown', basis: 'none_recorded' },
-      integrity: { ...rest, strict: strictOf(rest) },
+      integrity: { ...rest, strict: strictOf(rest, { agreementChecked }) },
     };
   });
   const trail = strictTrailOf(body, events);
@@ -63,19 +72,26 @@ export function toV2(body) {
   };
 }
 
+// The strict slice's label sets (supabase/functions/_shared/eventVerifyV5.ts).
+const STRICT_FAIL = ['mismatch', 'broken', 'invalid', 'invalid_input'];
+const STRICT_PASS = ['match', 'linked', 'pre_acceptance', 'not_in_format', 'not_bound'];
+
 /**
- * A trail verdict consistent with the stub's own rows, under the v2 parser's
- * rules (option D, Tasks 203/206): dimensions from the rows, overall from the
- * dimensions, the tail from chain.truncated (count unknown), and
- * chain.verified equal to overall === 'verified'. A stub has no stored rows,
+ * A trail verdict derived from the rows' strict labels: a dimension fails on
+ * any failing label and passes only when every label passes; completeness
+ * passes only for an untruncated, nonempty trail. A stub has no stored rows,
  * so nothing here is a real check.
  */
 function strictTrailOf(body, events) {
   const truncated = body.chain?.truncated === true;
-  const dim = key => (events.some(e => e.integrity[key] === false) ? 'fail' : 'pass');
+  const dim = key => {
+    const labels = events.map(e => e.integrity.strict[key]);
+    if (labels.some(v => STRICT_FAIL.includes(v))) return 'fail';
+    return labels.every(v => STRICT_PASS.includes(v)) ? 'pass' : 'indeterminate';
+  };
   const dimensions = {
-    hash: dim('hash_valid'), link: dim('chain_linked'), payload: dim('substance_valid'), agreement: 'pass',
-    completeness: truncated || !body.chain?.verified ? 'indeterminate' : 'pass',
+    hash: dim('hash'), link: dim('link'), payload: dim('payload'), agreement: dim('agreement'),
+    completeness: !truncated && events.length > 0 ? 'pass' : 'indeterminate',
   };
   const all = Object.values(dimensions);
   const overall = all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete';
@@ -92,14 +108,18 @@ function strictTrailOf(body, events) {
   };
 }
 
-/** A per-event strict block consistent with the stub's tri-state results. */
-function strictOf(integrity) {
+/** A per-event strict block from v1 tri-states; what v1 cannot show stays unproven. */
+function strictOf(integrity, { agreementChecked }) {
+  const supported = integrity.canonical_version_supported === true;
+  const version = integrity.canonical_version;
   const tri = (v, pass, fail, otherwise) => (v === true ? pass : v === false ? fail : otherwise);
   return {
-    kind: integrity.canonical_version_supported ? 'legacy' : 'unsupported',
-    hash: tri(integrity.hash_valid, 'match', 'mismatch', 'unsupported'),
+    kind: supported ? 'legacy' : 'unsupported',
+    hash: tri(integrity.hash_valid, 'match', 'mismatch', supported ? 'missing' : 'unsupported'),
     link: tri(integrity.chain_linked, 'linked', 'broken', 'indeterminate'),
-    payload: tri(integrity.substance_valid, 'match', 'mismatch', 'not_in_format'),
-    agreement: 'not_bound',
+    payload: tri(integrity.substance_valid, 'match', 'mismatch', supported && version < 3 ? 'not_in_format' : 'indeterminate'),
+    agreement: !supported ? 'indeterminate'
+      : version < 4 ? 'not_bound'
+        : agreementChecked ? 'match' : 'indeterminate',
   };
 }

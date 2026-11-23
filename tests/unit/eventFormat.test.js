@@ -25,16 +25,23 @@ const ev = (id, over = {}) => ({ id, type: 'performance.asserted', integrity: in
 const asV2 = (body, { dims = {}, tail } = {}) => {
   const t = tail ?? (body.chain.truncated ? 'unknown' : 'complete')
   const dimensions = { hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass',
-    completeness: body.chain.verified && t === 'complete' ? 'pass' : 'indeterminate', ...dims }
+    completeness: body.chain.verified && t === 'complete' && body.events.length > 0 ? 'pass' : 'indeterminate', ...dims }
   const all = Object.values(dimensions)
   const overall = all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete'
   const n = body.events.length
+  // The last event carries the row label behind any dimension override, so
+  // the aggregate can be derived from the rows (Codex T177).
+  const rowLabel = { fail: { hash: 'mismatch', link: 'broken', payload: 'mismatch', agreement: 'mismatch' },
+    indeterminate: { hash: 'missing', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' } }
+  const lastStrict = { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' }
+  for (const [k, v] of Object.entries(dims)) if (k !== 'completeness' && rowLabel[v]) lastStrict[k] = rowLabel[v][k]
   return {
     ...body,
     response_version: 2,
     chain: { ...body.chain, verified: overall === 'verified', truncated: t !== 'complete' },
-    events: body.events.map(e => ({ ...e, integrity: { ...e.integrity,
-      strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' } } })),
+    events: body.events.map((e, i) => ({ ...e, integrity: { ...e.integrity,
+      strict: i === n - 1 ? { ...lastStrict }
+        : { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' } } })),
     strict_verification: {
       server: {
         overall, dimensions,
@@ -499,10 +506,11 @@ describe('T206: version 2 prose comes from the strict verdict', () => {
     expect(s.overall.text).not.toMatch(/No check that ran found a mismatch/)
   })
   it('an invalid event is counted', () => {
-    const body = asV2(evidence([ev('a')]), { dims: { hash: 'fail' } })
+    const body = asV2(evidence([ev('a')]), { dims: { hash: 'fail', link: 'fail', payload: 'indeterminate', agreement: 'fail' } })
     body.events[0].integrity.strict = { kind: 'invalid', hash: 'invalid_input', link: 'invalid_input',
       payload: 'indeterminate', agreement: 'invalid_input', reason: 'x' }
-    expect(summaryPresentation(body).overall.text).toMatch(/in: event hash, on 1 event/)
+    expect(parseGuestEvidence(body)).toEqual({ ok: true, version: 2 })
+    expect(summaryPresentation(body).overall.text).toMatch(/in: event hash, chain link, agreement, on 1 event/)
   })
   it('incomplete is not a pass, and names what was not established', () => {
     const s = summaryPresentation(asV2(evidence([ev('a')]), { tail: 'unknown' }))
@@ -538,3 +546,47 @@ describe('T206: the truncation notice states the read boundary in version 2', ()
     expect(truncationNotice(evidence([ev('a')]))).toBeNull()
   })
 })
+
+// ── T208: the trail verdict must follow from the rows (Codex T177) ──────────
+describe('T208: a version 2 aggregate cannot contradict its own rows', () => {
+  const clone = b => JSON.parse(JSON.stringify(b))
+  it('an empty history is never verified, even with a complete tail and count 0', () => {
+    const empty = asV2(evidence([]))
+    expect(parseGuestEvidence(empty)).toEqual({ ok: true, version: 2 })
+    expect(empty.strict_verification.server.overall).toBe('incomplete')
+    const forged = clone(empty)
+    forged.strict_verification.server.dimensions.completeness = 'pass'
+    forged.strict_verification.server.overall = 'verified'
+    forged.chain.verified = true
+    expect(parseGuestEvidence(forged)).toEqual({ ok: false, reason: 'strict_verification.server.dimensions.completeness' })
+  })
+  it('a passing aggregate over a row whose agreement mismatched is refused', () => {
+    const b = asV2(evidence([ev('a'), ev('b')]))
+    b.events[1].integrity.strict.agreement = 'mismatch'
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.dimensions.agreement' })
+  })
+  it('a passing aggregate over an invalid row is refused', () => {
+    const b = asV2(evidence([ev('a')]))
+    b.events[0].integrity.strict = { kind: 'invalid', hash: 'match', link: 'linked', payload: 'match', agreement: 'match', reason: 'x' }
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.overall' })
+  })
+  it('a payload pass over an indeterminate row is refused', () => {
+    const b = asV2(evidence([ev('a')]))
+    b.events[0].integrity.strict.payload = 'indeterminate'
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.dimensions.payload' })
+  })
+  it('a declared fail with no failing row is refused too', () => {
+    const b = asV2(evidence([ev('a')]))
+    Object.assign(b.strict_verification.server, { overall: 'failed' })
+    b.strict_verification.server.dimensions.link = 'fail'
+    b.chain.verified = false
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.dimensions.link' })
+  })
+  it('the server\'s agreement downgrade (rows pass, declared indeterminate) is accepted', () => {
+    const b = asV2(evidence([ev('a')]), { dims: { agreement: 'indeterminate' } })
+    b.events[0].integrity.strict.agreement = 'match'
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
+    expect(b.strict_verification.server.overall).toBe('incomplete')
+  })
+})
+

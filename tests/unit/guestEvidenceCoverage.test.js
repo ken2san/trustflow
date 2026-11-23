@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import GuestEvidenceView from '../../src/views/GuestEvidenceView.jsx'
+import { parseGuestEvidence } from '../../src/lib/eventFormat.js'
 
 // What the guest screen says a hash covers (Codex 114, blocking 2). It used to
 // say every hash covered the agreement digest and a previous link, true only
@@ -121,18 +122,23 @@ describe('GuestEvidenceView download explanation (Codex 115, finding 2)', () => 
 
 // ── T206: the screen's verdict sentence for a version 2 body ───────────────
 describe('T206: GuestEvidenceView with a version 2 strict failure', () => {
-  const v2Body = (dimensions, overall, tail = 'complete') => ({
+  const v2Body = (dimensions, overall, tail = 'complete', agreement = 'mismatch') => ({
     response_version: 2,
     contract: { id: 'c1', project_name: 'Probe', earner_display_name: 'Acme' },
     accepted_agreement: null,
     events: [row('e1', 4)].map(e => ({ ...e, integrity: { ...e.integrity,
-      strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'mismatch' } } })),
+      strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement } } })),
     chain: { event_count: 1, verified: overall === 'verified', truncated: tail !== 'complete' },
     strict_verification: { server: { overall, dimensions, acceptance: { status: 'derived', index: 0 },
       read_boundary: { start: 'first_event', tail, recorded_count: tail === 'complete' ? 1 : null } },
       server_agreement: { status: 'ok', hash: null, acceptance_index: 0 }, local_note: 'x' },
   })
-  const textFor = evidence => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, { evidence })))
+  // Both bodies must be ones the page would accept, so the screen is tested on
+  // possible input only (Codex T177).
+  const textFor = evidence => {
+    expect(parseGuestEvidence(evidence)).toEqual({ ok: true, version: 2 })
+    return textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, { evidence })))
+  }
 
   it('every per-event check matched, agreement failed: the screen says the strict check found a problem', () => {
     const t = textFor(v2Body({ hash: 'pass', link: 'pass', payload: 'pass', agreement: 'fail', completeness: 'pass' }, 'failed'))
@@ -142,7 +148,7 @@ describe('T206: GuestEvidenceView with a version 2 strict failure', () => {
 
   it('an unknown tail: not verified, and no claim that the cap was reached', () => {
     const t = textFor(v2Body({ hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass', completeness: 'indeterminate' },
-      'incomplete', 'unknown'))
+      'incomplete', 'unknown', 'match'))
     expect(t).toMatch(/This record is not verified/)
     expect(t).toMatch(/could not establish that this response reaches the last event/)
     expect(t).not.toMatch(/most events the server returns/)
