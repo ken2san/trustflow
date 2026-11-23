@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseGuestEvidence, formatPartition, checkOutcomes, summaryPresentation,
   guestChainStatus, rowCheckState, formatLabel, coverageStatements, checkSummary,
-  payloadProjectionNote,
+  payloadProjectionNote, truncationNotice,
 } from '../../src/lib/eventFormat.js'
 
 // What a guest is told about their record, and when they are told nothing.
@@ -17,24 +17,36 @@ const integrity = (over = {}) => ({
   ...over,
 })
 const ev = (id, over = {}) => ({ id, type: 'performance.asserted', integrity: integrity(over) })
-/** A version 2 body: strict verdicts on every row and on the trail. */
-const asV2 = body => ({
-  ...body,
-  response_version: 2,
-  events: body.events.map(e => ({ ...e, integrity: { ...e.integrity,
-    strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' } } })),
-  strict_verification: {
-    server: {
-      overall: body.chain.verified ? 'verified' : 'incomplete',
-      dimensions: { hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass',
-        completeness: body.chain.verified ? 'pass' : 'indeterminate' },
-      acceptance: { status: 'caller' },
-      read_boundary: { start: 'first_event', tail: 'complete', recorded_count: body.events.length },
+/**
+ * A version 2 body: strict verdicts on every row and on the trail, consistent
+ * under the parser's rules (overall from dimensions, tail from the count,
+ * chain.truncated and chain.verified from those). `dims` overrides dimensions.
+ */
+const asV2 = (body, { dims = {}, tail } = {}) => {
+  const t = tail ?? (body.chain.truncated ? 'unknown' : 'complete')
+  const dimensions = { hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass',
+    completeness: body.chain.verified && t === 'complete' ? 'pass' : 'indeterminate', ...dims }
+  const all = Object.values(dimensions)
+  const overall = all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete'
+  const n = body.events.length
+  return {
+    ...body,
+    response_version: 2,
+    chain: { ...body.chain, verified: overall === 'verified', truncated: t !== 'complete' },
+    events: body.events.map(e => ({ ...e, integrity: { ...e.integrity,
+      strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' } } })),
+    strict_verification: {
+      server: {
+        overall, dimensions,
+        acceptance: { status: 'caller' },
+        read_boundary: { start: 'first_event', tail: t,
+          recorded_count: t === 'complete' ? n : t === 'truncated' ? n + 1 : null },
+      },
+      server_agreement: { status: 'no_acceptance', hash: null, acceptance_index: null },
+      local_note: 'x',
     },
-    server_agreement: { status: 'no_acceptance', hash: null, acceptance_index: null },
-    local_note: 'x',
-  },
-})
+  }
+}
 const evidence = (events, chain = {}) => ({
   contract: { id: 'c1' },
   events,
@@ -57,7 +69,7 @@ describe('parseGuestEvidence: a response is understood whole or refused', () => 
     expect(parseGuestEvidence({ ...body, chain: { ...body.chain, verified: false } }).reason).toBe('chain.verified')
     const unbounded = JSON.parse(JSON.stringify(body))
     unbounded.strict_verification.server.read_boundary.tail = 'unknown'
-    expect(parseGuestEvidence(unbounded).reason).toBe('strict_verification.server.overall')
+    expect(parseGuestEvidence(unbounded).reason).toBe('strict_verification.server.read_boundary')
     // An unversioned body is version 1, and v2-only verdicts do not belong in it.
     const { response_version: _v, ...v1 } = body
     expect(parseGuestEvidence(v1).reason).toBe('strict_verification')
@@ -438,5 +450,91 @@ describe('checkSummary: every row, whatever the status says', () => {
       hash_valid: null, chain_linked: null, substance_valid: null }]))
     expect(c.any_mismatch).toBe(false)
     expect(c.checks_not_run).toBe(3)
+  })
+})
+
+// ── T206: Codex T176 item 4 ─────────────────────────────────────────────────
+describe('T206: a version 2 body must agree with itself and with its events', () => {
+  const clone = b => JSON.parse(JSON.stringify(b))
+  const base = () => asV2(evidence([ev('a'), ev('b')]))
+  const cases = [
+    ['verified while a dimension failed', b => { b.strict_verification.server.dimensions.agreement = 'fail' }, 'strict_verification.server.overall'],
+    ['failed while every dimension passed', b => { b.strict_verification.server.overall = 'failed'; b.chain.verified = false }, 'strict_verification.server.overall'],
+    ['complete tail with a null count', b => { b.strict_verification.server.read_boundary.recorded_count = null }, 'strict_verification.server.read_boundary'],
+    ['complete tail with an unequal count', b => { b.strict_verification.server.read_boundary.recorded_count = 3 }, 'strict_verification.server.read_boundary'],
+    ['truncated tail with a count not above the events', b => {
+      Object.assign(b.strict_verification.server.read_boundary, { tail: 'truncated', recorded_count: 2 })
+      b.strict_verification.server.dimensions.completeness = 'indeterminate'
+      b.strict_verification.server.overall = 'incomplete'; b.chain.verified = false; b.chain.truncated = true
+    }, 'strict_verification.server.read_boundary'],
+    ['completeness passed over an unknown tail', b => {
+      Object.assign(b.strict_verification.server.read_boundary, { tail: 'unknown', recorded_count: null })
+      b.chain.truncated = true
+    }, 'strict_verification.server.dimensions.completeness'],
+    ['chain.truncated contradicting a complete tail', b => { b.chain.truncated = true }, 'chain.truncated'],
+    ['chain.event_count contradicting the events', b => { b.chain.event_count = 5 }, 'chain.event_count'],
+  ]
+  for (const [name, mutate, reason] of cases) {
+    it(`refuses ${name}`, () => {
+      const b = clone(base())
+      mutate(b)
+      expect(parseGuestEvidence(b)).toEqual({ ok: false, reason })
+    })
+  }
+  it('accepts consistent incomplete and failed bodies', () => {
+    expect(parseGuestEvidence(asV2(evidence([ev('a')]), { tail: 'unknown' })).ok).toBe(true)
+    expect(parseGuestEvidence(asV2(evidence([ev('a')]), { tail: 'truncated' })).ok).toBe(true)
+    expect(parseGuestEvidence(asV2(evidence([ev('a')]), { dims: { agreement: 'fail' } })).ok).toBe(true)
+  })
+})
+
+describe('T206: version 2 prose comes from the strict verdict', () => {
+  it('an agreement failure with every per-event check matched is never "no mismatch"', () => {
+    const body = asV2(evidence([ev('a'), ev('b')]), { dims: { agreement: 'fail' } })
+    body.events[1].integrity.strict.agreement = 'mismatch'
+    expect(parseGuestEvidence(body).ok).toBe(true)
+    const s = summaryPresentation(body)
+    expect(s.overall.tone).toBe('mismatch')
+    expect(s.overall.text).toMatch(/strict check found a problem in: agreement, on 1 event/)
+    expect(s.overall.text).not.toMatch(/No check that ran found a mismatch/)
+  })
+  it('an invalid event is counted', () => {
+    const body = asV2(evidence([ev('a')]), { dims: { hash: 'fail' } })
+    body.events[0].integrity.strict = { kind: 'invalid', hash: 'invalid_input', link: 'invalid_input',
+      payload: 'indeterminate', agreement: 'invalid_input', reason: 'x' }
+    expect(summaryPresentation(body).overall.text).toMatch(/in: event hash, on 1 event/)
+  })
+  it('incomplete is not a pass, and names what was not established', () => {
+    const s = summaryPresentation(asV2(evidence([ev('a')]), { tail: 'unknown' }))
+    expect(s.overall).toEqual({ tone: 'none', text: expect.stringMatching(/could not complete\. Not established: completeness\. This record is not verified\./) })
+  })
+  it('verified says it is the server\'s strict check, with the payload limit', () => {
+    const s = summaryPresentation(asV2(evidence([ev('a')])))
+    expect(s.overall.text).toMatch(/strict check passed every dimension/)
+    expect(s.overall.text).toMatch(/payload digest cannot be repeated from this page/)
+  })
+  it('a per-event mismatch is a mismatch whatever the strict verdict says', () => {
+    const body = asV2(evidence([ev('a', { hash_valid: false })]), { dims: { hash: 'fail' } })
+    expect(summaryPresentation(body).overall.tone).toBe('mismatch')
+  })
+  it('version 1 prose is unchanged', () => {
+    expect(summaryPresentation(evidence([ev('a')])).overall)
+      .toEqual({ tone: 'none', text: 'No check that ran found a mismatch.' })
+  })
+})
+
+describe('T206: the truncation notice states the read boundary in version 2', () => {
+  it('truncated, unknown and complete tails', () => {
+    expect(truncationNotice(asV2(evidence([ev('a')]), { tail: 'truncated' })))
+      .toBe('The server recorded more events than this response carries. The remaining events were not checked here.')
+    const unknown = truncationNotice(asV2(evidence([ev('a')]), { tail: 'unknown' }))
+    expect(unknown).toMatch(/could not establish that this response reaches the last event/)
+    expect(unknown).not.toMatch(/most events the server returns/)
+    expect(truncationNotice(asV2(evidence([ev('a')])))).toBeNull()
+  })
+  it('version 1 keeps the cap sentence', () => {
+    expect(truncationNotice(evidence([ev('a')], { truncated: true })))
+      .toBe('This response reached the most events the server returns. Additional events may exist and were not checked here.')
+    expect(truncationNotice(evidence([ev('a')]))).toBeNull()
   })
 })

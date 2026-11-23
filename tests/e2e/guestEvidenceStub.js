@@ -36,42 +36,59 @@ export function askedForV2(url) {
  */
 export function toV2(body) {
   const { server_attested: v2OrLater = 0, client_asserted: belowV2 = 0, ...chain } = body.chain ?? {};
+  const events = (body.events ?? []).map(({ actor, integrity, ...ev }) => {
+    const rest = { ...integrity };
+    delete rest.trust_model;
+    return {
+      ...ev,
+      actor: {
+        id: actor?.id ?? null,
+        attribution: 'as_recorded_not_verified',
+        recorded_id_class: actor?.id == null ? 'missing' : 'other',
+      },
+      provenance: { writer: 'unknown', basis: 'none_recorded' },
+      integrity: { ...rest, strict: strictOf(rest) },
+    };
+  });
+  const trail = strictTrailOf(body, events);
   return {
     ...body,
     response_version: 2,
-    chain: { ...chain, events_format_v2_or_later: v2OrLater, events_format_below_v2: belowV2 },
-    events: (body.events ?? []).map(({ actor, integrity, ...ev }) => {
-      const rest = { ...integrity };
-      delete rest.trust_model;
-      return {
-        ...ev,
-        actor: {
-          id: actor?.id ?? null,
-          attribution: 'as_recorded_not_verified',
-          recorded_id_class: actor?.id == null ? 'missing' : 'other',
-        },
-        provenance: { writer: 'unknown', basis: 'none_recorded' },
-        integrity: { ...rest, strict: strictOf(rest) },
-      };
-    }),
-    // Version 2 must carry the trail verdict, and chain.verified must equal
-    // overall === 'verified' (option D, Task 203). A stub has no stored rows,
-    // so an unverified trail is reported as incomplete, never as failed.
-    strict_verification: {
-      server: {
-        overall: chain.verified ? 'verified' : 'incomplete',
-        dimensions: {
-          hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass',
-          completeness: chain.verified ? 'pass' : 'indeterminate',
-        },
-        acceptance: { status: 'caller' },
-        read_boundary: chain.verified
-          ? { start: 'first_event', tail: 'complete', recorded_count: (body.events ?? []).length }
-          : { start: 'first_event', tail: 'unknown', recorded_count: null },
-      },
-      server_agreement: { status: 'no_acceptance', hash: null, acceptance_index: null },
-      local_note: 'Stubbed response; no strict check ran.',
+    chain: {
+      ...chain, events_format_v2_or_later: v2OrLater, events_format_below_v2: belowV2,
+      event_count: events.length, verified: trail.server.overall === 'verified',
     },
+    events,
+    strict_verification: trail,
+  };
+}
+
+/**
+ * A trail verdict consistent with the stub's own rows, under the v2 parser's
+ * rules (option D, Tasks 203/206): dimensions from the rows, overall from the
+ * dimensions, the tail from chain.truncated (count unknown), and
+ * chain.verified equal to overall === 'verified'. A stub has no stored rows,
+ * so nothing here is a real check.
+ */
+function strictTrailOf(body, events) {
+  const truncated = body.chain?.truncated === true;
+  const dim = key => (events.some(e => e.integrity[key] === false) ? 'fail' : 'pass');
+  const dimensions = {
+    hash: dim('hash_valid'), link: dim('chain_linked'), payload: dim('substance_valid'), agreement: 'pass',
+    completeness: truncated || !body.chain?.verified ? 'indeterminate' : 'pass',
+  };
+  const all = Object.values(dimensions);
+  const overall = all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete';
+  return {
+    server: {
+      overall, dimensions,
+      acceptance: { status: 'caller' },
+      read_boundary: truncated
+        ? { start: 'first_event', tail: 'unknown', recorded_count: null }
+        : { start: 'first_event', tail: 'complete', recorded_count: events.length },
+    },
+    server_agreement: { status: 'no_acceptance', hash: null, acceptance_index: null },
+    local_note: 'Stubbed response; no strict check ran.',
   };
 }
 

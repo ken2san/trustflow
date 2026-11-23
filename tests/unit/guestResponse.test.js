@@ -8,7 +8,7 @@ import {
 } from '../../supabase/functions/_shared/guestEventView.ts'
 import { eventCanonical, payloadHash, sha256Hex, stableStringify } from '../../supabase/functions/_shared/eventCanonical.ts'
 import { buildEventCanonicalV5 } from '../../supabase/functions/_shared/eventCanonicalV5.ts'
-import { parseGuestEvidence, coverageStatements } from '../../src/lib/eventFormat.js'
+import { parseGuestEvidence, coverageStatements, summaryPresentation, truncationNotice } from '../../src/lib/eventFormat.js'
 import { buildGuestRecordDocument } from '../../src/lib/guestRecordExport.js'
 
 // Task 202: response version 2 behind ?response_version=2, with version 1
@@ -375,3 +375,28 @@ describe('the counterparty document from a version 2 body', () => {
     expect(doc.events.some(e => 'strict' in e.server_verification)).toBe(false)
   })
 })
+
+// ── T206: real endpoint bodies through the screen's prose ───────────────────
+describe('T206: endpoint v2 bodies and the guest prose', () => {
+  it('a later v4 act citing different terms: strict failed, and the prose says so', async () => {
+    const rows = await mixedTrail()
+    const other = await rawLegacy(5, rows[2].event_hash, { agreement: 'f'.repeat(64), actor: OWNER })
+    const { body } = await serve2([...rows, nullAuthority(other)])
+    expect(body.events.every(e => e.integrity.hash_valid !== false && e.integrity.chain_linked !== false
+      && e.integrity.substance_valid !== false)).toBe(true)
+    expect(body.strict_verification.server.dimensions.agreement).toBe('fail')
+    expect(parseGuestEvidence(body)).toEqual({ ok: true, version: 2 })
+    const s = summaryPresentation(body)
+    expect(s.overall.tone).toBe('mismatch')
+    expect(s.overall.text).toMatch(/in: agreement, on 1 event/)
+  })
+  it('incomplete endpoint bodies get the boundary notice, never the cap sentence', async () => {
+    const rows = await mixedTrail()
+    const unknown = (await serve2(rows, { count: null })).body
+    expect(truncationNotice(unknown)).toMatch(/could not establish/)
+    const truncated = (await serve2(rows, { count: rows.length + 1 })).body
+    expect(truncationNotice(truncated)).toMatch(/recorded more events/)
+    expect(truncationNotice((await serve2(rows)).body)).toBeNull()
+  })
+})
+

@@ -1093,3 +1093,8 @@ Kept as constraints, not stories.
   - Receipt v2 is bound to its deal: the envelope `contract_id` must match every act, and `snapshot_version` must match the snapshot. Compare runs only on verified, same-deal receipts.
   - Paging ends only on an empty page. Offline success states the issuer's asserted read boundary; a draft says "pre-acceptance chain only".
   - verifyReceipt and pagedEvents tests: 49/49. make-receipt and verify-chain are untested here (network). Report: `.ada/claude-report-205.md`.
+- Claude Task 206 (Codex T176 item 4 on `0dc28ce`; local commit only, **not pushed**):
+  - The v2 screen and export prose come from the strict verdict: a failed strict check (for example agreement) is never "No check that ran found a mismatch", and incomplete says it is not verified. The truncation notice states the v2 read boundary, and a missing count never claims the cap was reached. v1 text is unchanged.
+  - The v2 parser checks the body against itself: overall vs dimensions, tail vs count vs the events returned, completeness vs tail, `chain.truncated` and `event_count`.
+  - The E2E stub `toV2` derives a consistent trail. That file was edited but not run: `agreement-record-ui.spec.js:276` (verified + truncated) now shows not verified under v2 and needs a stubbed run before the E2E deploy.
+  - Unit tests: four files, 134/134. T205 committed separately as `6d957ba`. Report: `.ada/claude-report-206.md`.

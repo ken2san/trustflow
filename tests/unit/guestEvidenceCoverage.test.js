@@ -118,3 +118,34 @@ describe('GuestEvidenceView download explanation (Codex 115, finding 2)', () => 
     })
   }
 })
+
+// ── T206: the screen's verdict sentence for a version 2 body ───────────────
+describe('T206: GuestEvidenceView with a version 2 strict failure', () => {
+  const v2Body = (dimensions, overall, tail = 'complete') => ({
+    response_version: 2,
+    contract: { id: 'c1', project_name: 'Probe', earner_display_name: 'Acme' },
+    accepted_agreement: null,
+    events: [row('e1', 4)].map(e => ({ ...e, integrity: { ...e.integrity,
+      strict: { kind: 'legacy', hash: 'match', link: 'linked', payload: 'match', agreement: 'mismatch' } } })),
+    chain: { event_count: 1, verified: overall === 'verified', truncated: tail !== 'complete' },
+    strict_verification: { server: { overall, dimensions, acceptance: { status: 'derived', index: 0 },
+      read_boundary: { start: 'first_event', tail, recorded_count: tail === 'complete' ? 1 : null } },
+      server_agreement: { status: 'ok', hash: null, acceptance_index: 0 }, local_note: 'x' },
+  })
+  const textFor = evidence => textOf(renderToStaticMarkup(React.createElement(GuestEvidenceView, { evidence })))
+
+  it('every per-event check matched, agreement failed: the screen says the strict check found a problem', () => {
+    const t = textFor(v2Body({ hash: 'pass', link: 'pass', payload: 'pass', agreement: 'fail', completeness: 'pass' }, 'failed'))
+    expect(t).toMatch(/strict check found a problem in: agreement, on 1 event/)
+    expect(t).not.toMatch(/No check that ran found a mismatch/)
+  })
+
+  it('an unknown tail: not verified, and no claim that the cap was reached', () => {
+    const t = textFor(v2Body({ hash: 'pass', link: 'pass', payload: 'pass', agreement: 'pass', completeness: 'indeterminate' },
+      'incomplete', 'unknown'))
+    expect(t).toMatch(/This record is not verified/)
+    expect(t).toMatch(/could not establish that this response reaches the last event/)
+    expect(t).not.toMatch(/most events the server returns/)
+  })
+})
+

@@ -64,8 +64,21 @@ function strictRowProblem(strict) {
   return null
 }
 
+/** The strict slice's own aggregate rule (eventVerifyV5.ts verifyEvidenceSlice). */
+const overallFromDimensions = dims => {
+  const all = STRICT_DIMENSIONS.map(k => dims[k])
+  return all.includes('fail') ? 'failed' : all.every(d => d === 'pass') ? 'verified' : 'incomplete'
+}
+
+/** The tail a recorded count supports for the events actually returned (mirrors readBoundary). */
+function tailIsConsistent(tail, count, returned) {
+  if (tail === 'complete') return count === returned
+  if (tail === 'truncated') return Number.isSafeInteger(count) && count > returned
+  return count === null || count < returned
+}
+
 /** The reason `strict_verification` is not understood, or null when it is. */
-function strictVerificationProblem(sv) {
+function strictVerificationProblem(sv, events, chain) {
   if (!isPlainObject(sv) || !isPlainObject(sv.server)) return 'strict_verification'
   if (!STRICT_OVERALL.includes(sv.server.overall)) return 'strict_verification.server.overall'
   const dims = sv.server.dimensions
@@ -78,8 +91,14 @@ function strictVerificationProblem(sv) {
     || !(b.recorded_count === null || (Number.isSafeInteger(b.recorded_count) && b.recorded_count >= 0))) {
     return 'strict_verification.server.read_boundary'
   }
-  // The one decision: verified only over an established boundary.
-  if (sv.server.overall === 'verified' && b.tail !== 'complete') return 'strict_verification.server.overall'
+  // The aggregate must be the one its dimensions give, and the boundary must
+  // be the one its count gives for the events this body actually carries
+  // (Codex T176). A body that disagrees with itself is not understood.
+  if (sv.server.overall !== overallFromDimensions(dims)) return 'strict_verification.server.overall'
+  if (!tailIsConsistent(b.tail, b.recorded_count, events.length)) return 'strict_verification.server.read_boundary'
+  if (dims.completeness === 'pass' && b.tail !== 'complete') return 'strict_verification.server.dimensions.completeness'
+  if (chain.truncated !== (b.tail !== 'complete')) return 'chain.truncated'
+  if ('event_count' in chain && chain.event_count !== events.length) return 'chain.event_count'
   return null
 }
 
@@ -107,7 +126,7 @@ export function parseGuestEvidence(body) {
   if (typeof body.chain.verified !== 'boolean') return bad('chain.verified')
   if (typeof body.chain.truncated !== 'boolean') return bad('chain.truncated')
   if (version === 2) {
-    const problem = strictVerificationProblem(body.strict_verification)
+    const problem = strictVerificationProblem(body.strict_verification, body.events, body.chain)
     if (problem) return bad(problem)
     if (body.chain.verified !== (body.strict_verification.server.overall === 'verified')) return bad('chain.verified')
   } else if ('strict_verification' in body) {
@@ -283,7 +302,8 @@ export function summaryPresentation(evidence) {
 
   const mismatchedEvents = events.filter(ev => TRI_STATE_CHECKS.some(k => ev.integrity[k] === false)).length
   const notCheckedTotal = checks.reduce((n, c) => n + c.notChecked, 0)
-  const overall = mismatchedEvents > 0
+  const strict = evidence.response_version === 2 ? evidence.strict_verification?.server : null
+  const overall = strict ? strictOverall(strict, events, mismatchedEvents) : mismatchedEvents > 0
     ? {
         tone: 'mismatch',
         text: `${plural(mismatchedEvents, 'event')} ${mismatchedEvents === 1 ? 'has' : 'have'} a check `
@@ -296,15 +316,75 @@ export function summaryPresentation(evidence) {
           + (notCheckedTotal > 0 ? ` ${plural(notCheckedTotal, 'check')} could not run.` : ''),
       }
 
-  // Exactly the server's cap also counts as truncated, so later events may or
-  // may not exist. Shown whatever the checks found: a clean prefix is still a
-  // prefix.
-  const truncationWarning = truncated
+  const truncationWarning = truncationNotice(evidence)
+
+  return { scope, formatLine, checkLines, overall, truncationWarning }
+}
+
+const DIMENSION_NAMES = {
+  hash: 'event hash', link: 'chain link', payload: 'payload digest', agreement: 'agreement', completeness: 'completeness',
+}
+const STRICT_FAILURES = ['mismatch', 'broken', 'invalid', 'invalid_input']
+
+/**
+ * The overall sentence for a version 2 response, from the server's strict
+ * verdict (Codex T176). The per-check lines above cover only the per-event
+ * tri-states; an agreement failure or an invalid event shows only here, so
+ * this sentence must never say "no mismatch" while the strict check failed.
+ */
+function strictOverall(strict, events, mismatchedEvents) {
+  const dims = strict.dimensions
+  const named = want => STRICT_DIMENSIONS.filter(k => dims[k] === want).map(k => DIMENSION_NAMES[k])
+  if (strict.overall === 'failed' || mismatchedEvents > 0) {
+    const flagged = events.filter(ev => {
+      const st = ev.integrity.strict
+      return st && (st.kind === 'invalid' || ['hash', 'link', 'payload', 'agreement'].some(k => STRICT_FAILURES.includes(st[k])))
+    }).length
+    const failed = named('fail')
+    return {
+      tone: 'mismatch',
+      text: `TrustFlow's strict check found a problem${failed.length ? ` in: ${failed.join(', ')}` : ''}`
+        + (flagged > 0 ? `, on ${plural(flagged, 'event')}` : '')
+        + '. TrustFlow cannot say why: alteration, damage and a recording error look the same here.',
+    }
+  }
+  if (strict.overall === 'incomplete') {
+    return {
+      tone: 'none',
+      text: 'No check found a mismatch, but TrustFlow\'s strict check could not complete. '
+        + `Not established: ${named('indeterminate').join(', ')}. This record is not verified.`,
+    }
+  }
+  return {
+    tone: 'none',
+    text: 'TrustFlow\'s strict check passed every dimension (event hash, chain link, payload digest, '
+      + 'agreement, completeness) over the whole record. That is the server\'s check over the stored '
+      + 'rows; the payload digest cannot be repeated from this page.',
+  }
+}
+
+/**
+ * Whether more events may exist than the response carries, stated from the
+ * evidence it has. Version 1 has only the cap flag, so its sentence is
+ * unchanged. Version 2 states its read boundary: a missing count is not proof
+ * the cap was reached, so "unknown" never says it was.
+ */
+export function truncationNotice(evidence) {
+  const tail = evidence.response_version === 2 ? evidence.strict_verification?.server?.read_boundary?.tail : null
+  if (tail === 'truncated') {
+    return 'The server recorded more events than this response carries. The remaining events were not checked here.'
+  }
+  if (tail === 'unknown') {
+    return 'The server could not establish that this response reaches the last event. Additional events may exist and were not checked here.'
+  }
+  if (tail === 'complete') return null
+  // Version 1: exactly the server's cap also counts as truncated, so later
+  // events may or may not exist. Shown whatever the checks found: a clean
+  // prefix is still a prefix.
+  return evidence.chain.truncated === true
     ? 'This response reached the most events the server returns. Additional '
       + 'events may exist and were not checked here.'
     : null
-
-  return { scope, formatLine, checkLines, overall, truncationWarning }
 }
 
 /**

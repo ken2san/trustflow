@@ -448,3 +448,36 @@ describe('refusals', () => {
     }))).toThrow(/invalid response/)
   })
 })
+
+// ── T206: the v2 truncation note comes from the read boundary ───────────────
+describe('T206: version 2 truncation note', () => {
+  const incomplete = tail => v2Evidence({
+    chain: { ...v2Evidence().chain, verified: false, truncated: true },
+    strict_verification: { ...STRICT_VERIFIED, server: { ...STRICT_VERIFIED.server, overall: 'incomplete',
+      dimensions: { ...STRICT_VERIFIED.server.dimensions, completeness: 'indeterminate' },
+      read_boundary: { start: 'first_event', tail, recorded_count: tail === 'truncated' ? 2 : null } } },
+  })
+  it('an unknown tail does not claim the cap was reached', () => {
+    const v = rec(incomplete('unknown')).verification
+    expect(v.truncated).toBe(true)
+    expect(v.truncation_note).toMatch(/could not establish that this response reaches the last event/)
+    expect(v.truncation_note).not.toMatch(/most events the server returns/)
+    expect(v.server_verdict).toBe(false)
+    expect(v.server_strict_verdict.overall).toBe('incomplete')
+  })
+  it('a truncated tail says more events were recorded', () => {
+    expect(rec(incomplete('truncated')).verification.truncation_note)
+      .toMatch(/recorded more events than this response carries/)
+  })
+  it('a complete v2 read has no note; version 1 keeps its sentence', () => {
+    expect(rec(v2Evidence()).verification.truncation_note).toBeNull()
+    expect(rec(v1Evidence({ chain: { ...v1Evidence().chain, truncated: true } })).verification.truncation_note)
+      .toBe('The response reached the most events the server returns. Additional events may exist and were not checked here.')
+  })
+  it('an inconsistent v2 body is refused, so no verified verdict is exported from it', () => {
+    const bad = v2Evidence({ strict_verification: { ...STRICT_VERIFIED, server: { ...STRICT_VERIFIED.server,
+      dimensions: { ...STRICT_VERIFIED.server.dimensions, agreement: 'fail' } } } })
+    expect(() => buildGuestRecordDocument(bad)).toThrow(/unsupported or invalid response \(strict_verification\.server\.overall\)/)
+  })
+})
+

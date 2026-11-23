@@ -48,7 +48,7 @@ import {
 } from '../../supabase/functions/_shared/guestEventView.ts'
 import {
   parseGuestEvidence, formatPartition, guestChainStatus, checkSummary,
-  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE, STATUS_NOTE, STATUS_NOTE_V2,
+  RECORDED_ID_CLASSES, EARLIER_DOCUMENTS_NOTICE, STATUS_NOTE, STATUS_NOTE_V2, truncationNotice,
 } from './eventFormat.js'
 
 const DOCUMENT_VERSION = '2.0'
@@ -225,9 +225,13 @@ export function buildGuestRecordDocument(evidence) {
         // Also true at exactly the server's cap, so later events may or may
         // not exist. Surfaced here rather than buried.
         truncated: chain.truncated,
-        truncation_note: chain.truncated
-          ? 'The response reached the most events the server returns. Additional events may exist and were not checked here.'
-          : null,
+        // From the read boundary in version 2: a missing count is not proof
+        // the cap was reached. Version 1's sentence is unchanged.
+        truncation_note: parsed.version === 2
+          ? truncationNotice(evidence)
+          : chain.truncated
+            ? 'The response reached the most events the server returns. Additional events may exist and were not checked here.'
+            : null,
       },
 
       // What was ACCEPTED, taken from the acceptance event rather than from the
