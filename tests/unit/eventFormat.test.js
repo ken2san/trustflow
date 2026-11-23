@@ -506,7 +506,7 @@ describe('T206: version 2 prose comes from the strict verdict', () => {
     expect(s.overall.text).not.toMatch(/No check that ran found a mismatch/)
   })
   it('an invalid event is counted', () => {
-    const body = asV2(evidence([ev('a')]), { dims: { hash: 'fail', link: 'fail', payload: 'indeterminate', agreement: 'fail' } })
+    const body = asV2(evidence([ev('a', { canonical_version_supported: false })]), { dims: { hash: 'fail', link: 'fail', payload: 'indeterminate', agreement: 'fail' } })
     body.events[0].integrity.strict = { kind: 'invalid', hash: 'invalid_input', link: 'invalid_input',
       payload: 'indeterminate', agreement: 'invalid_input', reason: 'x' }
     expect(parseGuestEvidence(body)).toEqual({ ok: true, version: 2 })
@@ -566,7 +566,7 @@ describe('T208: a version 2 aggregate cannot contradict its own rows', () => {
     expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.dimensions.agreement' })
   })
   it('a passing aggregate over an invalid row is refused', () => {
-    const b = asV2(evidence([ev('a')]))
+    const b = asV2(evidence([ev('a', { canonical_version_supported: false })]))
     b.events[0].integrity.strict = { kind: 'invalid', hash: 'match', link: 'linked', payload: 'match', agreement: 'match', reason: 'x' }
     expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'strict_verification.server.overall' })
   })
@@ -648,5 +648,79 @@ describe('T210: an unsupported row or a rejected marker cannot read as verified'
       else c.strict_verification.server.acceptance = acceptance
       expect(parseGuestEvidence(c)).toEqual({ ok: false, reason: 'strict_verification.server.acceptance' })
     }
+  })
+})
+
+// ── T212: a row's strict kind must agree with the format it reports (Codex T180) ──
+describe('T212: a version 2 row cannot contradict its own format fields', () => {
+  const V5 = { kind: 'v5', hash: 'match', link: 'linked', payload: 'match', agreement: 'match' }
+  const verified = (...events) => {
+    const b = asV2(evidence(events))
+    expect(b.strict_verification.server.overall).toBe('verified')
+    return b
+  }
+  it('Codex T180: a verified legacy row whose support flag is false is refused', () => {
+    const b = verified(ev('a'))
+    b.events[0].integrity.canonical_version_supported = false
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'events[0].integrity.canonical_version_supported' })
+  })
+  it('Codex T180: a future format cannot masquerade as a passing legacy row', () => {
+    const b = verified(ev('a'))
+    b.events[0].integrity.canonical_version = 9
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'events[0].integrity.canonical_version' })
+    b.events[0].integrity.canonical_version = 5
+    expect(parseGuestEvidence(b)).toEqual({ ok: false, reason: 'events[0].integrity.canonical_version' })
+  })
+  it('a v5 row must report supported format 5', () => {
+    const b = verified(ev('a', { canonical_version: 5 }))
+    b.events[0].integrity.strict = { ...V5 }
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
+    const four = JSON.parse(JSON.stringify(b)); four.events[0].integrity.canonical_version = 4
+    expect(parseGuestEvidence(four).reason).toBe('events[0].integrity.canonical_version')
+    const off = JSON.parse(JSON.stringify(b)); off.events[0].integrity.canonical_version_supported = false
+    expect(parseGuestEvidence(off).reason).toBe('events[0].integrity.canonical_version_supported')
+  })
+  it('an unsupported row must report support false and a version this build cannot read', () => {
+    const dims = { hash: 'indeterminate', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' }
+    const UNSUPPORTED = { kind: 'unsupported', hash: 'unsupported', link: 'indeterminate', payload: 'indeterminate', agreement: 'indeterminate' }
+    const b = asV2(evidence([ev('a', { canonical_version: 9, canonical_version_supported: false, hash_valid: null, chain_linked: null, substance_valid: null })]), { dims })
+    b.events[0].integrity.strict = { ...UNSUPPORTED }
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
+    const claimed = JSON.parse(JSON.stringify(b)); claimed.events[0].integrity.canonical_version_supported = true
+    expect(parseGuestEvidence(claimed).reason).toBe('events[0].integrity.canonical_version_supported')
+    const known = JSON.parse(JSON.stringify(b)); known.events[0].integrity.canonical_version = 4
+    expect(parseGuestEvidence(known).reason).toBe('events[0].integrity.canonical_version')
+  })
+  it('an invalid row keeps its recorded version but is never supported', () => {
+    const dims = { hash: 'fail', link: 'fail', payload: 'indeterminate', agreement: 'fail' }
+    const INVALID = { kind: 'invalid', hash: 'invalid_input', link: 'invalid_input', payload: 'indeterminate', agreement: 'invalid_input', reason: 'x' }
+    const b = asV2(evidence([ev('a', { canonical_version: 5, canonical_version_supported: false, hash_valid: null, chain_linked: null, substance_valid: null })]), { dims })
+    b.events[0].integrity.strict = { ...INVALID }
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
+    b.events[0].integrity.canonical_version_supported = true
+    expect(parseGuestEvidence(b).reason).toBe('events[0].integrity.canonical_version_supported')
+  })
+  it('Codex T180: a v5 row cannot pass payload or agreement as a field its format lacks', () => {
+    for (const [key, label] of [['payload', 'not_in_format'], ['agreement', 'not_bound'], ['link', 'not_in_format']]) {
+      const b = verified(ev('a', { canonical_version: 5 }))
+      b.events[0].integrity.strict = { ...V5, [key]: label }
+      expect(parseGuestEvidence(b), key).toEqual({ ok: false, reason: `events[0].integrity.strict.${key}` })
+    }
+  })
+  it('legacy rows may say "not in format" only where their format lacks the field', () => {
+    const v4 = verified(ev('a'))
+    v4.events[0].integrity.strict.agreement = 'not_bound'
+    expect(parseGuestEvidence(v4).reason).toBe('events[0].integrity.strict.agreement')
+    const v2 = verified(ev('a', { canonical_version: 3 }))
+    v2.events[0].integrity.strict.payload = 'not_in_format'
+    expect(parseGuestEvidence(v2).reason).toBe('events[0].integrity.strict.payload')
+    v2.events[0].integrity.strict.payload = 'match'
+    v2.events[0].integrity.strict.link = 'not_in_format'
+    expect(parseGuestEvidence(v2).reason).toBe('events[0].integrity.strict.link')
+  })
+  it('the honest legacy v1 row (no link, payload or agreement in its format) parses as verified', () => {
+    const b = verified(ev('a', { canonical_version: 1 }))
+    b.events[0].integrity.strict = { kind: 'legacy', hash: 'match', link: 'not_in_format', payload: 'not_in_format', agreement: 'not_bound' }
+    expect(parseGuestEvidence(b)).toEqual({ ok: true, version: 2 })
   })
 })

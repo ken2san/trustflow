@@ -59,6 +59,31 @@ const ACCEPTANCE_STATUSES = ['derived', 'caller', 'rejected']
 // indeterminate.
 const REJECTED_ROW_AGREEMENT = ['indeterminate', 'not_bound', 'invalid_input']
 
+/**
+ * The reason a row's strict verdict contradicts the format fields the same row
+ * reports, or null (Codex T180). Mirrors the endpoint's integrityV2 and the
+ * slice's classifier: legacy is a supported v1–v4 row, v5 a supported format 5
+ * row, unsupported a format this build cannot read, and an invalid row keeps
+ * the version it recorded but is never supported. A coverage label that only
+ * means "this format has no such field" is allowed only on the legacy formats
+ * that lack it. This checks the response's own fields, not its hashes.
+ */
+function strictFormatProblem(integrity) {
+  const { strict, canonical_version: version, canonical_version_supported: supported } = integrity
+  const legacy = strict.kind === 'legacy'
+  const expectSupported = legacy || strict.kind === 'v5'
+  if (supported !== expectSupported) return 'canonical_version_supported'
+  const versionFits = legacy ? version >= 1 && version <= 4
+    : strict.kind === 'v5' ? version === 5
+      : strict.kind === 'unsupported' ? !(version >= 1 && version <= 5)
+        : true
+  if (!versionFits) return 'canonical_version'
+  if (strict.link === 'not_in_format' && !(legacy && version < 2)) return 'strict.link'
+  if (strict.payload === 'not_in_format' && !(legacy && version < 3)) return 'strict.payload'
+  if (strict.agreement === 'not_bound' && !(legacy && version < 4)) return 'strict.agreement'
+  return null
+}
+
 /** The reason a `strict` block is not understood, or null when it is. */
 function strictRowProblem(strict) {
   if (!isPlainObject(strict)) return ''
@@ -216,6 +241,8 @@ export function parseGuestEvidence(body) {
     if (version === 2) {
       const problem = strictRowProblem(integrity.strict)
       if (problem !== null) return bad(`${at}.integrity.strict${problem}`)
+      const formatProblem = strictFormatProblem(integrity)
+      if (formatProblem !== null) return bad(`${at}.integrity.${formatProblem}`)
     } else if ('strict' in integrity) {
       return bad(`${at}.integrity.strict`)
     }
