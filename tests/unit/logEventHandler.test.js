@@ -175,3 +175,43 @@ describe('log-event reads inside the write loop, at the handler', () => {
     expect(r).toEqual({ status: 409, body: { error: 'idempotency_key_in_use' } })
   })
 })
+
+// Row 4: a delegated row carries the owner's account id as its actor, so type
+// and actor alone would hand an agent's row to the owner's session. Each of the
+// three owner sites that answers a key hit passes credentialId null, and must
+// refuse a row written under a grant (Antigravity should-fix, plan §4b).
+describe('log-event owner replay sites never return a delegated row', () => {
+  const NOTHING = { data: null, error: null }
+  const keyed = () => post({ type: 'dispute.opened', contract_id: CONTRACT_ID, idempotency_key: KEY })
+  const delegated = {
+    id: '77777777-7777-4777-8777-777777777777', type: 'dispute.opened', actor_id: OWNER_ID,
+    credential_id: 'cccccccc-0000-4000-8000-000000000001', issuer_kind: 'owner_account', hash_version: 5,
+  }
+
+  beforeEach(() => {
+    state.contract = { ...state.contract, state: 'AWAITING_ACCEPTANCE' }
+  })
+
+  it('the pre-insert lookup: 409, not the delegated row', async () => {
+    state.eventReads = [{ data: delegated, error: null }]
+    const r = await reply(await keyed())
+    expect(r).toEqual({ status: 409, body: { error: 'idempotency_key_in_use' } })
+    expect(state.inserts).toBe(0)
+  })
+
+  it('the TF001 twin check: the refusal stands, the delegated row is not replayed', async () => {
+    state.eventReads = [NOTHING, NOTHING, NOTHING, { data: delegated, error: null }]
+    state.insertResult = { data: null, error: { code: 'TF001', message: 'not permitted in this state' } }
+    const r = await reply(await keyed())
+    expect(r.status).toBe(409)
+    expect(r.body.error).toBe('wrong_state_for_event_type')
+    expect(JSON.stringify(r.body)).not.toContain(delegated.id)
+  })
+
+  it('the 23505 race branch: 409, not the delegated row', async () => {
+    state.eventReads = [NOTHING, NOTHING, NOTHING, { data: delegated, error: null }]
+    state.insertResult = { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "events_idempotency_idx"' } }
+    const r = await reply(await keyed())
+    expect(r).toEqual({ status: 409, body: { error: 'idempotency_key_in_use' } })
+  })
+})

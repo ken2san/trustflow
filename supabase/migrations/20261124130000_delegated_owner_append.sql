@@ -94,6 +94,23 @@ create function private.v5_outer_canonical(
     || ',"issuer_kind":"' || p_issuer_kind || '"}'
 $$;
 
+-- Whether the deal owner may write this type under the LOCKED performed_by:
+-- ROLE_REQUIRED in log-event, for the six row 4 types. Shared by the writer and
+-- by replay, so a retry whose role is no longer the owner's is refused the same
+-- way a new write is (Antigravity M2).
+create function private.v5_role_permits(p_type text, p_performed_by text)
+returns boolean language sql immutable set search_path = '' as $$
+  select coalesce(
+    case p_type
+      when 'performance.asserted' then 'performer' when 'payment.acknowledged' then 'performer'
+      when 'payment.disputed' then 'performer'
+      when 'performance.accepted' then 'receiver' when 'performance.rejected' then 'receiver'
+      when 'payment.reported' then 'receiver'
+    end = case p_performed_by when 'counterparty' then 'receiver' else 'performer' end,
+    false)
+$$;
+
+revoke all on function private.v5_role_permits(text, text) from public, anon, authenticated, service_role;
 revoke all on function private.v5_created_at_ok(timestamptz, timestamptz, timestamptz) from public, anon, authenticated, service_role;
 revoke all on function private.v5_grant_authentication() from public, anon, authenticated, service_role;
 revoke all on function private.v5_reserved_fields_status(jsonb, text, text) from public, anon, authenticated, service_role;
@@ -181,9 +198,8 @@ declare
   v_tip public.events%rowtype;
   v_prev text;
   v_existing public.events%rowtype;
-  v_owner_role text;
-  v_required_role text;
-  v_accepted_version text;
+  v_last_at timestamptz;
+  v_accepted_version jsonb;
   v_row public.events%rowtype;
   v_key text := p_event->>'idempotency_key';
 begin
@@ -207,8 +223,21 @@ begin
      or coalesce(p_event->>'created_at', '') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
      or jsonb_typeof(p_event->'payload') is distinct from 'object'
      or (p_event->'idempotency_key' <> 'null'::jsonb and jsonb_typeof(p_event->'idempotency_key') <> 'string')
+     or p_event->>'idempotency_key' = ''
+     -- The hashed inputs: exactly {agreement, dod}, a DoD array, agreement
+     -- evidence present exactly when its digest is, and a v1 snapshot with
+     -- exactly its eight keys and the number 1. A proposal that contradicts
+     -- itself is a caller or drift fault, never a stale read to retry
+     -- (Antigravity M3): only value freshness below is `context_changed`.
      or p_hashed_inputs is null or jsonb_typeof(p_hashed_inputs) <> 'object'
-     or not (p_hashed_inputs ? 'dod') or not (p_hashed_inputs ? 'agreement') then
+     or (select array_agg(k order by k) from jsonb_object_keys(p_hashed_inputs) k) is distinct from array['agreement', 'dod']
+     or jsonb_typeof(p_hashed_inputs->'dod') <> 'array'
+     or ((p_hashed_inputs->'agreement') = 'null'::jsonb) <> ((p_event->'agreement_hash') = 'null'::jsonb)
+     or (p_hashed_inputs->'agreement' <> 'null'::jsonb and (
+           jsonb_typeof(p_hashed_inputs->'agreement') <> 'object'
+           or (select array_agg(k order by k) from jsonb_object_keys(p_hashed_inputs->'agreement') k) is distinct from
+              array['amount', 'currency', 'deadline', 'dod', 'offered_by', 'performed_by', 'project_name', 'snapshot_version']
+           or p_hashed_inputs->'agreement'->'snapshot_version' is distinct from '1'::jsonb)) then
     return jsonb_build_object('status', 'binding_mismatch');
   end if;
   v_id := (p_event->>'id')::uuid;
@@ -241,36 +270,37 @@ begin
   -- Authorization under the LOCKED role, as on the owner path (ROLE_REQUIRED
   -- in log-event). The resolver's allowlist already confines the type to these
   -- six; state rules stay with the insert triggers.
-  v_owner_role := case c.performed_by when 'counterparty' then 'receiver' else 'performer' end;
-  v_required_role := case v_type
-    when 'performance.asserted' then 'performer' when 'payment.acknowledged' then 'performer'
-    when 'payment.disputed' then 'performer'
-    when 'performance.accepted' then 'receiver' when 'performance.rejected' then 'receiver'
-    when 'payment.reported' then 'receiver' end;
-  if v_required_role is null or v_required_role <> v_owner_role then
+  if not private.v5_role_permits(v_type, c.performed_by) then
     return jsonb_build_object('status', 'wrong_party_for_event_type');
   end if;
 
-  -- The tip, ordered as every other writer reads it.
-  select * into v_tip from public.events e
-   where e.contract_id = c.id::text and e.event_hash is not null
-   order by e.created_at desc, e.id desc limit 1;
-
-  if not private.v5_created_at_ok(v_created_at, g.now, v_tip.created_at) then
-    return jsonb_build_object('status', 'clock_window');
-  end if;
-
-  -- Twin: a retry of this grant's own operation is answered with its row.
+  -- Twin, BEFORE the window: a concurrent twin of this grant's own operation
+  -- that already committed is answered with its row even when this proposal's
+  -- stamp no longer fits after it (Antigravity M2).
   if v_key is not null then
     select * into v_existing from public.events e
      where e.contract_id = c.id::text and e.idempotency_key = v_key;
     if found then
       if v_existing.type = v_type and v_existing.actor_id = g.issuer_id::text
-         and v_existing.credential_id is not distinct from p_credential_id then
+         and v_existing.credential_id is not distinct from p_credential_id
+         and v_existing.issuer_kind is not distinct from g.issuer_kind and v_existing.hash_version = 5 then
         return jsonb_build_object('status', 'replayed', 'event', to_jsonb(v_existing));
       end if;
       return jsonb_build_object('status', 'idempotency_key_in_use');
     end if;
+  end if;
+
+  -- The chain tip, ordered as every other writer reads it, gives `prev`. The
+  -- window is checked against the latest stamp of ANY event of the deal, as
+  -- enforce_event_created_at_follows checks it, so a later unhashed row is a
+  -- retryable `clock_window` here rather than a TF003 from the trigger.
+  select * into v_tip from public.events e
+   where e.contract_id = c.id::text and e.event_hash is not null
+   order by e.created_at desc, e.id desc limit 1;
+  select max(e.created_at) into v_last_at from public.events e where e.contract_id = c.id::text;
+
+  if not private.v5_created_at_ok(v_created_at, g.now, v_last_at) then
+    return jsonb_build_object('status', 'clock_window');
   end if;
 
   -- Binding: every preimage field against the locked rows.
@@ -290,17 +320,18 @@ begin
       return jsonb_build_object('status', 'context_changed');
     end if;
   else
-    select e.payload->'_agreement'->>'snapshot_version' into v_accepted_version
+    select e.payload->'_agreement'->'snapshot_version' into v_accepted_version
       from public.events e
      where e.contract_id = c.id::text and e.type = 'dod.consent_recorded'
      -- The first acceptance, in acceptedSnapshotVersion's order (eventRecord.ts).
      order by e.created_at asc, e.id asc limit 1;
-    -- Version 1 is the only snapshot this build can compare.
-    if v_accepted_version is distinct from '1' then
+    -- Version 1 is the only snapshot this build can compare. Compared as jsonb:
+    -- the string "1" is not version 1, exactly as isSupportedSnapshotVersion
+    -- refuses it (Antigravity M3; the same rule as 20261109210000).
+    if v_accepted_version is distinct from '1'::jsonb then
       return jsonb_build_object('status', 'agreement_unavailable');
     end if;
-    if p_event->'agreement_hash' = 'null'::jsonb
-       or p_hashed_inputs->'agreement' is distinct from jsonb_build_object(
+    if p_hashed_inputs->'agreement' is distinct from jsonb_build_object(
          'snapshot_version', 1,
          'project_name', c.project_name,
          'dod', coalesce(c.dod, '[]'::jsonb),
@@ -352,10 +383,11 @@ create function public.replay_delegated_event(
 ) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   g record;
+  v_performed_by text;
   v_existing public.events%rowtype;
 begin
   perform public.require_read_committed('replay_delegated_event');
-  perform 1 from public.contracts k where k.id = p_contract_id for update;
+  select k.performed_by into v_performed_by from public.contracts k where k.id = p_contract_id for update;
   if not found then
     return jsonb_build_object('status', 'grant_unknown');
   end if;
@@ -363,6 +395,14 @@ begin
   if g.status <> 'ok' then
     return jsonb_build_object('status', g.status);
   end if;
+  -- The same locked-role rule as a new write, before any key lookup: a retry
+  -- whose role is no longer the owner's is refused, and a role-forbidden type
+  -- learns nothing about which keys are taken (Antigravity M2).
+  if not private.v5_role_permits(p_type, v_performed_by) then
+    return jsonb_build_object('status', 'wrong_party_for_event_type');
+  end if;
+  -- Called with a null key, this is the authorization gate log-event passes
+  -- before it reads anything about the deal (Antigravity M1).
   if p_idempotency_key is null then
     return jsonb_build_object('status', 'none');
   end if;
@@ -372,7 +412,8 @@ begin
     return jsonb_build_object('status', 'none');
   end if;
   if v_existing.type = p_type and v_existing.actor_id = g.issuer_id::text
-     and v_existing.credential_id is not distinct from p_credential_id then
+     and v_existing.credential_id is not distinct from p_credential_id
+     and v_existing.issuer_kind is not distinct from g.issuer_kind and v_existing.hash_version = 5 then
     return jsonb_build_object('status', 'replayed', 'event', to_jsonb(v_existing));
   end if;
   return jsonb_build_object('status', 'idempotency_key_in_use');
@@ -406,6 +447,7 @@ begin
   -- 2. Private helpers and trigger functions: no client role or service_role.
   foreach f in array array['private.v5_created_at_ok(timestamptz,timestamptz,timestamptz)',
                            'private.v5_grant_authentication()', 'private.v5_reserved_fields_status(jsonb,text,text)',
+                           'private.v5_role_permits(text,text)',
                            'private.v5_outer_canonical(uuid,text,uuid,uuid,text,timestamptz,text,text,text,uuid,text)',
                            'private.v5_write_ticket_check()', 'private.v5_write_ticket_confirm()'] loop
     foreach r in array array['anon', 'authenticated', 'service_role', 'public'] loop

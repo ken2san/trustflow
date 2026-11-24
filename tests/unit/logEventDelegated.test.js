@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 const state = vi.hoisted(() => {
   const s = {
     handler: null, env: {}, contract: null, eventReads: [], rpcCalls: [], rpcAnswers: {}, getUserCalls: 0,
+    contractReads: 0,
   }
   globalThis.Deno = {
     serve: (handler) => { s.handler = handler },
@@ -20,7 +21,7 @@ vi.mock('https://esm.sh/@supabase/supabase-js@2.99.1', () => {
     const q = {
       select: () => q, eq: () => q, not: () => q, order: () => q, limit: () => q,
       maybeSingle: async () => {
-        if (table === 'contracts') return { data: state.contract, error: null }
+        if (table === 'contracts') { state.contractReads += 1; return { data: state.contract, error: null } }
         return state.eventReads.length ? state.eventReads.shift() : { data: null, error: null }
       },
       insert: () => { throw new Error('the delegated route must never use the generic insert') },
@@ -34,7 +35,11 @@ vi.mock('https://esm.sh/@supabase/supabase-js@2.99.1', () => {
       rpc: async (name, args) => {
         state.rpcCalls.push({ name, args })
         const queue = state.rpcAnswers[name] ?? []
-        return queue.length ? queue.shift() : { data: null, error: { code: 'XX000', message: `unexpected rpc ${name}` } }
+        if (queue.length) return queue.shift()
+        // Every delegated request is authorized by replay first (M1); an
+        // authorized grant with no earlier write answers 'none'.
+        if (name === 'replay_delegated_event') return { data: { status: 'none' }, error: null }
+        return { data: null, error: { code: 'XX000', message: `unexpected rpc ${name}` } }
       },
     }),
   }
@@ -75,6 +80,7 @@ beforeEach(() => {
   state.rpcCalls = []
   state.rpcAnswers = {}
   state.getUserCalls = 0
+  state.contractReads = 0
   logs = []
   for (const level of ['log', 'warn', 'error']) {
     vi.spyOn(console, level).mockImplementation((...a) => { logs.push(a.map(String).join(' ')) })
@@ -187,6 +193,75 @@ describe('log-event delegated route: the append call', () => {
     expect(await reply(await post({ ...write, idempotency_key: 'k1' })))
       .toEqual({ status: 503, body: { error: 'delegated_append_unavailable' } })
     expect(appendCalls()).toHaveLength(1)
+  })
+
+  it('M1: an unauthorized grant on an existing deal is the uniform 403 before any read of the deal', async () => {
+    for (const s of ['secret_mismatch', 'revoked', 'expired', 'scope', 'grant_unknown']) {
+      state.contractReads = 0
+      state.rpcAnswers.replay_delegated_event = [status(s)]
+      expect(await reply(await post(write))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
+      expect(state.contractReads).toBe(0)
+    }
+    expect(appendCalls()).toHaveLength(0)
+  })
+
+  it('M1: the authorization call is made with a null key too, and comes first', async () => {
+    state.rpcAnswers.append_delegated_event = [appended()]
+    await post(write)
+    expect(state.rpcCalls[0]).toMatchObject({ name: 'replay_delegated_event', args: { p_idempotency_key: null } })
+  })
+
+  it('M1: an array payload and an empty key are 400s before any RPC, whatever the deal', async () => {
+    expect(await reply(await post({ ...write, payload: [] }))).toEqual({ status: 400, body: { error: 'invalid_payload' } })
+    expect(await reply(await post({ ...write, idempotency_key: '' })))
+      .toEqual({ status: 400, body: { error: 'invalid_idempotency_key' } })
+    expect(state.rpcCalls).toEqual([])
+  })
+
+  it('M1: a null owner after authorization is refused, never a thrown 500', async () => {
+    state.contract = { ...state.contract, earner_user_id: null }
+    expect(await reply(await post(write))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
+    expect(appendCalls()).toHaveLength(0)
+  })
+
+  it('M2: a role-forbidden replay is 403, not a key-occupancy answer', async () => {
+    state.rpcAnswers.replay_delegated_event = [status('wrong_party_for_event_type')]
+    expect(await reply(await post({ ...write, idempotency_key: 'k1' })))
+      .toEqual({ status: 403, body: { error: 'wrong_party_for_event_type' } })
+  })
+
+  it('M4: a missing gate is a 503 with a loud v5_gate_missing line, from the resolver or the trigger', async () => {
+    state.rpcAnswers.replay_delegated_event = [status('gate_missing')]
+    expect((await reply(await post(write))).status).toBe(503)
+    expect(logs.join('\n')).toContain('v5_gate_missing')
+    logs.length = 0
+    state.rpcAnswers.append_delegated_event = [{ data: null, error: { code: 'TF012', message: 'the v5 write gate row is missing' } }]
+    expect((await reply(await post(write))).status).toBe(503)
+    expect(logs.join('\n')).toContain('v5_gate_missing')
+  })
+
+  it('M4: TF011 and TF014 from the writer are a loud 500 integrity fault, not a closed gate; TF010 is logged', async () => {
+    for (const code of ['TF011', 'TF014', 'TF010']) {
+      logs.length = 0
+      state.rpcAnswers.append_delegated_event = [{ data: null, error: { code, message: 'ticket fault' } }]
+      expect(await reply(await post(write))).toEqual({ status: 500, body: { error: 'insert_failed' } })
+      expect(logs.join('\n')).toContain(code)
+    }
+    state.rpcAnswers.append_delegated_event = [{ data: null, error: { code: 'TF013', message: 'v5 writes are closed' } }]
+    expect((await reply(await post(write))).status).toBe(503)
+  })
+
+  it('should-fix: TF003 from the trigger is retried as a clock refusal', async () => {
+    state.rpcAnswers.append_delegated_event = [{ data: null, error: { code: 'TF003', message: 'created_at must follow' } }, appended('e3')]
+    expect((await reply(await post(write))).status).toBe(201)
+    state.rpcAnswers.append_delegated_event = Array(5).fill({ data: null, error: { code: 'TF003', message: 'x' } })
+    expect(await reply(await post(write))).toEqual({ status: 409, body: { error: 'clock_skew' } })
+  })
+
+  it('M3: exhaustion on context_changed is logged, not silent', async () => {
+    state.rpcAnswers.append_delegated_event = Array(5).fill(status('context_changed'))
+    expect(await reply(await post(write))).toEqual({ status: 409, body: { error: 'context_changed' } })
+    expect(logs.join('\n')).toContain('delegated_context_exhausted')
   })
 
   it('the secret never appears in a response or a log line', async () => {

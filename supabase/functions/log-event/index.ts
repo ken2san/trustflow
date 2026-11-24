@@ -265,7 +265,16 @@ async function delegatedAppend(
   if (Deno.env.get('ENTRY_DELEGATED_APPEND') !== 'on') return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
   // Authority comes from the resolved grant, never the body.
   if ('credential_id' in body || 'issuer_kind' in body) return json({ error: 'authority_is_server_derived' }, 400)
+  // Body shape is settled before admission and answered the same for every
+  // deal, so it reveals nothing (Antigravity M1). A payload is a plain object
+  // or absent; an array is `typeof 'object'` and was not refused before.
+  if (op.payload !== undefined && op.payload !== null
+      && (typeof op.payload !== 'object' || Array.isArray(op.payload))) {
+    return json({ error: 'invalid_payload' }, 400)
+  }
   if (!inDelegatedDomain(op.payload ?? {})) return json({ error: 'invalid_payload' }, 400)
+  // An empty key would skip the replay lookup yet occupy the key in the index.
+  if (op.idempotencyKey === '') return json({ error: 'invalid_idempotency_key' }, 400)
 
   const delegation = await delegatedAdmission(req.headers, Deno.env.get('SUPABASE_ANON_KEY') ?? '')
   const credentialId = delegation.delegated && delegation.ok ? delegation.credentialId : null
@@ -287,6 +296,8 @@ async function delegatedAppend(
     if (status === 'idempotency_key_in_use') return json({ error: 'idempotency_key_in_use' }, 409)
     if (status === 'wrong_party_for_event_type') return json({ error: 'wrong_party_for_event_type' }, 403)
     if (status === 'agreement_unavailable') return json({ error: 'accepted_version_unsupported' }, 409)
+    // The plan's loud line for a missing gate row (§4c), on the resolver path.
+    if (status === 'gate_missing') gateMissing()
     const refused = refusalAnswer(status ?? '')
     if (refused === DELEGATION_REFUSED) return refuse(status as string)
     if (refused) return json({ error: refused.error }, refused.status)
@@ -297,17 +308,28 @@ async function delegatedAppend(
     }
     return null
   }
+  function gateMissing() {
+    console.error(JSON.stringify({ fn: 'log-event', v5_gate_missing: true, contract_id: op.contractId }))
+  }
   const rpcFault = (error: { code?: string, message?: string }): Response => {
     if (error.code === 'PGRST202') {
       console.error('[log-event] delegated append functions are missing: apply 20261124130000 before enabling')
       return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
     }
-    // The v5 CHECK, a missing ticket, or a closed/missing gate seen by the
-    // trigger: v5 writes are not open here.
+    // Closed, operationally: the v5 CHECK, or the gate as the ticket trigger
+    // saw it (TF012 missing, TF013 closed). A 503, and a missing row is loud.
     if ((error.code === '23514' && error.message?.includes('events_v5_writes_disabled'))
-        || ['TF011', 'TF012', 'TF013', 'TF014'].includes(error.code ?? '')) {
+        || error.code === 'TF012' || error.code === 'TF013') {
+      if (error.code === 'TF012') gateMissing()
       console.error(JSON.stringify({ fn: 'log-event', delegated_closed: error.code, contract_id: op.contractId }))
       return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
+    }
+    // The writer issues its own ticket just before its insert, so a missing
+    // (TF011) or unconfirmed (TF014) ticket from it, or a stored row unlike its
+    // proposal (TF010), is an integrity fault, not a closed gate (Antigravity M4).
+    if (error.code === 'TF010' || error.code === 'TF011' || error.code === 'TF014') {
+      console.error(JSON.stringify({ fn: 'log-event', delegated_fault: error.code, contract_id: op.contractId, credential_id: credentialId }))
+      return json({ error: 'insert_failed' }, 500)
     }
     if (error.code === 'TF001') return json({ error: 'wrong_state_for_event_type' }, 409)
     const isolationFault = isolationFaultLine('log-event', error)
@@ -315,9 +337,14 @@ async function delegatedAppend(
     return json({ error: 'insert_failed' }, 500)
   }
 
-  // A keyed retry is answered first, under the lock and after the grant,
-  // before anything that only matters for building a new event.
-  if (op.idempotencyKey) {
+  // AUTHORIZE BEFORE READING ANYTHING ABOUT THE DEAL (Antigravity M1).
+  // replay_delegated_event runs the resolver and the locked-role check under
+  // the contract lock on EVERY request, keyed or not; a null key answers
+  // 'none' once authorized. Only then are the contract, tip and acceptance
+  // pre-read, so an unauthorized grant cannot learn whether a deal exists,
+  // what state it is in, or make the build fail. A keyed retry is answered
+  // here too, before anything that only matters for building a new event.
+  {
     const { data, error } = await admin.rpc('replay_delegated_event', {
       ...grant, p_type: op.type, p_idempotency_key: op.idempotencyKey,
     })
@@ -341,10 +368,13 @@ async function delegatedAppend(
     // An untyped client: the concatenated select is not parsed into a row type.
     const contract = contractRow as unknown as Record<string, unknown> | null
     if (!contract) return refuse('grant_unknown')
+    // Authorized above, so the owner is the grant's issuer; a missing one can
+    // only be a concurrent change, refused rather than built into a throw.
+    if (typeof contract.earner_user_id !== 'string') return refuse('issuer_not_owner')
 
     const tipRead = await admin
       .from('events')
-      .select('event_hash, created_at')
+      .select('event_hash')
       .eq('contract_id', op.contractId)
       .not('event_hash', 'is', null)
       .order('created_at', { ascending: false })
@@ -366,7 +396,7 @@ async function delegatedAppend(
     const proposal = await buildDelegatedEventV5({
       type: op.type,
       contract,
-      ownerId: String(contract.earner_user_id),
+      ownerId: contract.earner_user_id,
       credentialId: delegation.credentialId,
       issuerKind: 'owner_account',
       tree,
@@ -384,6 +414,10 @@ async function delegatedAppend(
     if (error) {
       // Another event took the tip between the RPC's checks and its insert.
       if (error.code === '23505') { last = 'chain_conflict'; continue }
+      // The created_at trigger saw a later stamp than the writer's window did.
+      // The writer now checks the same max(created_at), so this is a backstop:
+      // a retryable clock refusal, not a 500.
+      if (error.code === 'TF003') { last = 'clock_window'; continue }
       return rpcFault(error)
     }
     const status = data?.status as string | undefined
@@ -394,7 +428,12 @@ async function delegatedAppend(
     return answer(status, data?.event) ?? json({ error: 'insert_failed' }, 500)
   }
   if (last === 'clock_window') return json({ error: 'clock_skew' }, 409)
-  if (last === 'context_changed') return json({ error: 'context_changed' }, 409)
+  if (last === 'context_changed') {
+    // Five rebuilt proposals in a row unlike the locked deal is not a busy
+    // deal; said out loud so a drift is not mistaken for contention (M3).
+    console.error(JSON.stringify({ fn: 'log-event', delegated_context_exhausted: true, contract_id: op.contractId, credential_id: credentialId }))
+    return json({ error: 'context_changed' }, 409)
+  }
   return json({ error: 'chain_contention' }, 409)
 }
 

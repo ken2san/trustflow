@@ -224,7 +224,9 @@ begin
   r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', jsonb_build_object('dod', '["other"]'::jsonb, 'agreement', null), e);
   perform pg_temp.expect('DoD inputs unlike the locked DoD give context_changed', 'context_changed', r->>'status');
   r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', jsonb_build_object('dod', '["test"]'::jsonb, 'agreement', '{}'::jsonb), e);
-  perform pg_temp.expect('agreement inputs on a draft give context_changed', 'context_changed', r->>'status');
+  -- M3: agreement inputs with a null agreement_hash contradict themselves: a
+  -- caller or drift fault, not a stale read to retry.
+  perform pg_temp.expect('agreement inputs without an agreement hash give binding_mismatch', 'binding_mismatch', r->>'status');
   perform pg_temp.expect('refusals wrote nothing and left no ticket', '1|0',
     (select count(*) from public.events where contract_id = '$c1') || '|' || (select count(*) from private.v5_write_tickets));
 
@@ -232,6 +234,39 @@ begin
   r := pg_temp.append('$c2', '$g3', repeat('c', 64), 'counterparty',
     pg_temp.proposal('$c2', '$g3', 'payment.reported', pg_temp.reserved('receiver'), clock_timestamp(), 'GENESIS', null));
   perform pg_temp.expect('counterparty-performed deal: the owner records as receiver', 'appended', r->>'status');
+
+  -- M2: replay applies the locked-role rule before any key lookup. g1 holds
+  -- payment.reported, which the owner (performer on c1) may not write.
+  perform pg_temp.expect('replay of a role-forbidden type, free key', 'wrong_party_for_event_type',
+    public.replay_delegated_event('$c1', '$g1', repeat('a', 64), 'payment.reported', 'k-free')->>'status');
+  perform pg_temp.expect('replay of a role-forbidden type, occupied key: no occupancy answer', 'wrong_party_for_event_type',
+    public.replay_delegated_event('$c1', '$g1', repeat('a', 64), 'payment.reported', 'k1')->>'status');
+  perform pg_temp.expect('replay with a null key, authorized: none', 'none',
+    public.replay_delegated_event('$c1', '$g1', repeat('a', 64), 'payment.acknowledged', null)->>'status');
+
+  -- M2: the twin is found before the window, so a committed twin is replayed
+  -- even when this attempt's stamp no longer fits after it.
+  r := pg_temp.append('$c1', '$g1', repeat('a', 64), 'creator',
+    pg_temp.proposal('$c1', '$g1', 'payment.acknowledged', pg_temp.reserved('performer'), clock_timestamp() - interval '61 seconds', 'GENESIS', 'k1'));
+  perform pg_temp.expect('a twin with a stale stamp replays, not clock_window', 'replayed|' || (v_first->>'id'), (r->>'status') || '|' || (r->'event'->>'id'));
+
+  -- should-fix TF003: the window uses the latest stamp of ANY event, so a later
+  -- unhashed row is a retryable clock_window, not the trigger's TF003.
+  e := pg_temp.proposal('$c2', '$g3', 'payment.reported', pg_temp.reserved('receiver'), clock_timestamp(),
+    (select event_hash from public.events where contract_id = '$c2' and event_hash is not null order by created_at desc, id desc limit 1), null);
+  insert into public.events (type, contract_id, actor_id, created_at, event_hash, prev_event_hash, hash_version)
+  values ('note.unhashed', '$c2', 'owner', clock_timestamp(), null, null, null);
+  r := pg_temp.append('$c2', '$g3', repeat('c', 64), 'counterparty', e);
+  perform pg_temp.expect('a later unhashed row gives clock_window, not TF003', 'clock_window', r->>'status');
+
+  -- M3: shape and internal consistency of the hashed inputs are binding_mismatch.
+  e := pg_temp.proposal('$c1', '$g1', 'payment.acknowledged', pg_temp.reserved('performer'), clock_timestamp(), v_row.event_hash, 'k-shape');
+  r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', '{"dod":["test"],"agreement":null,"extra":1}', e);
+  perform pg_temp.expect('an extra key in the hashed inputs gives binding_mismatch', 'binding_mismatch', r->>'status');
+  r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', '{"dod":"test","agreement":null}', e);
+  perform pg_temp.expect('a DoD that is not an array gives binding_mismatch', 'binding_mismatch', r->>'status');
+  r := pg_temp.append('$c1', '$g1', repeat('a', 64), 'creator', jsonb_set(e, '{idempotency_key}', '""'));
+  perform pg_temp.expect('an empty idempotency key gives binding_mismatch', 'binding_mismatch', r->>'status');
 end \$\$;
 rollback;
 SQL
@@ -390,8 +425,76 @@ select string_agg(public.append_delegated_event('$c3', '$g4', repeat('d', 64), j
 rollback;
 SQL
 )
-[[ "$r" == 'context_changed,context_changed,context_changed' ]] || { echo "FAIL agreement mismatch: $r" >&2; exit 1; }
-echo 'PASS agreement snapshot differing in amount or deadline, or null on an accepted deal, gives context_changed'
+# Values differing from the locked deal are stale reads (context_changed); a
+# null snapshot beside a non-null agreement hash contradicts itself (M3).
+[[ "$r" == 'context_changed,context_changed,binding_mismatch' ]] || { echo "FAIL agreement mismatch: $r" >&2; exit 1; }
+echo 'PASS snapshot differing in amount or deadline gives context_changed; null snapshot beside a hash gives binding_mismatch'
+r=$(psql_pg <<SQL
+$open_tx
+select string_agg(public.append_delegated_event('$c3', '$g4', repeat('d', 64), j->>'performed_by', h, e)->>'status', ',' order by n)
+  from (select \$json\$$p3\$json\$::jsonb as j) p,
+  lateral (values
+    (1, j->'hashed_inputs', jsonb_set(j->'event', '{agreement_hash}', 'null')),
+    (2, ((j->'hashed_inputs') - 'agreement') || '{"agreement":{"snapshot_version":1}}'::jsonb, j->'event'),
+    (3, jsonb_set(j->'hashed_inputs', '{agreement,snapshot_version}', '"1"'), j->'event'),
+    (4, jsonb_set(j->'hashed_inputs', '{agreement}', (j->'hashed_inputs'->'agreement') - 'offered_by'), j->'event'),
+    (5, jsonb_set(j->'hashed_inputs', '{agreement,extra}', 'true'), j->'event')) v(n, h, e);
+rollback;
+SQL
+)
+[[ "$r" == 'binding_mismatch,binding_mismatch,binding_mismatch,binding_mismatch,binding_mismatch' ]] || { echo "FAIL snapshot shape: $r" >&2; exit 1; }
+echo 'PASS snapshot without its hash, wrong key set, string snapshot_version, missing or extra key: binding_mismatch (M3)'
+
+# M3: an acceptance that records the STRING "1" is not version 1, in SQL as in TS.
+c7=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7
+g7=cccccccc-0000-4000-8000-000000000017
+psql_pg > /dev/null <<SQL
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_minor, currency, earner_display_name, performed_by, state)
+values ('$c7', '$owner', 'string version', '["x"]', 1, 'JPY', 'Owner', 'counterparty', 'TERMS_ACCEPTED');
+insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, prev_event_hash, hash_version, payload_hash, dod_hash, agreement_hash)
+values ('eeeeeeee-0000-4000-8000-000000000007', 'dod.consent_recorded', '$c7', 'guest:guest@example.test',
+  '{"_agreement":{"snapshot_version":"1"}}', clock_timestamp() - interval '5 seconds', repeat('7', 64), 'GENESIS', 4,
+  repeat('b', 64), repeat('c', 64), repeat('d', 64));
+insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, expires_at)
+values ('$g7', '$c7', '$owner', 'owner_account', repeat('8', 64), array['payment.reported'], clock_timestamp() + interval '1 day');
+SQL
+p7=$(build "$c7" "$g7" payment.reported 1 k-str)
+r=$(psql_pg <<SQL
+$open_tx
+select public.append_delegated_event('$c7', '$g7', repeat('8', 64), j->>'performed_by', j->'hashed_inputs', j->'event')->>'status'
+  from (select \$json\$$p7\$json\$::jsonb as j) p;
+rollback;
+SQL
+)
+[[ "$r" == agreement_unavailable ]] || { echo "FAIL string snapshot_version: $r" >&2; exit 1; }
+echo 'PASS an acceptance recording snapshot_version "1" (a string) gives agreement_unavailable, as in TS'
+
+# Real TS parity on the nullable snapshot fields: no deadline, a non-JPY amount
+# with amount_jpy null, no display name.
+c8=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8
+g8=cccccccc-0000-4000-8000-000000000018
+psql_pg > /dev/null <<SQL
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_minor, currency, deadline, earner_display_name, performed_by, state)
+values ('$c8', '$owner', 'nullable fields', '["x"]', 1250, 'CAD', null, null, 'counterparty', 'TERMS_ACCEPTED');
+insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, prev_event_hash, hash_version, payload_hash, dod_hash, agreement_hash)
+values ('eeeeeeee-0000-4000-8000-000000000008', 'dod.consent_recorded', '$c8', 'guest:guest@example.test',
+  '{"_agreement":{"snapshot_version":1}}', clock_timestamp() - interval '5 seconds', repeat('8', 64), 'GENESIS', 4,
+  repeat('b', 64), repeat('c', 64), repeat('d', 64));
+insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, expires_at)
+values ('$g8', '$c8', '$owner', 'owner_account', repeat('9', 64), array['payment.reported'], clock_timestamp() + interval '1 day');
+SQL
+[[ "$(psql_pg <<< "select (amount_jpy is null and deadline is null and earner_display_name is null)::text from public.contracts where id = '$c8'")" == true ]] \
+  || { echo 'FAIL fixture: nullable fields are not null' >&2; exit 1; }
+p8=$(build "$c8" "$g8" payment.reported 1 k-null)
+r=$(psql_pg <<SQL
+$open_tx
+select public.append_delegated_event('$c8', '$g8', repeat('9', 64), j->>'performed_by', j->'hashed_inputs', j->'event')->>'status'
+  from (select \$json\$$p8\$json\$::jsonb as j) p;
+rollback;
+SQL
+)
+[[ "$r" == appended ]] || { echo "FAIL nullable snapshot parity: $r" >&2; exit 1; }
+echo 'PASS real TS parity with deadline null, CAD with amount_jpy null, and no display name'
 
 # ── Legacy writers cannot write v5: no ticket (T234) ─────────────────────────
 # A complete v5-shaped event with a real live grant through each generic legacy
