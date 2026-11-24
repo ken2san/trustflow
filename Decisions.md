@@ -1,6 +1,6 @@
 # TrustFlow — Architecture Decisions
 
-_Last updated: 2026-11-18_
+_Last updated: 2026-11-24_
 
 > This file records significant design decisions and the reasoning behind them.
 > AI agents must read this before proposing changes to established patterns.
@@ -14,6 +14,15 @@ _Last updated: 2026-11-18_
 ---
 
 ## Current scope
+
+### [2026-11-24] — Row 4 plan signed off; row 4 is built by Claude and reviewed by Codex
+
+**Decision, by the owner** (Kenji, 2026-11-24 10:57 ET; Task 232, after Codex T191 YES). `docs/plans/row4-owner-append.md` is the row 4 design. **Status:** plan committed; 4a (resolver) in progress locally, nothing applied anywhere.
+
+- **Q1–Q6 confirmed** as the plan records them, with Q5 (c): shared migrations carrying the ticket, gate and triggers, and v5 opened on E2E as one data change to the closed gate row. Opening the gate still needs its own approval after the staged proofs (§4c step 5). Production stays closed through row 4.
+- **Agreed design points confirmed:** the 60-second created-at window on one post-lock clock sample; inner digests computed by `log-event` as the only trusted caller, with SQL comparing their inputs under lock; one final recorded payload tree, with the reserved fields predicted by Edge and verified by the append RPC.
+- **`entry_agent_grant` is the recorded label** for delegated writes: `_auth_method = 'entry_agent_grant'`, and `_authentication` records `assurance 'bearer_capability'` with `credential 'entry_agent_grant'` and no authentication age. It records possession of the grant, not that the human owner acted.
+- **Ownership:** row 4 is Claude builds, Codex reviews (it was Codex builds, Claude light-reviews). `docs/schedule.md` row 4 records the change.
 
 ### [2026-11-19] — Agent grants expire within 30 days; the counterpart path requires email confirmation
 
