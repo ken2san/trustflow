@@ -70,7 +70,9 @@ begin
     return query select 'grant_unknown'::text, null::uuid, null::text, null::timestamptz;
     return;
   end if;
-  select * into d from public.entry_agent_credentials g where g.id = p_credential_id for share;
+  -- Matching the deal here means another deal's grant is never locked.
+  select * into d from public.entry_agent_credentials g
+    where g.id = p_credential_id and g.contract_id = c.id for share;
   if p_for_insert then
     select w.open into v_gate_open from private.v5_write_gate w where w.id for share;
   end if;
@@ -125,7 +127,9 @@ begin
       raise exception 'SELF-TEST FAILED: % may execute a private function', r using errcode = 'TF922';
     end if;
   end loop;
-  if not (select p2.prosecdef and 'search_path=""' = any(p2.proconfig) from pg_proc p2 where p2.oid = f::regprocedure) then
+  -- Null-safe: a missing row, a missing setting or a false flag all fail.
+  if (select p2.prosecdef and 'search_path=""' = any(p2.proconfig) from pg_proc p2 where p2.oid = f::regprocedure)
+     is distinct from true then
     raise exception 'SELF-TEST FAILED: the resolver is not SECURITY DEFINER with an empty search_path'
       using errcode = 'TF922';
   end if;
