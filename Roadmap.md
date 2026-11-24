@@ -49,7 +49,7 @@ and to **production 11-23 16:03 ET** (T224, after the gated check set T217–T22
 Production `guest-contract-events` **v14 from `1011b99`** deployed 11-23 16:06 ET (T225, Kenji OK; same bytes as E2E v13, OPTIONS 200).
 **v5 writes stay gated off**; writers come with later rows. Deferred nonblocking hardening: Codex T186 (RNG exit check in the check-set E2E wrapper).
 
-**Now: row 4 (owner delegated append + resolver), planned 2026-11-26..27, started 2026-11-24 (~2d early): 4a and 4b core built locally, 4a migration on E2E**, then 5–8 to M1 on 12-04.
+**Now: row 4 (owner delegated append + resolver), planned 2026-11-26..27, started 2026-11-24 (~2d early): 4a and 4b built and Codex-reviewed locally (tip `63b00ca`, not pushed); 4a migration on E2E. Next: push, then E2E check update (23514→TF011) and apply `20261124130000` (each needs Kenji's OK)**, then 5–8 to M1 on 12-04.
 
 _Row 2 history below._
 
