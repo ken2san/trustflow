@@ -310,6 +310,197 @@ end \$\$;
 rollback;
 SQL
 
+# ── Post-acceptance path: the real TS builder on a real accepted deal (T234) ─
+# The contract is read as JSON with exactly log-event's pre-read columns, the
+# REAL buildDelegatedEventV5 builds the proposal, and SQL must accept it: the
+# agreement snapshot TS hashed and the one SQL builds from the locked row are
+# equal as jsonb, on non-ASCII text, JSON escapes in the DoD, a date and a minor amount.
+c3=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3   # accepted, counterparty performs: the owner receives
+c4=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4   # accepted under an unsupported snapshot version
+g4=cccccccc-0000-4000-8000-000000000004
+g5=cccccccc-0000-4000-8000-000000000005
+psql_pg > /dev/null <<SQL
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_minor, currency, deadline,
+    earner_display_name, performed_by, state) values
+  ('$c3', '$owner', 'Übersetzung — 翻訳 ✓', '["Kapitel 1 — Übersetzung","細則: 校正と納品","quote \" and back\\\\slash","tab\there"]', 125000, 'JPY',
+   '2026-12-01', 'Owner Ö', 'counterparty', 'TERMS_ACCEPTED'),
+  ('$c4', '$owner', 'v9 acceptance', '["x"]', 1, 'JPY', null, 'Owner', 'counterparty', 'TERMS_ACCEPTED');
+insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, prev_event_hash,
+    hash_version, payload_hash, dod_hash, agreement_hash) values
+  ('eeeeeeee-0000-4000-8000-000000000003', 'dod.consent_recorded', '$c3', 'guest:guest@example.test',
+   '{"_agreement":{"snapshot_version":1}}', clock_timestamp() - interval '5 seconds', repeat('a', 64), 'GENESIS', 4,
+   repeat('b', 64), repeat('c', 64), repeat('d', 64)),
+  ('eeeeeeee-0000-4000-8000-000000000004', 'dod.consent_recorded', '$c4', 'guest:guest@example.test',
+   '{"_agreement":{"snapshot_version":9}}', clock_timestamp() - interval '5 seconds', repeat('e', 64), 'GENESIS', 4,
+   repeat('b', 64), repeat('c', 64), repeat('d', 64));
+insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, expires_at) values
+  ('$g4', '$c3', '$owner', 'owner_account', repeat('d', 64), array['payment.reported'], clock_timestamp() + interval '1 day'),
+  ('$g5', '$c4', '$owner', 'owner_account', repeat('e', 64), array['payment.reported'], clock_timestamp() + interval '1 day');
+SQL
+deno_ts() { deno run --no-lock --quiet tests/sql/delegated_proposal.ts "$@"; }
+contract_json() { psql_pg <<< "select row_to_json(t) from (select id, state, project_name, dod, amount_jpy, amount_minor,
+  currency, deadline, performed_by, earner_display_name, earner_user_id from public.contracts where id = '$1') t"; }
+tip_of() { psql_pg <<< "select event_hash from public.events where contract_id = '$1' and event_hash is not null order by created_at desc, id desc limit 1"; }
+build() {  # $1 contract, $2 grant, $3 type, $4 acceptedVersion (json), $5 key
+  printf '{"contract":%s,"tip":"%s","credentialId":"%s","type":"%s","payload":{"note":"überwiesen ✓","_auth_method":"x"},"key":"%s","acceptedVersion":%s}' \
+    "$(contract_json "$1")" "$(tip_of "$1")" "$2" "$3" "$5" "$4" | deno_ts build
+}
+p3=$(build "$c3" "$g4" payment.reported 1 k-acc)
+out=$(psql_pg <<SQL
+$open_tx
+-- Two statements: a row the function inserts is not in the snapshot of the calling statement.
+create temp table r as select public.append_delegated_event('$c3', '$g4', repeat('d', 64), j->>'performed_by', j->'hashed_inputs', j->'event') as res
+  from (select \$json\$$p3\$json\$::jsonb as j) p;
+select (select res->>'status' from r) || E'\t' || coalesce((select row_to_json(e)::text from public.events e, r where e.id = (r.res->'event'->>'id')::uuid), 'none')
+  || E'\t' || (select row_to_json(e)::text from public.events e where e.id = 'eeeeeeee-0000-4000-8000-000000000003');
+rollback;
+SQL
+)
+status=${out%%$'\t'*}; rest=${out#*$'\t'}; row=${rest%%$'\t'*}; acceptance=${rest#*$'\t'}
+[[ "$status" == appended ]] || { echo "FAIL post-acceptance append with the real TS proposal: $status" >&2; exit 1; }
+echo 'PASS post-acceptance: the real TS proposal (non-ASCII, escapes in the DoD, date, minor amount) is accepted; snapshots equal as jsonb'
+[[ "$(printf '%s' "$row" | deno_ts verify)" == 'match|true' ]] || { echo 'FAIL stored row does not recompute' >&2; exit 1; }
+echo 'PASS stored row read back as JSON: verifyEventHashV5 match, payloadHash equals payload_hash'
+receipt=$(printf '{"contract":%s,"rows":[%s,%s]}' "$(contract_json "$c3")" "$acceptance" "$row" | deno_ts receipt)
+expected='{"auth":"entry_agent_grant","cred":"entry_agent_grant","age":null,"ck":"owner_account","cid":"'$g4'","verdict":"match"}'
+got=$(printf '%s' "$receipt" | python3 -I -c 'import sys,json; r=json.load(sys.stdin); a=r["act"]
+print(json.dumps({"auth":a["authentication_as_recorded"],"cred":a["authentication"]["credential"],
+ "age":a["authentication"]["seconds_since_authentication"],"ck":a["canonical"].get("issuer_kind"),
+ "cid":a["canonical"].get("credential_id"),"verdict":r["canonical_verdict"]},separators=(",",":")))')
+[[ "$got" == "$expected" ]] || { echo "FAIL receipt act: $got" >&2; exit 1; }
+echo 'PASS receipt v2 on the real row: entry_agent_grant recorded, null authentication age, v5 authority in the canonical block, match'
+
+p4=$(build "$c4" "$g5" payment.reported 1 k-v9)
+r=$(psql_pg <<SQL
+$open_tx
+select public.append_delegated_event('$c4', '$g5', repeat('e', 64), j->>'performed_by', j->'hashed_inputs', j->'event')->>'status'
+  from (select \$json\$$p4\$json\$::jsonb as j) p;
+rollback;
+SQL
+)
+[[ "$r" == agreement_unavailable ]] || { echo "FAIL unsupported accepted version: $r" >&2; exit 1; }
+echo 'PASS an acceptance recording an unsupported snapshot version gives agreement_unavailable'
+r=$(psql_pg <<SQL
+$open_tx
+select string_agg(public.append_delegated_event('$c3', '$g4', repeat('d', 64), j->>'performed_by', h, j->'event')->>'status', ',' order by n)
+  from (select \$json\$$p3\$json\$::jsonb as j) p,
+  lateral (values (1, jsonb_set(j->'hashed_inputs', '{agreement,amount}', '125001')),
+                  (2, jsonb_set(j->'hashed_inputs', '{agreement,deadline}', '"2026-12-02"')),
+                  (3, jsonb_set(j->'hashed_inputs', '{agreement}', 'null'))) v(n, h);
+rollback;
+SQL
+)
+[[ "$r" == 'context_changed,context_changed,context_changed' ]] || { echo "FAIL agreement mismatch: $r" >&2; exit 1; }
+echo 'PASS agreement snapshot differing in amount or deadline, or null on an accepted deal, gives context_changed'
+
+# ── Legacy writers cannot write v5: no ticket (T234) ─────────────────────────
+# A complete v5-shaped event with a real live grant through each generic legacy
+# writer, as service_role. With the CHECK dropped and the gate open, the ticket
+# trigger refuses with exactly TF011. With the CHECK present, TF011 too: the
+# BEFORE trigger runs before the CHECK (row 3's 23514 expectation changes).
+c5=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5
+c6=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6
+psql_pg > /dev/null <<SQL
+create schema tf_legacy;
+create function tf_legacy.tip(c text) returns text language sql stable as \$\$
+  select coalesce((select event_hash from public.events where contract_id = c and event_hash is not null
+                   order by created_at desc, id desc limit 1), 'GENESIS') \$\$;
+create function tf_legacy.ev(c text, typ text, actor text, prev text, extra jsonb default '{}') returns jsonb
+  language sql volatile as \$\$
+  select jsonb_build_object('id', gen_random_uuid(), 'type', typ, 'contract_id', c, 'actor_id', actor,
+    'payload', '{}'::jsonb, 'created_at', clock_timestamp(), 'event_hash', encode(sha256(gen_random_uuid()::text::bytea), 'hex'),
+    'prev_event_hash', prev, 'hash_version', 4, 'payload_hash', repeat('1', 64),
+    'agreement_hash', repeat('2', 64), 'dod_hash', repeat('3', 64)) || extra \$\$;
+grant usage on schema tf_legacy to service_role;
+grant execute on all functions in schema tf_legacy to service_role;
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_jpy, invited_hirer_email, invite_token, invite_token_expires_at) values
+  ('$c5', '$owner', 'legacy c5', '["seed"]', 1, 'guest5@example.test', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb5', clock_timestamp() + interval '1 day'),
+  ('$c6', '$owner', 'legacy c6', '["seed"]', 1, 'guest6@example.test', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb6', clock_timestamp() + interval '1 day');
+insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, expires_at) values
+  ('cccccccc-0000-4000-8000-000000000006', '$c5', '$owner', 'owner_account', repeat('6', 64), array['payment.acknowledged'], clock_timestamp() + interval '1 day'),
+  ('cccccccc-0000-4000-8000-000000000007', '$c6', '$owner', 'owner_account', repeat('7', 64), array['payment.acknowledged'], clock_timestamp() + interval '1 day');
+set role service_role;
+do \$\$ declare r jsonb; xv text; begin
+  select xmin::text into xv from public.contracts where id = '$c5';
+  r := public.accept_invitation('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb5', 'guest5@example.test',
+         'cccccccc-cccc-4ccc-8ccc-ccccccccccc5', clock_timestamp() + interval '1 day', xv, 'GENESIS',
+         tf_legacy.ev('$c5', 'contract.accepted', 'guest:guest5@example.test', 'GENESIS'));
+  if r->>'status' <> 'accepted' then raise exception 'seed accept: %', r; end if;
+end \$\$;
+reset role;
+SQL
+legacy_v5() {  # $1: the preamble (opened or CHECK present); prints one outcome per writer
+  psql_pg <<SQL
+$1
+set local role service_role;
+do \$\$
+declare r jsonb; xv text; st text; cn text; outcome text; before_ev text; after_ev text; before_ct text; after_ct text;
+  v5 jsonb := jsonb_build_object('hash_version', 5, 'issuer_kind', 'owner_account', 'prev_event_hash', 'GENESIS');
+begin
+  select md5(coalesce(string_agg(to_jsonb(e)::text, '|' order by id), '')) into before_ev from public.events e where contract_id in ('$c5', '$c6');
+  select md5(string_agg(to_jsonb(c)::text, '|' order by id)) into before_ct from public.contracts c where id in ('$c5', '$c6');
+  -- append_guest_event
+  begin
+    r := public.append_guest_event('$c5', 'cccccccc-cccc-4ccc-8ccc-ccccccccccc5', tf_legacy.tip('$c5'),
+      tf_legacy.ev('$c5', 'rating.submitted', 'guest:guest5@example.test', tf_legacy.tip('$c5'),
+        v5 || jsonb_build_object('credential_id', 'cccccccc-0000-4000-8000-000000000006', 'prev_event_hash', tf_legacy.tip('$c5'))));
+    outcome := 'returned ' || r::text;
+  exception when others then get stacked diagnostics st = returned_sqlstate; outcome := st; end;
+  raise notice 'LEGACY append_guest_event %', outcome;
+  -- reissue_guest_access
+  begin
+    r := public.reissue_guest_access('$c5', '$owner', 'cccccccc-cccc-4ccc-8ccc-ccccccccccc9', clock_timestamp() + interval '1 day',
+      tf_legacy.tip('$c5'), tf_legacy.ev('$c5', 'access.reissued', 'owner', tf_legacy.tip('$c5'),
+        v5 || jsonb_build_object('credential_id', 'cccccccc-0000-4000-8000-000000000006', 'prev_event_hash', tf_legacy.tip('$c5'))));
+    outcome := 'returned ' || r::text;
+  exception when others then get stacked diagnostics st = returned_sqlstate; outcome := st; end;
+  raise notice 'LEGACY reissue_guest_access %', outcome;
+  -- accept_invitation
+  select xmin::text into xv from public.contracts where id = '$c6';
+  begin
+    r := public.accept_invitation('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb6', 'guest6@example.test',
+      'cccccccc-cccc-4ccc-8ccc-ccccccccccc6', clock_timestamp() + interval '1 day', xv, 'GENESIS',
+      tf_legacy.ev('$c6', 'contract.accepted', 'guest:guest6@example.test', 'GENESIS',
+        v5 || jsonb_build_object('credential_id', 'cccccccc-0000-4000-8000-000000000007')));
+    outcome := 'returned ' || r::text;
+  exception when others then get stacked diagnostics st = returned_sqlstate; outcome := st; end;
+  raise notice 'LEGACY accept_invitation %', outcome;
+  select md5(coalesce(string_agg(to_jsonb(e)::text, '|' order by id), '')) into after_ev from public.events e where contract_id in ('$c5', '$c6');
+  select md5(string_agg(to_jsonb(c)::text, '|' order by id)) into after_ct from public.contracts c where id in ('$c5', '$c6');
+  raise notice 'LEGACY unchanged %', (before_ev = after_ev and before_ct = after_ct)::text;
+end \$\$;
+rollback;
+SQL
+}
+for preamble in "$open_tx" "begin;"; do
+  label=$([[ "$preamble" == "begin;" ]] && echo 'CHECK present, gate closed' || echo 'CHECK dropped, gate open')
+  got=$(legacy_v5 "$preamble" 2>&1 | grep -o 'LEGACY .*' | tr '\n' ';')
+  want='LEGACY append_guest_event TF011;LEGACY reissue_guest_access TF011;LEGACY accept_invitation TF011;LEGACY unchanged true;'
+  [[ "$got" == "$want" ]] || { echo "FAIL legacy writers ($label): $got" >&2; exit 1; }
+  echo "PASS legacy writers with a v5-shaped event and a real grant ($label): exactly TF011 each; events and contracts unchanged"
+done
+
+# ── Old schema: migration B cannot apply without migration A (T234) ─────────
+old="trustflow_delegated_old_$$"
+docker exec "$container" createdb -U supabase_admin -O postgres "$old"
+docker exec "$container" pg_restore -U supabase_admin -d "$old" --exit-on-error -L "$dump.list" "$dump"
+for m in 20261118214020_entry_agent_credentials 20261120090000_create_entry_contract \
+         20261120180000_close_contract_client_insert 20261122130000_events_v5_authority_columns; do
+  docker exec -i "$container" psql -X -qAt -U postgres -d "$old" -v ON_ERROR_STOP=1 -1 -f - < "supabase/migrations/$m.sql" > /dev/null
+done
+set +e
+docker exec -i "$container" psql -X -qAt -U postgres -d "$old" -v ON_ERROR_STOP=1 -1 -f - \
+  < supabase/migrations/20261124130000_delegated_owner_append.sql > "$work/old.out" 2>&1; old_rc=$?
+set -e
+left=$(docker exec -i "$container" psql -X -qAt -U postgres -d "$old" <<< "select
+  (to_regprocedure('public.append_delegated_event(uuid,uuid,text,text,jsonb,jsonb)') is null)::text || '|' ||
+  (to_regclass('private.v5_write_tickets') is null)::text || '|' ||
+  (select count(*) from pg_trigger where tgname in ('zz_v5_write_ticket_check', 'v5_write_ticket_confirm'))")
+docker exec "$container" dropdb -U supabase_admin --if-exists --force "$old" > /dev/null
+[[ $old_rc -ne 0 && "$left" == 'true|true|0' ]] || { cat "$work/old.out" >&2; echo "FAIL old schema: rc=$old_rc left=$left" >&2; exit 1; }
+grep -q 'schema "private" does not exist' "$work/old.out" || { cat "$work/old.out" >&2; echo 'FAIL old schema: unexpected error' >&2; exit 1; }
+echo 'PASS migration B on a database without migration A fails (schema "private" does not exist) and leaves nothing'
+
 expect_closed=$(psql_pg <<< "select (select open from private.v5_write_gate)::text || '|' || exists (select 1 from pg_constraint where conname = 'events_v5_writes_disabled')::text || '|' || (select count(*) from public.events where hash_version = 5)")
 [[ "$expect_closed" == 'false|true|0' ]] || { echo "FAIL after the suite: $expect_closed" >&2; exit 1; }
 echo 'PASS after the suite: gate closed, CHECK present, no v5 row'

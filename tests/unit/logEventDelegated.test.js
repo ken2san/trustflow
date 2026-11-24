@@ -179,6 +179,16 @@ describe('log-event delegated route: the append call', () => {
     expect(appendCalls()).toHaveLength(0)
   })
 
+  it('old schema: a database without the delegated RPCs (PGRST202) is a 503, never a write', async () => {
+    const missing = { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+    state.rpcAnswers.append_delegated_event = [missing]
+    expect(await reply(await post(write))).toEqual({ status: 503, body: { error: 'delegated_append_unavailable' } })
+    state.rpcAnswers.replay_delegated_event = [missing]
+    expect(await reply(await post({ ...write, idempotency_key: 'k1' })))
+      .toEqual({ status: 503, body: { error: 'delegated_append_unavailable' } })
+    expect(appendCalls()).toHaveLength(1)
+  })
+
   it('the secret never appears in a response or a log line', async () => {
     state.rpcAnswers.append_delegated_event = [status('secret_mismatch')]
     const res = await post(write)
