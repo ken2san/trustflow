@@ -546,10 +546,10 @@ export async function guestTrailVerdicts(
  * (row 4). Read from the stored `_authentication.credential`, which the writer
  * required to be exactly that before it stored the row; the hash binds it.
  *
- * null for every row that is not v5, and for a v5 row without a string there.
- * Legacy rows carry their own `_authentication` (an account session, a guest
- * capability), and this field must not start naming those retroactively: it
- * exists for the version-2 response only, beside `provenance`, which stays
+ * null for every row that is not v5, and for a v5 row without a non-empty string
+ * there. Legacy rows carry their own `_authentication` (an account session, a
+ * guest capability), and this field must not start naming those retroactively:
+ * it exists for the version-2 response only, beside `provenance`, which stays
  * unchanged (Kenji, 2026-11-24 12:42 ET). Recorded, not verified: it says what
  * the record states, not who acted.
  */
@@ -558,7 +558,7 @@ export function recordedCredential(row: Record<string, unknown>): string | null 
   const auth = (row.payload as Record<string, unknown> | null | undefined)?._authentication
   if (auth === null || typeof auth !== 'object' || Array.isArray(auth)) return null
   const credential = (auth as Record<string, unknown>).credential
-  return typeof credential === 'string' ? credential : null
+  return typeof credential === 'string' && credential.trim().length > 0 ? credential : null
 }
 
 export function describeActor(

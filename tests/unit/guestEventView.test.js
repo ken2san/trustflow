@@ -824,10 +824,12 @@ describe('recordedCredential (row 4, version 2 only)', () => {
     expect(recordedCredential({ hash_version: 4, payload: { _authentication: { credential: 'account_jwt' } } })).toBeNull()
     expect(recordedCredential({ hash_version: null, payload: {} })).toBeNull()
   })
-  it('a v5 row without a string credential is null, never a guess', () => {
+  it('a v5 row without a non-empty string credential is null, never a guess', () => {
     expect(recordedCredential({ hash_version: 5, payload: {} })).toBeNull()
     expect(recordedCredential({ hash_version: 5, payload: null })).toBeNull()
     expect(recordedCredential({ hash_version: 5, payload: { _authentication: [] } })).toBeNull()
     expect(recordedCredential({ hash_version: 5, payload: { _authentication: { credential: 1 } } })).toBeNull()
+    expect(recordedCredential({ hash_version: 5, payload: { _authentication: { credential: '' } } })).toBeNull()
+    expect(recordedCredential({ hash_version: 5, payload: { _authentication: { credential: '   ' } } })).toBeNull()
   })
 })
