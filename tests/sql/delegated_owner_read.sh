@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# Disposable local-only evidence for 20261124231214_delegated_owner_read (row 5a,
+# docs/plans/row5-owner-read.md §5a). Requires the trustflow-localdb container;
+# never targets a URL, never a hosted project.
+#
+# Fixture: the same fail-closed schema-only restore as
+# tests/sql/events_v5_authority.sh (owners and ACLs kept, only the 7 reviewed
+# platform event triggers left out), then the migrations up to the row 5 read.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+container="${TF_FIXTURE_CONTAINER:-trustflow-localdb}"
+db="trustflow_ownerread_$$"
+dump="/tmp/${db}.dump"
+work="$(mktemp -d "${TMPDIR:-/tmp}/trustflowownerread.XXXXXX")"
+cleanup() {
+  docker exec "$container" dropdb -U supabase_admin --if-exists --force "$db" >/dev/null 2>&1 || echo "Could not drop disposable database $db" >&2
+  docker exec "$container" rm -f "$dump" "$dump.list" || echo "Could not remove $dump in the container" >&2
+  rm -rf "$work"
+}
+trap cleanup EXIT
+psql_pg() { docker exec -i "$container" psql -X -qAt -U postgres -d "$db" -v ON_ERROR_STOP=1 "$@"; }
+q() { psql_pg <<< "$1"; }
+expect() { local label="$1" expected="$2" actual="$3"; [[ "$actual" == "$expected" ]] || { printf 'FAIL %s: expected %s, got %s\n' "$label" "$expected" "$actual" >&2; exit 1; }; echo "PASS $label"; }
+
+docker exec "$container" createdb -U supabase_admin -O postgres "$db"
+docker exec "$container" pg_dump -U supabase_admin -d postgres --schema-only -Fc -f "$dump"
+docker exec "$container" pg_restore -l "$dump" > "$work/toc.full"
+grep -c ' SCHEMA \| TABLE ' "$work/toc.full" >/dev/null || { echo 'fixture: TOC has no schemas or tables' >&2; exit 1; }
+reviewed='ensure_rls
+issue_graphql_placeholder
+issue_pg_cron_access
+issue_pg_graphql_access
+issue_pg_net_access
+pgrst_ddl_watch
+pgrst_drop_watch'
+awk '$4 == "EVENT" && $5 == "TRIGGER" { print $7 }' "$work/toc.full" | sort > "$work/excluded"
+if [[ "$(cat "$work/excluded")" != "$reviewed" ]]; then
+  echo 'fixture: event triggers differ from the reviewed set' >&2; exit 1
+fi
+awk '!($4 == "EVENT" && $5 == "TRIGGER")' "$work/toc.full" > "$work/toc.list"
+[[ $(( $(wc -l < "$work/toc.full") - $(wc -l < "$work/toc.list") )) -eq 7 ]] || { echo 'fixture: TOC filter removed other than 7 entries' >&2; exit 1; }
+docker cp "$work/toc.list" "$container:$dump.list"
+echo 'fixture: restoring'
+docker exec "$container" pg_restore -U supabase_admin -d "$db" --exit-on-error -L "$dump.list" "$dump"
+echo 'fixture: applying migrations to head, row 4 and the row 5 read'
+for m in 20261118214020_entry_agent_credentials 20261120090000_create_entry_contract \
+         20261120180000_close_contract_client_insert 20261122130000_events_v5_authority_columns \
+         20261124120000_entry_agent_resolver 20261124130000_delegated_owner_append \
+         20261124231214_delegated_owner_read; do
+  psql_pg -1 -f - < "supabase/migrations/$m.sql" > /dev/null
+done
+echo 'PASS the row 5 migration applies with its self-test (TF941-TF942)'
+
+owner=11111111-1111-4111-8111-111111111111
+other=22222222-2222-4222-8222-222222222222
+cA=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1   # the read deal, with a mixed trail
+cB=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2   # another deal of the same owner
+cE=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3   # empty trail
+cO=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4   # owner changes after issuance
+cV=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5   # carries a writer-built v5 row
+cL=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6   # large trail, for the caps
+gR=cccccccc-0000-4000-8000-000000000001   # read on cA
+gW=cccccccc-0000-4000-8000-000000000002   # cA, write scope only
+gB=cccccccc-0000-4000-8000-000000000003   # read on cB
+gX=cccccccc-0000-4000-8000-000000000004   # read on cA, revoked
+gT=cccccccc-0000-4000-8000-000000000005   # read on cA, expired
+gK=cccccccc-0000-4000-8000-000000000006   # read on cA, counterpart_account issuer
+gO=cccccccc-0000-4000-8000-000000000007   # read on cO
+gE=cccccccc-0000-4000-8000-000000000008   # read on cE
+gV=cccccccc-0000-4000-8000-000000000009   # read on cV
+gA=cccccccc-0000-4000-8000-00000000000a   # write on cV, for the real writer
+gL=cccccccc-0000-4000-8000-00000000000b   # read on cL
+gP=cccccccc-0000-4000-8000-00000000000c   # read + payment.acknowledged on cA, parity
+h() { printf "repeat('%s', 64)" "$1"; }
+psql_pg > /dev/null <<SQL
+insert into auth.users (id, email, is_anonymous, email_confirmed_at) values
+  ('$owner', 'read-owner@example.test', false, clock_timestamp()),
+  ('$other', 'read-other@example.test', false, clock_timestamp());
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_jpy, performed_by, earner_display_name,
+    invited_hirer_email, hirer_email, invite_token, guest_access_token, stripe_payment_intent_id) values
+  ('$cA', '$owner', 'read cA', '["test"]', 1200, 'creator', 'Owner A', 'invited@example.test', 'claimed@example.test',
+   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1', 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1', 'pi_secret_fixture'),
+  ('$cB', '$owner', 'read cB', '["test"]', 1, 'creator', null, null, null, null, null, null),
+  ('$cE', '$owner', 'read cE', '["test"]', 1, 'creator', null, null, null, null, null, null),
+  ('$cO', '$owner', 'read cO', '["test"]', 1, 'creator', null, null, null, null, null, null),
+  ('$cV', '$owner', 'read cV', '["test"]', 1, 'creator', null, null, null, null, null, null),
+  ('$cL', '$owner', 'read cL', '["test"]', 1, 'creator', null, null, null, null, null, null);
+insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, created_at, expires_at, revoked_at) values
+  ('$gR', '$cA', '$owner', 'owner_account', $(h 1), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gW', '$cA', '$owner', 'owner_account', $(h 2), array['payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gB', '$cB', '$owner', 'owner_account', $(h 3), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gX', '$cA', '$owner', 'owner_account', $(h 4), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', clock_timestamp()),
+  ('$gT', '$cA', '$owner', 'owner_account', $(h 5), array['read'], clock_timestamp() - interval '2 days', clock_timestamp() - interval '1 day', null),
+  ('$gK', '$cA', '$other', 'counterpart_account', $(h 6), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gO', '$cO', '$owner', 'owner_account', $(h 7), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gE', '$cE', '$owner', 'owner_account', $(h 8), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gV', '$cV', '$owner', 'owner_account', $(h 9), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gA', '$cV', '$owner', 'owner_account', $(h a), array['payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gL', '$cL', '$owner', 'owner_account', $(h b), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gP', '$cA', '$owner', 'owner_account', $(h c), array['read', 'payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null);
+update public.contracts set earner_user_id = '$other' where id = '$cO';
+-- A legacy trail on cA: statement keys, recorded metadata, keys that must be
+-- withheld (contact address, user agent, unlisted keys, an idempotency key, a
+-- timestamp token) and an unknown type.
+create function pg_temp.ev(c uuid, typ text, payload jsonb, k text, tsa text) returns void language sql as \$\$
+  insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, prev_event_hash,
+      hash_version, payload_hash, agreement_hash, dod_hash, idempotency_key, tsa_token)
+  values (gen_random_uuid(), typ, c::text, '$owner', payload, clock_timestamp(), encode(sha256(gen_random_uuid()::text::bytea), 'hex'),
+      null, 4, repeat('1', 64), null, repeat('3', 64), k, tsa) \$\$;
+select pg_temp.ev('$cA', 'contract.initiated', '{"step":1,"title":"T","private_note":"withheld","_actor_role":"earner","_auth_method":"account_session","_authentication":{"assurance":"account_session"},"_extra":"withheld"}', 'idem-secret-1', 'tsa-token-bytes');
+select pg_temp.ev('$cA', 'dod.consent_recorded', '{"counterparty_name":"Guest","counterparty_email":"guest@example.test","dod_items":["test"],"user_agent":"UA/1"}', null, null);
+select pg_temp.ev('$cA', 'contract.accepted', '{"step":2,"user_agent":"UA/1","_agreement":{"snapshot_version":1,"project_name":"read cA"},"_role_in_agreement":"receiver"}', null, null);
+select pg_temp.ev('$cA', 'payment.reported', '{"note":"sent","_claimed_identity_verified":false}', null, null);
+select pg_temp.ev('$cA', 'x.custom', '{"note":"unknown type","_actor_role":"earner"}', null, null);
+select pg_temp.ev('$cA', 'dispute.opened', '{"reason":"withheld _agreement","_agreement":{"snapshot_version":1}}', null, null);
+SQL
+read() { q "select public.read_delegated_owner_deal('$1', '$2', $3)${4:-}"; }
+
+# ── Authority: every refusal, and refusals carry nothing ────────────────────
+expect 'live read grant: ok' ok "$(read "$cA" "$gR" "$(h 1)" "->>'status'")"
+expect 'wrong deal (cA grant on cB)' grant_unknown "$(read "$cB" "$gR" "$(h 1)" "->>'status'")"
+expect 'swapped grant (cB grant on cA)' grant_unknown "$(read "$cA" "$gB" "$(h 3)" "->>'status'")"
+expect 'unknown grant' grant_unknown "$(read "$cA" cccccccc-0000-4000-8000-0000000000ff "$(h 1)" "->>'status'")"
+expect 'absent deal' grant_unknown "$(read aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9 "$gR" "$(h 1)" "->>'status'")"
+expect 'wrong secret' secret_mismatch "$(read "$cA" "$gR" "$(h 2)" "->>'status'")"
+expect 'malformed hash' malformed "$(read "$cA" "$gR" "'ABC'" "->>'status'")"
+expect 'null credential' malformed "$(q "select public.read_delegated_owner_deal('$cA', null, $(h 1))->>'status'")"
+expect 'counterpart_account issuer' issuer_kind "$(read "$cA" "$gK" "$(h 6)" "->>'status'")"
+expect 'owner changed after issuance' issuer_not_owner "$(read "$cO" "$gO" "$(h 7)" "->>'status'")"
+expect 'missing read scope (write-only grant)' scope "$(read "$cA" "$gW" "$(h 2)" "->>'status'")"
+expect 'revoked' revoked "$(read "$cA" "$gX" "$(h 4)" "->>'status'")"
+expect 'expired' expired "$(read "$cA" "$gT" "$(h 5)" "->>'status'")"
+for case in "$cB $gR 1" "$cA $gR 2" "$cA $gK 6" "$cO $gO 7" "$cA $gW 2" "$cA $gX 4" "$cA $gT 5"; do
+  set -- $case
+  expect "refusal ($2 on $1) is {status} alone" status "$(q "select string_agg(k, ',') from jsonb_object_keys(public.read_delegated_owner_deal('$1', '$2', $(h "$3"))) k")"
+done
+# psql -v VERBOSITY=verbose prints the SQLSTATE, so the refusal is pinned, not any error.
+err() { docker exec -i "$container" psql -X -qAt -U postgres -d "$db" -v VERBOSITY=verbose <<< "$1" 2>&1 | grep -oE 'ERROR: +[0-9A-Z]{5}' | head -1 | grep -oE '[0-9A-Z]{5}$' || echo none; }
+expect 'REPEATABLE READ is refused with TF005' TF005 "$(err "begin isolation level repeatable read; select public.read_delegated_owner_deal('$cA', '$gR', $(h 1)); commit;")"
+expect 'SERIALIZABLE is refused with TF005' TF005 "$(err "begin isolation level serializable; select public.read_delegated_owner_deal('$cA', '$gR', $(h 1)); commit;")"
+
+# ── Gate independence: read never looks at the v5 write gate ────────────────
+expect 'the gate is closed' f "$(q "select open from private.v5_write_gate")"
+expect 'closed gate: read ok' ok "$(read "$cA" "$gR" "$(h 1)" "->>'status'")"
+expect 'missing gate (disposable): read ok' ok "$(q "begin; alter table private.v5_write_gate disable trigger user; delete from private.v5_write_gate;
+  select public.read_delegated_owner_deal('$cA', '$gR', $(h 1))->>'status'; rollback;")"
+expect 'the gate row is back after the rollback' 1 "$(q "select count(*) from private.v5_write_gate")"
+
+# ── ACLs: direct RPC and helper, effective (inherited) privileges ───────────
+for r in anon authenticated; do
+  expect "$r cannot execute the read RPC (42501)" 42501 "$(err "begin; set local role $r; select public.read_delegated_owner_deal('$cA', '$gR', $(h 1)); commit;")"
+done
+expect 'service_role executes the read RPC' ok "$(q "begin; set local role service_role; select public.read_delegated_owner_deal('$cA', '$gR', $(h 1))->>'status'; commit;")"
+for r in anon authenticated service_role; do
+  expect "$r cannot execute the read helper (42501)" 42501 "$(err "begin; set local role $r; select * from private.resolve_owner_read_grant('$cA', '$gR', $(h 1)); commit;")"
+done
+expect 'non-superuser roles that can EXECUTE the RPC (inherited included)' postgres,service_role \
+  "$(q "select string_agg(rolname, ',' order by rolname) from pg_roles where not rolsuper and rolname !~ '^pg_'
+        and has_function_privilege(oid, 'public.read_delegated_owner_deal(uuid,uuid,text)', 'EXECUTE')")"
+expect 'non-superuser roles that can EXECUTE the helper (inherited included)' postgres \
+  "$(q "select string_agg(rolname, ',' order by rolname) from pg_roles where not rolsuper and rolname !~ '^pg_'
+        and has_function_privilege(oid, 'private.resolve_owner_read_grant(uuid,uuid,text)', 'EXECUTE')")"
+expect 'both are SECURITY DEFINER with an empty search_path' 2 "$(q "select count(*) from pg_proc p where p.oid in
+  ('public.read_delegated_owner_deal(uuid,uuid,text)'::regprocedure, 'private.resolve_owner_read_grant(uuid,uuid,text)'::regprocedure)
+  and p.prosecdef and 'search_path=\"\"' = any(p.proconfig)")"
+
+# ── Bypass inventory with the read helper and RPC present ──────────────────
+psql_pg < tests/sql/entry_agent_credentials_inventory.sql > "$work/inventory.out" 2>&1 || { cat "$work/inventory.out" >&2; exit 1; }
+grep -i 'fail\|error' "$work/inventory.out" && { echo 'inventory reported a failure' >&2; exit 1; }
+expect 'inventory: the read RPC does not name the credential table' 0 \
+  "$(q "select count(*) from pg_proc where oid = 'public.read_delegated_owner_deal(uuid,uuid,text)'::regprocedure and prosrc ilike '%entry_agent_credentials%'")"
+echo 'PASS bypass inventory with the row 5 read present'
+
+# ── Parity with the row 4 resolver on the common checks ─────────────────────
+#    gP carries both scopes, so scope never differs; the write resolver runs
+#    with p_for_insert = false (no gate), as replay does.
+for case in "$cA $gP c ok" "$cB $gP c grant_unknown" "$cA $gP 1 secret_mismatch" "$cA $gK 6 issuer_kind" \
+            "$cO $gO 7 issuer_not_owner" "$cA $gX 4 revoked" "$cA $gT 5 expired"; do
+  set -- $case
+  w="$(q "select status from private.resolve_entry_agent_grant('$1', '$2', $(h "$3"), 'payment.acknowledged', false)")"
+  r="$(q "select status from private.resolve_owner_read_grant('$1', '$2', $(h "$3"))")"
+  expect "parity $4: read helper" "$4" "$r"
+  expect "parity $4: write resolver agrees" "$4" "$w"
+done
+
+# ── `read` cannot enter append or replay ────────────────────────────────────
+expect 'replay with type read is refused by the write allowlist' allowlist \
+  "$(q "select public.replay_delegated_event('$cA', '$gR', $(h 1), 'read', null)->>'status'")"
+expect 'a read-only grant cannot authorize a write type' scope \
+  "$(q "select public.replay_delegated_event('$cA', '$gR', $(h 1), 'payment.acknowledged', null)->>'status'")"
+
+# ── Materialization: projection, order, withheld fields ─────────────────────
+out="$(read "$cA" "$gR" "$(h 1)")"
+j() { jq -r "$1" <<< "$out"; }
+expect 'top-level keys' 'authorized_at,contract,events,read_boundary,status' "$(j 'keys | join(",")')"
+expect 'contract projection keys' 'amount_jpy,amount_minor,currency,deadline,dod,earner_display_name,id,performed_by,project_name,state' "$(j '.contract | keys | join(",")')"
+expect 'no contact, invite, guest or payment-provider value anywhere' 0 \
+  "$(grep -cE 'invited@|claimed@|guest@example|bbbbbbbb-bbbb|dddddddd-dddd|pi_secret|idem-secret|tsa-token|UA/1|private_note|_extra' <<< "$out" || true)"
+expect 'event keys' 'actor_id,agreement_hash,contract_id,created_at,credential_id,dod_hash,event_hash,hash_version,id,issuer_kind,payload,payload_hash,prev_event_hash,timestamp_token_present,type' \
+  "$(j '.events[0] | keys | join(",")')"
+expect 'events in (created_at, id) order' "$(q "select string_agg(id::text, ',' order by created_at, id) from public.events where contract_id = '$cA'")" \
+  "$(j '[.events[].id] | join(",")')"
+expect 'statement + metadata keys kept, others dropped (initiated)' '_actor_role,_auth_method,_authentication,step,title' "$(j '.events[0].payload | keys | join(",")')"
+expect 'timestamp token: presence only' 'true,false' "$(j '[.events[0,1].timestamp_token_present] | map(tostring) | join(",")')"
+expect 'consent: name and items, no email or user agent' 'counterparty_name,dod_items' "$(j '.events[1].payload | keys | join(",")')"
+expect 'acceptance keeps _agreement and step' '_agreement,_role_in_agreement,step' "$(j '.events[2].payload | keys | join(",")')"
+expect 'payment keeps note and the identity flag' '_claimed_identity_verified,note' "$(j '.events[3].payload | keys | join(",")')"
+expect 'unknown type: metadata only' '_actor_role' "$(j '.events[4].payload | keys | join(",")')"
+expect '_agreement withheld outside acceptance' 'reason' "$(j '.events[5].payload | keys | join(",")')"
+expect 'boundary: complete trail' '6,6,false' "$(j '.read_boundary | [.total_count, .returned_count, .truncated] | map(tostring) | join(",")')"
+expect 'boundary: tail is the last event' "$(j '.events[-1].id')" "$(j '.read_boundary.tail.id')"
+expect 'boundary: acceptance anchor at sequence 2, in prefix' "$(j '.events[2].id'),2,true" "$(j '.read_boundary.acceptance_anchor | [.event_id, .sequence, .in_prefix] | map(tostring) | join(",")')"
+
+# Equal created_at: id breaks the tie (monotonic trigger off, disposable).
+expect 'equal created_at: ordered by id' 'aaaaaaaa-0000-4000-8000-000000000001,ffffffff-0000-4000-8000-000000000001' "$(q "begin;
+  alter table public.events disable trigger events_require_monotonic_created_at;
+  insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
+  select x::uuid, 'payment.reported', '$cE', '$owner', '{}', '2030-01-01T00:00:00Z', repeat('e', 64), 4, repeat('1', 64), repeat('3', 64)
+  from unnest(array['ffffffff-0000-4000-8000-000000000001', 'aaaaaaaa-0000-4000-8000-000000000001']) x;
+  select string_agg(e->>'id', ',') from jsonb_array_elements(public.read_delegated_owner_deal('$cE', '$gE', $(h 8))->'events') e;
+  rollback;")"
+
+# Empty trail.
+out="$(read "$cE" "$gE" "$(h 8)")"
+expect 'empty trail: ok, no events, exact zero, no tail or anchor' 'ok,0,0,0,false,null,null' \
+  "$(j '[.status, (.events | length), .read_boundary.total_count, .read_boundary.returned_count, .read_boundary.truncated, .read_boundary.tail, .read_boundary.acceptance_anchor] | map(tostring) | join(",")')"
+
+# ── Caps: 500 events, then 1 MiB, from one materialization ──────────────────
+q "insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
+   select gen_random_uuid(), 'payment.reported', '$cL', '$owner', '{\"note\":\"n\"}', '2030-01-01T00:00:00Z'::timestamptz + make_interval(secs => i),
+     encode(sha256(i::text::bytea), 'hex'), 4, repeat('1', 64), repeat('3', 64) from generate_series(1, 501) i" > /dev/null
+out="$(read "$cL" "$gL" "$(h b)")"
+expect '501 events: 500 returned, exact total, truncated' '500,501,500,true' \
+  "$(j '[(.events | length), .read_boundary.total_count, .read_boundary.returned_count, .read_boundary.truncated] | map(tostring) | join(",")')"
+expect '501 events: tail is the 500th' "$(q "select id from public.events where contract_id = '$cL' order by created_at, id offset 499 limit 1")" "$(j '.read_boundary.tail.id')"
+expect '501 events: no acceptance anchor' null "$(j '.read_boundary.acceptance_anchor')"
+# An acceptance beyond the prefix is reported outside it.
+q "insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
+   values (gen_random_uuid(), 'contract.accepted', '$cL', '$owner', '{\"step\":2}', '2031-01-01T00:00:00Z', repeat('f', 64), 4, repeat('1', 64), repeat('3', 64))" > /dev/null
+expect 'anchor outside the prefix: sequence 501, in_prefix false' '501,false' \
+  "$(q "select (b->>'sequence') || ',' || (b->>'in_prefix') from (select public.read_delegated_owner_deal('$cL', '$gL', $(h b))->'read_boundary'->'acceptance_anchor' b) s")"
+# Byte cap: 300 KiB notes, so the fourth crosses 1 MiB.
+expect 'byte cap: cut at a row boundary within 1 MiB' '3,5,true,true' "$(q "begin;
+  insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
+  select gen_random_uuid(), 'payment.reported', '$cE', '$owner', jsonb_build_object('note', repeat('x', 300 * 1024)),
+    '2030-01-01T00:00:00Z'::timestamptz + make_interval(secs => i), encode(sha256(i::text::bytea), 'hex'), 4, repeat('1', 64), repeat('3', 64)
+  from generate_series(1, 5) i;
+  select (r->'read_boundary'->>'returned_count') || ',' || (r->'read_boundary'->>'total_count') || ',' || (r->'read_boundary'->>'truncated')
+    || ',' || ((select sum(octet_length(e::text)) from jsonb_array_elements(r->'events') e) <= 1048576)::text
+  from (select public.read_delegated_owner_deal('$cE', '$gE', $(h 8)) r) s;
+  rollback;")"
+
+# ── A real writer-built v5 row after a legacy predecessor ───────────────────
+psql_pg > /dev/null <<SQL
+insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
+values (gen_random_uuid(), 'contract.initiated', '$cV', '$owner', '{"step":1}', clock_timestamp(), repeat('7', 64), 4, repeat('1', 64), repeat('3', 64));
+alter table public.events drop constraint events_v5_writes_disabled;
+update private.v5_write_gate set open = true;
+do \$\$
+declare v_id uuid := gen_random_uuid(); v_at timestamptz := date_trunc('milliseconds', clock_timestamp()); r jsonb;
+begin
+  r := public.append_delegated_event('$cV', '$gA', repeat('a', 64), 'creator', '{"dod":["test"],"agreement":null}',
+    jsonb_build_object('id', v_id, 'type', 'payment.acknowledged', 'contract_id', '$cV', 'actor_id', '$owner',
+      'dod_hash', repeat('2', 64), 'created_at', to_char(v_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'prev_event_hash', repeat('7', 64),
+      'payload', jsonb_build_object('note', 'paid', '_actor_role', 'earner', '_role_in_agreement', 'performer',
+        '_auth_method', 'entry_agent_grant', '_authentication', private.v5_grant_authentication()),
+      'payload_hash', repeat('1', 64), 'agreement_hash', null,
+      'event_hash', encode(sha256(convert_to(private.v5_outer_canonical(v_id, 'payment.acknowledged', '$cV', '$owner',
+         repeat('2', 64), v_at, repeat('7', 64), repeat('1', 64), null, '$gA', 'owner_account'), 'UTF8')), 'hex'),
+      'idempotency_key', 'v5-idem'));
+  if r->>'status' <> 'appended' then raise exception 'seed v5 append: %', r; end if;
+end \$\$;
+update private.v5_write_gate set open = false;
+SQL
+out="$(read "$cV" "$gV" "$(h 9)")"
+expect 'v5 row: authority inputs carried' "5,$gA,owner_account" "$(j '.events[1] | [.hash_version, .credential_id, .issuer_kind] | map(tostring) | join(",")')"
+expect 'v5 row: event_hash and prev link as stored' "$(q "select event_hash || ',' || prev_event_hash from public.events where contract_id = '$cV' and hash_version = 5")" "$(j '.events[1] | .event_hash + "," + .prev_event_hash')"
+expect 'v5 row: recorded label kept, idempotency key withheld' 'entry_agent_grant,0' "$(j '.events[1].payload._auth_method'),$(grep -c 'v5-idem' <<< "$out" || true)"
+expect 'legacy predecessor: no authority values' 'null,null' "$(j '.events[0] | [.credential_id, .issuer_kind] | map(tostring) | join(",")')"
+expect 'the read wrote nothing (no ticket, events unchanged)' '0,2' "$(q "select (select count(*) from private.v5_write_tickets) || ',' || (select count(*) from public.events where contract_id = '$cV')")"
+
+echo 'ALL PASS'
