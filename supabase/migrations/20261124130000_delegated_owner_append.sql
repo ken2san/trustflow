@@ -293,7 +293,8 @@ begin
     select e.payload->'_agreement'->>'snapshot_version' into v_accepted_version
       from public.events e
      where e.contract_id = c.id::text and e.type = 'dod.consent_recorded'
-     order by e.created_at desc, e.id desc limit 1;
+     -- The first acceptance, in acceptedSnapshotVersion's order (eventRecord.ts).
+     order by e.created_at asc, e.id asc limit 1;
     -- Version 1 is the only snapshot this build can compare.
     if v_accepted_version is distinct from '1' then
       return jsonb_build_object('status', 'agreement_unavailable');

@@ -74,6 +74,12 @@ import {
 import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
 } from '../_shared/authAssurance.ts'
+import {
+  DELEGATED_UNAVAILABLE, DELEGATION_REFUSED, GRANT_HEADER, delegatedAdmission, refusalAnswer,
+} from '../_shared/delegatedAuth.ts'
+import {
+  DELEGATED_TYPES, buildDelegatedEventV5, finalRecordedTree, inDelegatedDomain,
+} from '../_shared/delegatedEvent.ts'
 
 // CORS is per request now, from ../_shared/cors.ts: the allowed origin depends
 // on who asked, so there is no constant to share. A caller that sends no Origin
@@ -239,6 +245,159 @@ async function resolveActor(
   }
 }
 
+// ── Delegated append (row 4, docs/plans/row4-owner-append.md §4a–§4b) ────────
+//
+// A request carrying `x-trustflow-grant` is dispatched here before the legacy
+// contract lookup and its 404, and before resolveActor. It never falls back to
+// the owner session or the guest token. Authorization is decided by the
+// database under its locks (append_delegated_event / replay_delegated_event);
+// every authorization refusal is one uniform 403, and the reason goes only to
+// a redacted log line: reason, contract id, credential id. Never the secret,
+// never a header.
+async function delegatedAppend(
+  req: Request,
+  json: (body: unknown, status: number) => Response,
+  body: Record<string, unknown>,
+  op: { type: string, contractId: string, payload: unknown, idempotencyKey: string | null },
+): Promise<Response> {
+  // The whole route is off until the gate decision (§4c). Same pattern as
+  // ENTRY_CREDENTIAL_ISSUANCE.
+  if (Deno.env.get('ENTRY_DELEGATED_APPEND') !== 'on') return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
+  // Authority comes from the resolved grant, never the body.
+  if ('credential_id' in body || 'issuer_kind' in body) return json({ error: 'authority_is_server_derived' }, 400)
+  if (!inDelegatedDomain(op.payload ?? {})) return json({ error: 'invalid_payload' }, 400)
+
+  const delegation = await delegatedAdmission(req.headers, Deno.env.get('SUPABASE_ANON_KEY') ?? '')
+  const credentialId = delegation.delegated && delegation.ok ? delegation.credentialId : null
+  const refuse = (reason: string) => {
+    console.warn(JSON.stringify({ fn: 'log-event', delegated_refusal: reason, contract_id: op.contractId, credential_id: credentialId }))
+    return json({ error: DELEGATION_REFUSED.error }, DELEGATION_REFUSED.status)
+  }
+  if (!delegation.delegated || !delegation.ok) return refuse(delegation.delegated ? delegation.reason : 'not_delegated')
+  if (!DELEGATED_TYPES.has(op.type)) return refuse('allowlist')
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(op.contractId)) return refuse('grant_unknown')
+
+  const admin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
+  const grant = { p_contract_id: op.contractId, p_credential_id: delegation.credentialId, p_secret_hash: delegation.secretHash }
+
+  // What the database said, as a response. null means "go on / retry".
+  const answer = (status: string | undefined, event: unknown): Response | null => {
+    if (status === 'appended') return json({ event, deduplicated: false }, 201)
+    if (status === 'replayed') return json({ event, deduplicated: true }, 200)
+    if (status === 'idempotency_key_in_use') return json({ error: 'idempotency_key_in_use' }, 409)
+    if (status === 'wrong_party_for_event_type') return json({ error: 'wrong_party_for_event_type' }, 403)
+    if (status === 'agreement_unavailable') return json({ error: 'accepted_version_unsupported' }, 409)
+    const refused = refusalAnswer(status ?? '')
+    if (refused === DELEGATION_REFUSED) return refuse(status as string)
+    if (refused) return json({ error: refused.error }, refused.status)
+    // Only a caller other than this function, or TS/SQL drift, can produce these.
+    if (status === 'reserved_fields_mismatch' || status === 'binding_mismatch') {
+      console.error(JSON.stringify({ fn: 'log-event', delegated_fault: status, contract_id: op.contractId, credential_id: credentialId }))
+      return json({ error: 'insert_failed' }, 500)
+    }
+    return null
+  }
+  const rpcFault = (error: { code?: string, message?: string }): Response => {
+    if (error.code === 'PGRST202') {
+      console.error('[log-event] delegated append functions are missing: apply 20261124130000 before enabling')
+      return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
+    }
+    // The v5 CHECK, a missing ticket, or a closed/missing gate seen by the
+    // trigger: v5 writes are not open here.
+    if ((error.code === '23514' && error.message?.includes('events_v5_writes_disabled'))
+        || ['TF011', 'TF012', 'TF013', 'TF014'].includes(error.code ?? '')) {
+      console.error(JSON.stringify({ fn: 'log-event', delegated_closed: error.code, contract_id: op.contractId }))
+      return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
+    }
+    if (error.code === 'TF001') return json({ error: 'wrong_state_for_event_type' }, 409)
+    const isolationFault = isolationFaultLine('log-event', error)
+    if (isolationFault) console.error(isolationFault)
+    return json({ error: 'insert_failed' }, 500)
+  }
+
+  // A keyed retry is answered first, under the lock and after the grant,
+  // before anything that only matters for building a new event.
+  if (op.idempotencyKey) {
+    const { data, error } = await admin.rpc('replay_delegated_event', {
+      ...grant, p_type: op.type, p_idempotency_key: op.idempotencyKey,
+    })
+    if (error) return rpcFault(error)
+    if (data?.status !== 'none') {
+      return answer(data?.status, data?.event) ?? json({ error: 'lookup_failed' }, 500)
+    }
+  }
+
+  // The last retryable refusal decides the answer when retries run out, so an
+  // exhausted clock window is never reported as a changed context.
+  let last = 'chain_conflict'
+  for (let attempt = 0; attempt < MAX_CHAIN_RETRIES; attempt++) {
+    const { data: contractRow, error: contractError } = await admin
+      .from('contracts')
+      .select('id, state, project_name, dod, amount_jpy, amount_minor, currency, deadline, performed_by, '
+        + 'earner_display_name, earner_user_id')
+      .eq('id', op.contractId)
+      .maybeSingle()
+    if (contractError) return json({ error: 'lookup_failed' }, 500)
+    // An untyped client: the concatenated select is not parsed into a row type.
+    const contract = contractRow as unknown as Record<string, unknown> | null
+    if (!contract) return refuse('grant_unknown')
+
+    const tipRead = await admin
+      .from('events')
+      .select('event_hash, created_at')
+      .eq('contract_id', op.contractId)
+      .not('event_hash', 'is', null)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (tipRead.error) return json({ error: 'lookup_failed' }, 500)
+
+    const preAcceptance = PRE_ACCEPTANCE_STATES.has(String(contract.state ?? ''))
+    let acceptedVersion: number | null = null
+    if (!preAcceptance) {
+      const accepted = await acceptedSnapshotVersion(admin, op.contractId, { mustBeAccepted: true })
+      if ('error' in accepted) return json({ error: accepted.error }, 409)
+      acceptedVersion = accepted.version
+    }
+
+    const tree = finalRecordedTree(op.payload, contract.performed_by === 'counterparty' ? 'counterparty' : 'creator')
+    if (!tree) return json({ error: 'invalid_payload' }, 400)
+    const proposal = await buildDelegatedEventV5({
+      type: op.type,
+      contract,
+      ownerId: String(contract.earner_user_id),
+      credentialId: delegation.credentialId,
+      issuerKind: 'owner_account',
+      tree,
+      prevEventHash: (tipRead.data?.event_hash as string | undefined) ?? null,
+      idempotencyKey: op.idempotencyKey,
+      acceptedVersion,
+    })
+
+    const { data, error } = await admin.rpc('append_delegated_event', {
+      ...grant,
+      p_performed_by: proposal.performedBy,
+      p_hashed_inputs: proposal.hashedInputs,
+      p_event: proposal.event,
+    })
+    if (error) {
+      // Another event took the tip between the RPC's checks and its insert.
+      if (error.code === '23505') { last = 'chain_conflict'; continue }
+      return rpcFault(error)
+    }
+    const status = data?.status as string | undefined
+    if (status === 'chain_conflict' || status === 'context_changed' || status === 'clock_window') {
+      last = status
+      continue
+    }
+    return answer(status, data?.event) ?? json({ error: 'insert_failed' }, 500)
+  }
+  if (last === 'clock_window') return json({ error: 'clock_skew' }, 409)
+  if (last === 'context_changed') return json({ error: 'context_changed' }, 409)
+  return json({ error: 'chain_contention' }, 409)
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(req) })
 
@@ -300,6 +459,14 @@ Deno.serve(async (req: Request) => {
     }
     if (idempotency_key !== undefined && idempotency_key !== null && typeof idempotency_key !== 'string') {
       return json({ error: 'invalid_idempotency_key' }, 400)
+    }
+
+    // A present grant header commits the request to the delegated route, before
+    // the contract lookup below and its 404, and before resolveActor.
+    if (req.headers.has(GRANT_HEADER)) {
+      return await delegatedAppend(req, json, body as Record<string, unknown>, {
+        type, contractId: contract_id, payload, idempotencyKey: (idempotency_key as string | null) ?? null,
+      })
     }
 
     const admin = createClient(
@@ -375,7 +542,7 @@ Deno.serve(async (req: Request) => {
         .eq('contract_id', contract_id)
         .eq('idempotency_key', idempotency_key)
         .maybeSingle()
-      const outcome = ownerKeyedOutcome(lookup, { type, actorId: actor.actorId })
+      const outcome = ownerKeyedOutcome(lookup, { type, actorId: actor.actorId, credentialId: null })
       // Fail closed: without the lookup, neither a replay nor a collision can
       // be told from a new write. Same answer as the guest path's RPC error.
       if (outcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)
@@ -645,7 +812,7 @@ Deno.serve(async (req: Request) => {
             .maybeSingle()
           // Fail closed, as the pre-check does: a failed read cannot tell a
           // twin from no twin (Task 94).
-          const twinOutcome = ownerKeyedOutcome(twinRead, { type, actorId: actor.actorId })
+          const twinOutcome = ownerKeyedOutcome(twinRead, { type, actorId: actor.actorId, credentialId: null })
           if (twinOutcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)
           if (twinOutcome === 'replay') return json({ event: twinRead.data, deduplicated: true }, 200)
         }
@@ -675,7 +842,7 @@ Deno.serve(async (req: Request) => {
             .eq('idempotency_key', idempotency_key as string)
             .maybeSingle()
           // Fail closed: a failed read used to loop and end as contention (Task 94).
-          const racedOutcome = ownerKeyedOutcome(racedRead, { type, actorId: actor.actorId })
+          const racedOutcome = ownerKeyedOutcome(racedRead, { type, actorId: actor.actorId, credentialId: null })
           if (racedOutcome === 'lookup_failed') return json({ error: 'lookup_failed' }, 500)
           if (racedOutcome === 'replay') return json({ event: racedRead.data, deduplicated: true }, 200)
           if (racedOutcome === 'conflict') return json({ error: 'idempotency_key_in_use' }, 409)

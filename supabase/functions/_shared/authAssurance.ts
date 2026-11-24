@@ -59,6 +59,11 @@ export type PresentedCredential =
   | 'invite_token'
   | 'guest_access_token'
   | 'account_jwt'
+  /**
+   * A delegated agent grant (`x-trustflow-grant`), issued by the deal's owner
+   * for one deal and a fixed set of event types (row 4). Possession only.
+   */
+  | 'entry_agent_grant'
 
 /** The subset of a Supabase JWT this module reads. */
 export interface SessionClaims {
@@ -188,6 +193,23 @@ export function assuranceFromClaims(
  * kinds differ in what they prove and a caller that did not think about which
  * one it holds should not be able to record either.
  */
+/**
+ * A delegated write's authority: possession of an owner-issued agent grant.
+ *
+ * Not the owner acting. No login was tested and no authentication age exists,
+ * so both are recorded as absent rather than inherited from the owner's account.
+ * The database requires exactly this record on every delegated row
+ * (`private.v5_grant_authentication`, 20261124130000).
+ */
+export function grantAssurance(): AuthAssurance {
+  return {
+    assurance: 'bearer_capability', credential: 'entry_agent_grant', method: null, aal: null,
+    authenticated_at: null, seconds_since_authentication: null,
+    recent_authentication: false,
+    act_bound_authentication: false, act_binding_mechanism: null,
+  }
+}
+
 export function bearerAssurance(
   credential: 'invite_token' | 'guest_access_token',
 ): AuthAssurance {
@@ -220,6 +242,20 @@ export function assuranceMeaning(a: AuthAssurance): { proves: string[]; does_not
       + 'challenge bound to this agreement and action, so a recent login proves '
       + 'recency and not intent',
   ]
+
+  if (a.assurance === 'bearer_capability' && a.credential === 'entry_agent_grant') {
+    return {
+      proves: [
+        'the actor presented an agent grant this agreement\'s owner issued for this agreement, live and in scope when the event was written',
+        'the action was bound to a specific agreement version by agreement_hash when the agreement had been accepted',
+      ],
+      does_not_prove: [
+        'that the owner personally performed this act — the grant is a bearer secret held by an agent',
+        'any authentication event whatsoever: no login was tested for this act',
+        ...does_not_prove,
+      ],
+    }
+  }
 
   if (a.assurance === 'bearer_capability') {
     return {
@@ -405,6 +441,9 @@ export function assuranceForRecord(a: AuthAssurance): Record<string, unknown> {
  * if one ever is, not because one exists.
  */
 export function legacyAuthMethod(a: AuthAssurance): string {
+  // Checked first: a grant is a bearer capability too, and must not be
+  // recorded as the invitation it is not.
+  if (a.credential === 'entry_agent_grant') return 'entry_agent_grant'
   if (a.assurance === 'anonymous') return 'anonymous'
   if (a.assurance === 'bearer_capability') return 'invite_capability'
   return 'account_session'

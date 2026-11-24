@@ -40,12 +40,21 @@
  */
 export type IdempotencyOutcome = 'none' | 'replay' | 'conflict'
 
+/*
+ * The grant is part of the operation (row 4). A delegated row carries the
+ * owner's account id as its actor, so type and actor alone would hand an
+ * agent's row to the owner's session, and the reverse. `credentialId` is the
+ * grant a write was made under: null for the owner session and the guest, the
+ * grant id for a delegated write. A missing stored value reads as null, so
+ * rows written before the column existed keep their answer.
+ */
 export function idempotencyOutcome(
-  existing: { type?: unknown; actor_id?: unknown } | null | undefined,
-  operation: { type: string; actorId: string },
+  existing: { type?: unknown; actor_id?: unknown; credential_id?: unknown } | null | undefined,
+  operation: { type: string; actorId: string; credentialId: string | null },
 ): IdempotencyOutcome {
   if (!existing) return 'none'
   return existing.type === operation.type && existing.actor_id === operation.actorId
+    && (existing.credential_id ?? null) === (operation.credentialId ?? null)
     ? 'replay'
     : 'conflict'
 }
@@ -62,8 +71,8 @@ export function idempotencyOutcome(
 export type OwnerKeyedOutcome = IdempotencyOutcome | 'lookup_failed'
 
 export function ownerKeyedOutcome(
-  lookup: { data?: { type?: unknown; actor_id?: unknown } | null; error?: unknown },
-  operation: { type: string; actorId: string },
+  lookup: { data?: { type?: unknown; actor_id?: unknown; credential_id?: unknown } | null; error?: unknown },
+  operation: { type: string; actorId: string; credentialId: string | null },
 ): OwnerKeyedOutcome {
   if (lookup.error) return 'lookup_failed'
   return idempotencyOutcome(lookup.data, operation)

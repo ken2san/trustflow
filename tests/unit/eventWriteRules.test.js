@@ -391,3 +391,25 @@ describe('ownerKeyedOutcome — a failed lookup is never a new write', () => {
     expect(refused).toBeGreaterThan(failed)
   })
 })
+
+describe('idempotencyOutcome — the grant is part of the operation (row 4)', () => {
+  const OWNER_ID = '11111111-1111-4111-8111-111111111111'
+  const GRANT = 'cccccccc-0000-4000-8000-000000000001'
+  const OTHER_GRANT = 'cccccccc-0000-4000-8000-000000000002'
+  const delegated = { type: 'payment.acknowledged', actor_id: OWNER_ID, credential_id: GRANT }
+  const ownerRow = { type: 'payment.acknowledged', actor_id: OWNER_ID, credential_id: null }
+  const op = { type: 'payment.acknowledged', actorId: OWNER_ID }
+
+  it('the owner session never replays a delegated row (all three owner sites pass credentialId null)', () => {
+    expect(idempotencyOutcome(delegated, { ...op, credentialId: null })).toBe('conflict')
+    expect(ownerKeyedOutcome({ data: delegated, error: null }, { ...op, credentialId: null })).toBe('conflict')
+  })
+  it('a grant never replays the owner session row, nor another grant\'s row', () => {
+    expect(idempotencyOutcome(ownerRow, { ...op, credentialId: GRANT })).toBe('conflict')
+    expect(idempotencyOutcome(delegated, { ...op, credentialId: OTHER_GRANT })).toBe('conflict')
+  })
+  it('the same grant replays its own row; owner rows without the column still replay to the owner', () => {
+    expect(idempotencyOutcome(delegated, { ...op, credentialId: GRANT })).toBe('replay')
+    expect(idempotencyOutcome({ type: op.type, actor_id: OWNER_ID }, { ...op, credentialId: null })).toBe('replay')
+  })
+})

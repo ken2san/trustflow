@@ -51,7 +51,7 @@
  * list cannot drift into it.
  */
 export const ALLOW_HEADERS =
-  'authorization, x-client-info, apikey, content-type, x-guest-access-token'
+  'authorization, x-client-info, apikey, content-type, x-guest-access-token, x-trustflow-grant'
 
 /**
  * EXACT origins only. No pattern — and the reason is the whole lesson of this
