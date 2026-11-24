@@ -809,3 +809,25 @@ describe('T201: guestStrictVerdicts as the endpoint runs it', () => {
     expect(v.server.overall).toBe('incomplete')
   })
 })
+
+import { recordedCredential } from '../../supabase/functions/_shared/guestEventView.ts'
+import { assuranceForRecord, grantAssurance } from '../../supabase/functions/_shared/authAssurance.ts'
+
+describe('recordedCredential (row 4, version 2 only)', () => {
+  const grantAuth = assuranceForRecord(grantAssurance())
+
+  it('a v5 row recorded under an agent grant names entry_agent_grant', () => {
+    expect(recordedCredential({ hash_version: 5, payload: { _authentication: grantAuth } })).toBe('entry_agent_grant')
+  })
+  it('a legacy row is null even when it carries its own _authentication', () => {
+    expect(recordedCredential({ hash_version: 4, payload: { _authentication: grantAuth } })).toBeNull()
+    expect(recordedCredential({ hash_version: 4, payload: { _authentication: { credential: 'account_jwt' } } })).toBeNull()
+    expect(recordedCredential({ hash_version: null, payload: {} })).toBeNull()
+  })
+  it('a v5 row without a string credential is null, never a guess', () => {
+    expect(recordedCredential({ hash_version: 5, payload: {} })).toBeNull()
+    expect(recordedCredential({ hash_version: 5, payload: null })).toBeNull()
+    expect(recordedCredential({ hash_version: 5, payload: { _authentication: [] } })).toBeNull()
+    expect(recordedCredential({ hash_version: 5, payload: { _authentication: { credential: 1 } } })).toBeNull()
+  })
+})

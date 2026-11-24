@@ -118,7 +118,8 @@ describe('version 1 stays byte-identical', () => {
       const { body } = await guestResponse(rows, CONTRACT, { version: 1, maxEvents: 500 })
       expect(JSON.stringify(body)).toBe(JSON.stringify(await expectedV1(rows)))
       const text = JSON.stringify(body)
-      for (const absent of ['response_version', 'strict', 'provenance', 'credential_id', 'issuer_kind', 'recorded_id_class']) {
+      for (const absent of ['response_version', 'strict', 'provenance', 'credential_id', 'issuer_kind', 'recorded_id_class',
+        'recorded_credential']) {
         expect(text, absent).not.toContain(absent)
       }
     })
@@ -159,6 +160,31 @@ describe('version 2', () => {
       expect(Object.keys(e.actor)).toEqual(['id', 'attribution', 'recorded_id_class'])
       expect(e.provenance).toEqual({ writer: 'unknown', basis: 'none_recorded' })
     }
+  })
+
+  it('recorded_credential: the delegated v5 row names its grant; every other row is null (row 4)', async () => {
+    const { assuranceForRecord, grantAssurance } = await import('../../supabase/functions/_shared/authAssurance.ts')
+    const [a] = await mixedTrail()
+    const accepted = a.agreement_hash
+    const delegated = await rawV5(2, a.event_hash, { agreement: accepted,
+      payload: { note: 'paid', _auth_method: 'entry_agent_grant', _authentication: assuranceForRecord(grantAssurance()) } })
+    const legacy = await rawLegacy(3, delegated.event_hash, { agreement: accepted, actor: OWNER,
+      payload: { note: 'x', _authentication: { credential: 'account_jwt' } } })
+    const plainV5 = await rawV5(4, legacy.event_hash, { agreement: accepted })
+    const { body } = await serve2([nullAuthority(a), delegated, nullAuthority(legacy), plainV5])
+    expect(body.events.map(e => e.recorded_credential)).toEqual([null, 'entry_agent_grant', null, null])
+    for (const e of body.events) {
+      expect(Object.keys(e)).toEqual(['id', 'type', 'created_at', 'actor', 'provenance', 'recorded_credential',
+        'dod_hash', 'payload', 'canonical', 'integrity'])
+      // Additive only: provenance says what it always said.
+      expect(e.provenance).toEqual({ writer: 'unknown', basis: 'none_recorded' })
+    }
+    // The label never leaks through the payload projection.
+    expect(JSON.stringify(body.events[1].payload)).not.toContain('_authentication')
+    // The body still parses as version 2 on the frontend.
+    expect(parseGuestEvidence(body)).toEqual({ ok: true, version: 2 })
+    const v1 = (await guestResponse([nullAuthority(a), delegated], CONTRACT, { version: 1, maxEvents: 500 })).body
+    expect(JSON.stringify(v1)).not.toContain('recorded_credential')
   })
 
   it('legacy rows keep version 1 values and blocks; the v5 row gets its exact 12 inputs and strict results', async () => {

@@ -26,7 +26,7 @@
 import { isSupportedSnapshotVersion, buildAgreementSnapshot } from './eventCanonical.ts'
 import {
   type GuestTrailVerdicts, chainSummary, guestCanonicalBlock, guestStrictVerdicts, guestVerificationNotes,
-  guestVerificationNotesV2, filterPayload, shapeGuestEventsV1,
+  guestVerificationNotesV2, filterPayload, recordedCredential, shapeGuestEventsV1,
 } from './guestEventView.ts'
 import type { RowResult } from './eventVerifyV5.ts'
 
@@ -356,6 +356,9 @@ export async function guestResponse(
       },
       // No event carries per-event evidence of who wrote it.
       provenance: { writer: 'unknown', basis: 'none_recorded' },
+      // Additive (row 4): the credential a v5 row records, null for every other
+      // row. See recordedCredential.
+      recorded_credential: recordedCredential(row),
       dod_hash:   shaped.dod_hash,
       payload:    filterPayload(row.type, row.payload),
       canonical:  block,

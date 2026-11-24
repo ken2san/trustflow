@@ -540,6 +540,27 @@ export async function guestTrailVerdicts(
  * uuid for the Earner — not an email, a name or a credential — so exposing it
  * to their counterparty costs little next to what redacting it would break.
  */
+/**
+ * The credential a v5 row records it was written under, as recorded: today only
+ * `'entry_agent_grant'`, a delegated write made with an owner-issued agent grant
+ * (row 4). Read from the stored `_authentication.credential`, which the writer
+ * required to be exactly that before it stored the row; the hash binds it.
+ *
+ * null for every row that is not v5, and for a v5 row without a string there.
+ * Legacy rows carry their own `_authentication` (an account session, a guest
+ * capability), and this field must not start naming those retroactively: it
+ * exists for the version-2 response only, beside `provenance`, which stays
+ * unchanged (Kenji, 2026-11-24 12:42 ET). Recorded, not verified: it says what
+ * the record states, not who acted.
+ */
+export function recordedCredential(row: Record<string, unknown>): string | null {
+  if (row.hash_version !== 5) return null
+  const auth = (row.payload as Record<string, unknown> | null | undefined)?._authentication
+  if (auth === null || typeof auth !== 'object' || Array.isArray(auth)) return null
+  const credential = (auth as Record<string, unknown>).credential
+  return typeof credential === 'string' ? credential : null
+}
+
 export function describeActor(
   actorId: string | null,
   contract: Record<string, unknown>,
