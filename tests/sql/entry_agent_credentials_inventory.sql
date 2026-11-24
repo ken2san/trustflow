@@ -2,7 +2,8 @@
 -- so it may run against a read-only session on any catalog, with or without the
 -- credential migration applied. It fails if anything anon or authenticated can
 -- reach with its owner's rights names the credential table or the counterpart
--- column outside the five functions the credential migration defines.
+-- column outside the five functions the credential migration defines and the
+-- row 4 resolver (20261124120000), which locks and reads grants for the writers.
 -- Bodies in C or another opaque language cannot be scanned; they are listed.
 do $$
 declare
@@ -13,7 +14,8 @@ declare
     'public.revoke_entry_agent_credential(uuid,uuid,uuid)',
     'public.list_entry_agent_credentials(uuid,uuid)',
     'public.protect_entry_agent_credential_evidence()',
-    'public.refuse_delete_of_contract_with_evidence()']) as x where to_regprocedure(x) is not null);
+    'public.refuse_delete_of_contract_with_evidence()',
+    'private.resolve_entry_agent_grant(uuid,uuid,text,text,boolean)']) as x where to_regprocedure(x) is not null);
 begin
   -- SECURITY DEFINER functions a client role may execute.
   for t in

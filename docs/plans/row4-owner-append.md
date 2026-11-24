@@ -81,14 +81,14 @@ Row 3 already shipped every reader, on E2E and on production. This row goes: res
 - **CORS.** `x-trustflow-grant` is added to `ALLOW_HEADERS` (`_shared/cors.ts`) for allowed origins only, with a preflight test.
 
 **Resolver: migration A, `2026112x000000_entry_agent_resolver.sql`**
-- **The function.** `private.resolve_entry_agent_grant(p_contract contracts, p_credential_id uuid, p_secret_hash text, p_operation text, p_for_insert boolean)` returns `(status text, issuer_id uuid, issuer_kind text, now timestamptz)`. `p_for_insert` is true for append, which also takes the gate lock (§4c); replay passes false.
+- **The function** (built in Task 232, `20261124120000_entry_agent_resolver.sql`). `private.resolve_entry_agent_grant(p_contract_id uuid, p_credential_id uuid, p_secret_hash text, p_operation text, p_for_insert boolean)` returns `(status text, issuer_id uuid, issuer_kind text, now timestamptz)`. `p_for_insert` is true for append, which also takes the gate lock (§4c); replay passes false. It takes the contract id rather than the caller's row, and re-takes the contract lock itself, so the lock order and the fresh read never depend on the caller.
 - **An unexposed schema.**
   - `private` is not in the API's exposed schemas.
   - `revoke all on schema private` and `revoke execute` on the function from `public`, `anon`, `authenticated` and `service_role`.
   - `security definer`, `set search_path = ''`.
   - Only the two writer RPCs below (owned by the same role) call it.
   - A test proves that a direct call through PostgREST and a direct call as `service_role` both fail.
-- **Locks and the clock.** The caller has already taken `contracts … for update`. The resolver takes `entry_agent_credentials … for share`. When `p_for_insert` is set, it then takes `private.v5_write_gate … for share`.
+- **Locks and the clock.** The calling writer has already taken `contracts … for update`; the resolver's own `for update` on the same row is then a no-op re-entry. The resolver takes `entry_agent_credentials … for share`. When `p_for_insert` is set, it then takes `private.v5_write_gate … for share`.
   - Only after the **last** lock has been granted does it read `clock_timestamp()`, **exactly once**.
   - That one sample (`now`) is used for expiry and is returned for the created-at window, so no time check can come before a lock wait.
   - Revoke (`20261118214020:131–143`) takes contract `for update`, then grant `for update`, so the two serialize on the contract row in the same order.
@@ -102,7 +102,7 @@ Row 3 already shipped every reader, on E2E and on production. This row goes: res
   - `revoked_at is null`
   - `expires_at > now` (the single sample)
   - for append only, the gate row exists and is open (`gate_missing` / `gate_closed`)
-- **Result.** `ok`, or one internal refusal code.
+- **Result.** `ok`, or one internal refusal code, checked in this order: `malformed`, `grant_unknown` (no deal, no grant, or another deal's grant), `secret_mismatch`, `issuer_kind`, `issuer_not_owner`, `revoked`, `expired`, `scope`, `allowlist`, `gate_missing`, `gate_closed`. A refusal returns no issuer.
 
 **Tests**
 - **`tests/unit/delegatedAuth.test.js`:**
