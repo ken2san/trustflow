@@ -267,6 +267,15 @@ begin
   perform pg_temp.expect('a DoD that is not an array gives binding_mismatch', 'binding_mismatch', r->>'status');
   r := pg_temp.append('$c1', '$g1', repeat('a', 64), 'creator', jsonb_set(e, '{idempotency_key}', '""'));
   perform pg_temp.expect('an empty idempotency key gives binding_mismatch', 'binding_mismatch', r->>'status');
+  -- Codex T193 nit: non-object inputs are refused by ordered checks, never an
+  -- exception from jsonb_object_keys.
+  r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', '{"dod":["test"],"agreement":null}', '[]');
+  perform pg_temp.expect('a non-object event gives binding_mismatch', 'binding_mismatch', r->>'status');
+  r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', '"x"', e);
+  perform pg_temp.expect('non-object hashed inputs give binding_mismatch', 'binding_mismatch', r->>'status');
+  r := public.append_delegated_event('$c1', '$g1', repeat('a', 64), 'creator', '{"dod":["test"],"agreement":[1]}',
+    jsonb_set(e, '{agreement_hash}', to_jsonb(repeat('4', 64))));
+  perform pg_temp.expect('a non-object agreement snapshot gives binding_mismatch', 'binding_mismatch', r->>'status');
 end \$\$;
 rollback;
 SQL

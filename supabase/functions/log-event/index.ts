@@ -278,13 +278,19 @@ async function delegatedAppend(
 
   const delegation = await delegatedAdmission(req.headers, Deno.env.get('SUPABASE_ANON_KEY') ?? '')
   const credentialId = delegation.delegated && delegation.ok ? delegation.credentialId : null
+  // The only contract id any delegated log line may carry: the request value
+  // once it is a canonical lowercase UUID, otherwise null. Computed before the
+  // logger exists, so a malformed body value (misplaced credentials included)
+  // never reaches a log (Codex T193 must-fix 2).
+  const loggedContractId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(op.contractId)
+    ? op.contractId : null
   const refuse = (reason: string) => {
-    console.warn(JSON.stringify({ fn: 'log-event', delegated_refusal: reason, contract_id: op.contractId, credential_id: credentialId }))
+    console.warn(JSON.stringify({ fn: 'log-event', delegated_refusal: reason, contract_id: loggedContractId, credential_id: credentialId }))
     return json({ error: DELEGATION_REFUSED.error }, DELEGATION_REFUSED.status)
   }
   if (!delegation.delegated || !delegation.ok) return refuse(delegation.delegated ? delegation.reason : 'not_delegated')
   if (!DELEGATED_TYPES.has(op.type)) return refuse('allowlist')
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(op.contractId)) return refuse('grant_unknown')
+  if (loggedContractId === null) return refuse('grant_unknown')
 
   const admin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
   const grant = { p_contract_id: op.contractId, p_credential_id: delegation.credentialId, p_secret_hash: delegation.secretHash }
@@ -303,13 +309,13 @@ async function delegatedAppend(
     if (refused) return json({ error: refused.error }, refused.status)
     // Only a caller other than this function, or TS/SQL drift, can produce these.
     if (status === 'reserved_fields_mismatch' || status === 'binding_mismatch') {
-      console.error(JSON.stringify({ fn: 'log-event', delegated_fault: status, contract_id: op.contractId, credential_id: credentialId }))
+      console.error(JSON.stringify({ fn: 'log-event', delegated_fault: status, contract_id: loggedContractId, credential_id: credentialId }))
       return json({ error: 'insert_failed' }, 500)
     }
     return null
   }
   function gateMissing() {
-    console.error(JSON.stringify({ fn: 'log-event', v5_gate_missing: true, contract_id: op.contractId }))
+    console.error(JSON.stringify({ fn: 'log-event', v5_gate_missing: true, contract_id: loggedContractId }))
   }
   const rpcFault = (error: { code?: string, message?: string }): Response => {
     if (error.code === 'PGRST202') {
@@ -321,14 +327,14 @@ async function delegatedAppend(
     if ((error.code === '23514' && error.message?.includes('events_v5_writes_disabled'))
         || error.code === 'TF012' || error.code === 'TF013') {
       if (error.code === 'TF012') gateMissing()
-      console.error(JSON.stringify({ fn: 'log-event', delegated_closed: error.code, contract_id: op.contractId }))
+      console.error(JSON.stringify({ fn: 'log-event', delegated_closed: error.code, contract_id: loggedContractId }))
       return json({ error: DELEGATED_UNAVAILABLE.error }, DELEGATED_UNAVAILABLE.status)
     }
     // The writer issues its own ticket just before its insert, so a missing
     // (TF011) or unconfirmed (TF014) ticket from it, or a stored row unlike its
     // proposal (TF010), is an integrity fault, not a closed gate (Antigravity M4).
     if (error.code === 'TF010' || error.code === 'TF011' || error.code === 'TF014') {
-      console.error(JSON.stringify({ fn: 'log-event', delegated_fault: error.code, contract_id: op.contractId, credential_id: credentialId }))
+      console.error(JSON.stringify({ fn: 'log-event', delegated_fault: error.code, contract_id: loggedContractId, credential_id: credentialId }))
       return json({ error: 'insert_failed' }, 500)
     }
     if (error.code === 'TF001') return json({ error: 'wrong_state_for_event_type' }, 409)
@@ -431,7 +437,7 @@ async function delegatedAppend(
   if (last === 'context_changed') {
     // Five rebuilt proposals in a row unlike the locked deal is not a busy
     // deal; said out loud so a drift is not mistaken for contention (M3).
-    console.error(JSON.stringify({ fn: 'log-event', delegated_context_exhausted: true, contract_id: op.contractId, credential_id: credentialId }))
+    console.error(JSON.stringify({ fn: 'log-event', delegated_context_exhausted: true, contract_id: loggedContractId, credential_id: credentialId }))
     return json({ error: 'context_changed' }, 409)
   }
   return json({ error: 'chain_contention' }, 409)
@@ -503,9 +509,16 @@ Deno.serve(async (req: Request) => {
     // A present grant header commits the request to the delegated route, before
     // the contract lookup below and its 404, and before resolveActor.
     if (req.headers.has(GRANT_HEADER)) {
-      return await delegatedAppend(req, json, body as Record<string, unknown>, {
-        type, contractId: contract_id, payload, idempotencyKey: (idempotency_key as string | null) ?? null,
-      })
+      // Its own catch: an unexpected throw on this route is a generic 500 with
+      // no detail, never the shared catch's String(err) (Codex T193 nit).
+      try {
+        return await delegatedAppend(req, json, body as Record<string, unknown>, {
+          type, contractId: contract_id, payload, idempotencyKey: (idempotency_key as string | null) ?? null,
+        })
+      } catch {
+        console.error(JSON.stringify({ fn: 'log-event', delegated_fault: 'unexpected_throw' }))
+        return json({ error: 'internal_error' }, 500)
+      }
     }
 
     const admin = createClient(

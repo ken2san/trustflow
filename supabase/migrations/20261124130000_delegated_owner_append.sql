@@ -58,7 +58,7 @@ create function private.v5_reserved_fields_status(p_payload jsonb, p_proposed te
 returns text language sql immutable set search_path = '' as $$
   select case
     when p_payload is null or jsonb_typeof(p_payload) <> 'object' then 'reserved_fields_mismatch'
-    when (select coalesce(array_agg(k order by k), '{}') from jsonb_object_keys(p_payload) k where left(k, 1) = '_')
+    when (select coalesce(array_agg(k order by k collate "C"), '{}') from jsonb_object_keys(p_payload) k where left(k, 1) = '_')
          is distinct from array['_actor_role', '_auth_method', '_authentication', '_role_in_agreement']
       then 'reserved_fields_mismatch'
     when p_payload->'_actor_role' is distinct from '"earner"'::jsonb then 'reserved_fields_mismatch'
@@ -93,6 +93,32 @@ create function private.v5_outer_canonical(
     || ',"credential_id":"' || p_credential_id::text || '"'
     || ',"issuer_kind":"' || p_issuer_kind || '"}'
 $$;
+
+-- Possession of a grant for THIS deal, checked with plain reads and no row
+-- lock, before either delegated RPC takes the contract lock (Codex T193 must-fix
+-- 1). A plain SELECT never waits on FOR UPDATE / FOR SHARE, so an invalid
+-- credential is refused the same way, at the same speed, whether or not the
+-- deal exists or someone holds its row: it learns nothing, and it never queues
+-- with authorized work. It proves only that the caller holds this deal's grant
+-- secret; revocation, expiry, issuer, scope, allowlist, role and gate stay with
+-- the locked resolver, in the contract -> grant -> gate order, after it.
+-- Answers use the resolver's own credential statuses, which log-event maps to
+-- the one public 403.
+create function private.v5_grant_precheck(p_contract_id uuid, p_credential_id uuid, p_secret_hash text)
+returns text language sql stable set search_path = '' as $$
+  select case
+    when p_contract_id is null or p_credential_id is null or p_secret_hash is null
+         or p_secret_hash !~ '^[0-9a-f]{64}$' then 'malformed'
+    when not exists (select 1 from public.entry_agent_credentials d
+                     where d.id = p_credential_id and d.contract_id = p_contract_id) then 'grant_unknown'
+    when not exists (select 1 from public.entry_agent_credentials d
+                     where d.id = p_credential_id and d.contract_id = p_contract_id
+                       and d.secret_hash = p_secret_hash) then 'secret_mismatch'
+    else 'ok'
+  end
+$$;
+
+revoke all on function private.v5_grant_precheck(uuid, uuid, text) from public, anon, authenticated, service_role;
 
 -- Whether the deal owner may write this type under the LOCKED performed_by:
 -- ROLE_REQUIRED in log-event, for the six row 4 types. Shared by the writer and
@@ -206,12 +232,27 @@ begin
   perform public.require_read_committed('append_delegated_event');
 
   -- Shape first, with no lock: a malformed proposal is never an authorization
-  -- question. The keys are exact so no authority field can ride along.
+  -- question. The keys are exact so no authority field can ride along. Ordered
+  -- IFs, not one OR: SQL does not promise evaluation order, and
+  -- jsonb_object_keys raises on a non-object (Codex T193 nit). Key sets sort
+  -- with collate "C", so the fixed ASCII arrays hold under any collation.
   if p_event is null or jsonb_typeof(p_event) <> 'object'
-     or (select array_agg(k order by k) from jsonb_object_keys(p_event) k) is distinct from
+     or p_hashed_inputs is null or jsonb_typeof(p_hashed_inputs) <> 'object' then
+    return jsonb_build_object('status', 'binding_mismatch');
+  end if;
+  if (select array_agg(k order by k collate "C") from jsonb_object_keys(p_event) k) is distinct from
         array['actor_id', 'agreement_hash', 'contract_id', 'created_at', 'dod_hash', 'event_hash',
               'id', 'idempotency_key', 'payload', 'payload_hash', 'prev_event_hash', 'type']
-     or coalesce(p_event->>'id', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     -- The hashed inputs: exactly {agreement, dod}, a DoD array, agreement
+     -- evidence present exactly when its digest is, and a v1 snapshot with
+     -- exactly its eight keys and the number 1. A proposal that contradicts
+     -- itself is a caller or drift fault, never a stale read to retry
+     -- (Antigravity M3): only value freshness below is `context_changed`.
+     or (select array_agg(k order by k collate "C") from jsonb_object_keys(p_hashed_inputs) k)
+        is distinct from array['agreement', 'dod'] then
+    return jsonb_build_object('status', 'binding_mismatch');
+  end if;
+  if coalesce(p_event->>'id', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      or coalesce(p_event->>'actor_id', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      or p_event->>'contract_id' is distinct from p_contract_id::text
      or coalesce(v_type, '') !~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
@@ -224,21 +265,19 @@ begin
      or jsonb_typeof(p_event->'payload') is distinct from 'object'
      or (p_event->'idempotency_key' <> 'null'::jsonb and jsonb_typeof(p_event->'idempotency_key') <> 'string')
      or p_event->>'idempotency_key' = ''
-     -- The hashed inputs: exactly {agreement, dod}, a DoD array, agreement
-     -- evidence present exactly when its digest is, and a v1 snapshot with
-     -- exactly its eight keys and the number 1. A proposal that contradicts
-     -- itself is a caller or drift fault, never a stale read to retry
-     -- (Antigravity M3): only value freshness below is `context_changed`.
-     or p_hashed_inputs is null or jsonb_typeof(p_hashed_inputs) <> 'object'
-     or (select array_agg(k order by k) from jsonb_object_keys(p_hashed_inputs) k) is distinct from array['agreement', 'dod']
      or jsonb_typeof(p_hashed_inputs->'dod') <> 'array'
-     or ((p_hashed_inputs->'agreement') = 'null'::jsonb) <> ((p_event->'agreement_hash') = 'null'::jsonb)
-     or (p_hashed_inputs->'agreement' <> 'null'::jsonb and (
-           jsonb_typeof(p_hashed_inputs->'agreement') <> 'object'
-           or (select array_agg(k order by k) from jsonb_object_keys(p_hashed_inputs->'agreement') k) is distinct from
-              array['amount', 'currency', 'deadline', 'dod', 'offered_by', 'performed_by', 'project_name', 'snapshot_version']
-           or p_hashed_inputs->'agreement'->'snapshot_version' is distinct from '1'::jsonb)) then
+     or ((p_hashed_inputs->'agreement') = 'null'::jsonb) <> ((p_event->'agreement_hash') = 'null'::jsonb) then
     return jsonb_build_object('status', 'binding_mismatch');
+  end if;
+  if p_hashed_inputs->'agreement' <> 'null'::jsonb then
+    if jsonb_typeof(p_hashed_inputs->'agreement') <> 'object' then
+      return jsonb_build_object('status', 'binding_mismatch');
+    end if;
+    if (select array_agg(k order by k collate "C") from jsonb_object_keys(p_hashed_inputs->'agreement') k) is distinct from
+          array['amount', 'currency', 'deadline', 'dod', 'offered_by', 'performed_by', 'project_name', 'snapshot_version']
+       or p_hashed_inputs->'agreement'->'snapshot_version' is distinct from '1'::jsonb then
+      return jsonb_build_object('status', 'binding_mismatch');
+    end if;
   end if;
   v_id := (p_event->>'id')::uuid;
   v_actor := (p_event->>'actor_id')::uuid;
@@ -250,6 +289,12 @@ begin
   -- Round-trips to the exact string Edge hashed, or it is not v5-canonical.
   if to_char(v_created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> p_event->>'created_at' then
     return jsonb_build_object('status', 'binding_mismatch');
+  end if;
+
+  -- No lock is taken for an invalid credential (Codex T193 must-fix 1).
+  v_status := private.v5_grant_precheck(p_contract_id, p_credential_id, p_secret_hash);
+  if v_status <> 'ok' then
+    return jsonb_build_object('status', v_status);
   end if;
 
   select * into c from public.contracts k where k.id = p_contract_id for update;
@@ -383,10 +428,16 @@ create function public.replay_delegated_event(
 ) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   g record;
+  v_status text;
   v_performed_by text;
   v_existing public.events%rowtype;
 begin
   perform public.require_read_committed('replay_delegated_event');
+  -- No lock is taken for an invalid credential (Codex T193 must-fix 1).
+  v_status := private.v5_grant_precheck(p_contract_id, p_credential_id, p_secret_hash);
+  if v_status <> 'ok' then
+    return jsonb_build_object('status', v_status);
+  end if;
   select k.performed_by into v_performed_by from public.contracts k where k.id = p_contract_id for update;
   if not found then
     return jsonb_build_object('status', 'grant_unknown');
@@ -447,7 +498,7 @@ begin
   -- 2. Private helpers and trigger functions: no client role or service_role.
   foreach f in array array['private.v5_created_at_ok(timestamptz,timestamptz,timestamptz)',
                            'private.v5_grant_authentication()', 'private.v5_reserved_fields_status(jsonb,text,text)',
-                           'private.v5_role_permits(text,text)',
+                           'private.v5_role_permits(text,text)', 'private.v5_grant_precheck(uuid,uuid,text)',
                            'private.v5_outer_canonical(uuid,text,uuid,uuid,text,timestamptz,text,text,text,uuid,text)',
                            'private.v5_write_ticket_check()', 'private.v5_write_ticket_confirm()'] loop
     foreach r in array array['anon', 'authenticated', 'service_role', 'public'] loop

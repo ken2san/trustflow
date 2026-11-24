@@ -231,7 +231,9 @@ describe('log-event delegated route: the append call', () => {
   })
 
   it('M4: a missing gate is a 503 with a loud v5_gate_missing line, from the resolver or the trigger', async () => {
-    state.rpcAnswers.replay_delegated_event = [status('gate_missing')]
+    // Replay never reads the gate; the append's resolver is where gate_missing
+    // is reachable (Codex T193 nit).
+    state.rpcAnswers.append_delegated_event = [status('gate_missing')]
     expect((await reply(await post(write))).status).toBe(503)
     expect(logs.join('\n')).toContain('v5_gate_missing')
     logs.length = 0
@@ -262,6 +264,39 @@ describe('log-event delegated route: the append call', () => {
     state.rpcAnswers.append_delegated_event = Array(5).fill(status('context_changed'))
     expect(await reply(await post(write))).toEqual({ status: 409, body: { error: 'context_changed' } })
     expect(logs.join('\n')).toContain('delegated_context_exhausted')
+  })
+
+  it('T193: a malformed contract id never reaches a log line; refusals log contract_id null', async () => {
+    // Not a credential: a canary that would be visible if the raw body value
+    // were logged. Misplaced credentials would travel the same way.
+    const CANARY = 'canary-not-a-credential-7f3e9a'
+    for (const contractId of [CANARY, `${CONTRACT_ID} ${CANARY}`, CONTRACT_ID.toUpperCase() + CANARY]) {
+      logs.length = 0
+      const res = await post({ ...write, contract_id: contractId })
+      const text = await res.text()
+      expect(res.status).toBe(403)
+      expect(text).not.toContain(CANARY)
+      expect(logs.join('\n')).not.toContain(CANARY)
+      const refusal = logs.map(l => { try { return JSON.parse(l) } catch { return null } })
+        .find(l => l?.delegated_refusal)
+      expect(refusal).toMatchObject({ delegated_refusal: 'grant_unknown', contract_id: null })
+    }
+    // A malformed grant header is refused before the contract id is checked:
+    // the line it writes carries null too, never the body value.
+    logs.length = 0
+    await post({ ...write, contract_id: CANARY }, { 'x-trustflow-grant': 'malformed' })
+    expect(logs.join('\n')).not.toContain(CANARY)
+    expect(state.rpcCalls).toEqual([])
+  })
+
+  it('T193: an unexpected throw on the delegated route is a generic 500 with no detail', async () => {
+    // A contract id that is not a lowercase UUID makes the v5 builder throw.
+    state.contract = { ...state.contract, id: 'NOT-A-UUID-canary-7f3e9a' }
+    const res = await post(write)
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ error: 'internal_error' })
+    expect(logs.join('\n')).not.toContain('canary-7f3e9a')
   })
 
   it('the secret never appears in a response or a log line', async () => {

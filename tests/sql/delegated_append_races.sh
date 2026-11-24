@@ -205,5 +205,35 @@ expect 'same key: the second replays it' replayed "$(status_of rk_waiter)"
 expect 'same key: the replayed event is the first one' "$first" "$(grep -oE '"id": ?"[0-9a-f-]{36}"' "$work/rk_waiter" | head -1)"
 expect 'same key: one row' 1 "$(rows_of "$g")"
 
+# 7. Codex T193 must-fix 1: an invalid credential never waits on, or takes, the
+#    contract row lock. Another session holds c1 FOR UPDATE throughout. Each
+#    refusal runs with lock_timeout 500ms, so touching the lock would end in
+#    55P03 instead of the status; the answers are the same as with no lock held.
+g=cccccccc-0000-4000-8000-0000000000b7
+q "select tf_race.grant('$g', '$c1', repeat('7', 64), interval '1 day')" > /dev/null
+other=cccccccc-0000-4000-8000-0000000000b5   # a live grant of c5, not of c1
+absent=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9
+start_keeper; start_holder "select id from public.contracts where id = '$c1' for update"
+refused() {  # $1 rpc (replay|append), $2 contract, $3 credential, $4 hash char
+  local call
+  if [[ "$1" == replay ]]; then
+    call="public.replay_delegated_event('$2', '$3', repeat('$4', 64), 'payment.acknowledged', null)->>'status'"
+  else
+    call="tf_race.append('$2', '$3', repeat('$4', 64), null)->>'status'"
+  fi
+  q "begin; set local lock_timeout = '500ms'; select $call; commit;" 2>&1 || true
+}
+for rpc in replay append; do
+  expect "held lock, $rpc: unknown grant refused without waiting" grant_unknown "$(refused $rpc "$c1" cccccccc-0000-4000-8000-0000000000ff 7)"
+  expect "held lock, $rpc: wrong secret refused without waiting" secret_mismatch "$(refused $rpc "$c1" "$g" 8)"
+  expect "held lock, $rpc: another deal's grant refused without waiting" grant_unknown "$(refused $rpc "$c1" "$other" 5)"
+  expect "held lock, $rpc: an absent deal is the same answer" grant_unknown "$(refused $rpc "$absent" "$g" 7)"
+done
+# The lock order is kept: a valid grant still waits behind the held row.
+bg rk_waiter "select public.replay_delegated_event('$c1', '$g', repeat('7', 64), 'payment.acknowledged', null)->>'status'"; waiter=$!
+blocked_by_holder rk_waiter
+release; wait "$waiter"
+expect 'held lock: a valid grant waits for the lock, then is authorized' none "$(cat "$work/rk_waiter")"
+
 expect 'no write ticket is left behind' 0 "$(q "select count(*) from private.v5_write_tickets")"
 echo 'ALL PASS'
