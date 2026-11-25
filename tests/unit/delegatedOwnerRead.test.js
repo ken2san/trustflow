@@ -191,6 +191,45 @@ describe('delegated-owner-read: route, admission and refusals', () => {
     expect(logs.join('\n')).not.toContain(`${CANARY}-`)
   })
 
+  it('an error code outside the approved set is logged as rpc_error; an approved one verbatim', async () => {
+    state.rpcAnswer = { data: null, error: { code: `${CANARY}-code`, message: 'm' } }
+    expect(await reply(await post({ contract_id: CONTRACT_ID }))).toEqual({ status: 500, body: { error: 'internal_error' } })
+    state.rpcAnswer = { data: null, error: { code: '40001', message: 'm' } }
+    expect(await reply(await post({ contract_id: CONTRACT_ID }))).toEqual({ status: 500, body: { error: 'internal_error' } })
+    state.rpcAnswer = { data: null, error: { code: 12345, message: 'm' } }
+    await post({ contract_id: CONTRACT_ID })
+    expect(logs.join('\n')).not.toContain(CANARY)
+    expect(logs.map((l) => JSON.parse(l).delegated_read_fault)).toEqual(['rpc_error', '40001', 'rpc_error'])
+  })
+
+  it('an envelope over 2 MiB of UTF-8: the documented safe answer, no deal data, a size-only log', async () => {
+    // Multibyte notes: under the limit in UTF-16 code units, over it in bytes.
+    const big = Array.from({ length: 3 }, () => ev({ payload: { note: `あ${CANARY}`.repeat(28000) } }))
+    state.rpcAnswer = ok(result(big))
+    const res = await post({ contract_id: CONTRACT_ID })
+    expect(await reply(res)).toEqual({ status: 500, body: { error: 'response_too_large' } })
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    const line = JSON.parse(logs.at(-1))
+    expect(Object.keys(line).sort()).toEqual(['bytes', 'contract_id', 'credential_id', 'delegated_read_fault', 'fn', 'limit'])
+    expect(line).toMatchObject({ delegated_read_fault: 'response_too_large', limit: 2097152 })
+    expect(line.bytes).toBeGreaterThan(2097152)
+    // The case a length-in-code-units check would miss.
+    expect(JSON.stringify(result(big)).length).toBeLessThan(2097152)
+    expect(logs.join('\n')).not.toContain(CANARY)
+  })
+
+  it('the 200 body is the measured text: its UTF-8 length is what the ceiling judged', async () => {
+    const { encodeOwnerRead, MAX_RESPONSE_BYTES } = await import('../../supabase/functions/_shared/ownerReadResponse.ts')
+    state.rpcAnswer = ok(result([ev({ payload: { note: 'あ"\\\n'.repeat(1000) } })]))
+    const text = await (await post({ contract_id: CONTRACT_ID })).text()
+    const e = encodeOwnerRead(JSON.parse(text))
+    expect(e.text).toBe(text)
+    expect(e.bytes).toBe(Buffer.byteLength(text, 'utf8'))
+    expect(e.over).toBe(false)
+    expect(encodeOwnerRead({ s: 'x'.repeat(MAX_RESPONSE_BYTES - 8) }).over).toBe(false)
+    expect(encodeOwnerRead({ s: 'x'.repeat(MAX_RESPONSE_BYTES - 7) }).over).toBe(true)
+  })
+
   it('logs carry a fixed reason and validated ids only: never the secret, a header or the canary', async () => {
     state.rpcAnswer = ok({ status: 'revoked' })
     await post({ contract_id: CONTRACT_ID })
@@ -291,7 +330,8 @@ describe('delegated-owner-read: the 200 envelope and its receipt', () => {
     const body = await read([ev()])
     const text = JSON.stringify(body)
     expect(text).not.toContain('tsa_token')
-    expect(body.receipt.acts[0].idempotency_key).toBeNull()
+    // Uncarried, so omitted: not a stored null (Codex T202 should-fix 3).
+    expect('idempotency_key' in body.receipt.acts[0]).toBe(false)
     expect(Object.keys(body.events[0]).sort()).toEqual([...Object.keys(ev()), 'stored_format'].sort())
   })
 

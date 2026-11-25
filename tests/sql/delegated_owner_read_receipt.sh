@@ -15,7 +15,7 @@ dump="/tmp/${db}.dump"
 work="$(mktemp -d "${TMPDIR:-/tmp}/trustflowownerreceipt.XXXXXX")"
 cleanup() {
   docker exec "$container" dropdb -U supabase_admin --if-exists --force "$db" >/dev/null 2>&1 || echo "Could not drop disposable database $db" >&2
-  docker exec "$container" rm -f "$dump" "$dump.list" "$dump.rows" || echo "Could not remove $dump in the container" >&2
+  docker exec "$container" sh -c "rm -f '$dump' '$dump'.*" || echo "Could not remove $dump in the container" >&2
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -58,6 +58,8 @@ cG=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab2   # a genuine invite acceptance, then a 
 cT=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab3   # 501 owner rows: a capped read
 cS=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab4   # large notes: the envelope at the event byte cap
 cV=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab5   # draft, v5 rows only
+cW=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab6   # schema worst case: near-cap events, ~500 acts, fields at CHECK limits
+cX=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab7   # the same trail with a DoD past its CHECK limit
 guest=guest-actor@example.test
 h() { printf "repeat('%s', 64)" "$1"; }
 psql_pg > /dev/null <<SQL
@@ -163,12 +165,18 @@ expect 'cG: the guest actor is withheld and declared on the act, not substituted
   "$(j '.receipt.acts[0] | (.canonical | has("actor_id") | tostring) + "|" + (.canonical_withheld | join(",")) + "|" + (has("actor_id") | tostring)')"
 expect 'cG: the accepted terms come from the acceptance in the prefix' "ok|$(j '.events[0].id')" "$(j '.receipt.agreement | .accepted_status + "|" + .accepted.acceptance_event_id')"
 expect 'cG: no contact address anywhere in the envelope' 0 "$(grep -c '@' <<< "$out" || true)"
-# Pinned, and a decision for the reviewer (report 246): today's verifier has no
-# notion of a declared withheld input, so the acceptance act fails on its
-# missing actor_id and nothing else does.
-expect 'cG: verifier exit 1 (failed checks)' '1' "$(verify "$out" | cut -d'|' -f1)"
-expect 'cG: the only failures are the withheld actor of the acceptance act' \
-  'FAIL [0] dod.consent_recorded carries every canonical input for its version;FAIL [0] legacy hash=mismatch link=linked agreement=match' "$(fails)"
+# Decision (a), Codex T202 / Kenji 2026-11-25: the declared withheld actor
+# makes that act's hash unavailable. Incomplete, with no failed check.
+expect 'cG: verifier exit 3 (incomplete), not failed' '3' "$(verify "$out" | cut -d'|' -f1)"
+expect 'cG: no FAIL line' '' "$(fails)"
+expect 'cG: the acceptance hash is unavailable, its links and agreement still checked' 1 \
+  "$(grep -c '^ ok  \[0\] legacy hash=unavailable link=linked agreement=match' "$work/verify.out" || true)"
+expect 'cG: the v5 act recomputes beside it' 1 "$(grep -c '^ ok  \[1\] v5 hash=match link=linked' "$work/verify.out" || true)"
+expect 'cG: the accepted snapshot still proves the recorded digest' 1 \
+  "$(grep -c '^ ok  the accepted agreement follows from its snapshot and the acceptance act' "$work/verify.out" || true)"
+expect 'cG: the receipt states the unavailable hash among its limits' 'true' \
+  "$(j '.receipt.not_verifiable_here | any(startswith("The event hash of any act listing canonical_withheld"))')"
+expect 'cG: delegated acts carry no idempotency_key field' 'false' "$(j '.receipt.acts | any(has("idempotency_key"))')"
 
 # ── Capped: 501 rows; the prefix is never labelled complete ─────────────────
 insert_rows "$(trail "$cT" 501)"
@@ -188,5 +196,57 @@ echo "MEASURE envelope bytes: 500 small events $env_t; 3 large events $env_s (ev
 expect 'cS: the large events stay under the event cap, untruncated' 'false' "$(j '.read_boundary.truncated')"
 expect 'cS: the envelope adds at most 64 KiB to its event array' 1 "$(( env_s <= ev_s + 65536 ))"
 expect 'cT: 500 small events stay under 2 MiB with their receipt' 1 "$(( env_t <= 2097152 ))"
+
+# ── The whole encoded response against the route's 2 MiB ceiling ───────────
+# cW is the worst case the schema admits: near-cap projected events, close to
+# 500 receipt acts, escaped and multibyte text (", \, newline, あ), and every
+# agreement field at its CHECK limit (DoD 20000 characters across 50 items,
+# project name 500, display name 200), which the contract, the current and the
+# accepted snapshot all repeat outside the SQL event cap. cX is the same trail
+# with its DoD past that limit (CHECK dropped in this disposable DB only), to
+# show the ceiling refusing a response that does not fit.
+size() { psql_pg <<SQL | fx size
+select public.read_delegated_owner_deal('$1', '$2', $(h "$3"));
+SQL
+}
+note="$(jq -cn '"あ\"\\\n" * 66')"
+dod_max="$(jq -cn '[range(50) | ("あ" * 390) + "\"\\\n"]')"
+dod_over="$(jq -cn '[range(400) | "あ\"\\\n" * 110]')"
+name_max="$(printf 'あ%.0s' $(seq 498))\"\\"
+display_max="$(printf 'あ%.0s' $(seq 198))\"\\"
+# Large values reach psql through files in the container, past the argv limit.
+put() { printf '%s' "$2" > "$work/$1"; docker cp -q "$work/$1" "$container:$dump.$1"; }
+put dmax "$dod_max"; put dover "$dod_over"; put pname "$name_max"; put dname "$display_max"
+psql_pg > /dev/null <<SQL
+\\set dmax \`cat $dump.dmax\`
+\\set dover \`cat $dump.dover\`
+\\set pname \`cat $dump.pname\`
+\\set dname \`cat $dump.dname\`
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_jpy, performed_by, earner_display_name, invited_hirer_email) values
+  ('$cW', '$owner', :'pname', :'dmax'::jsonb, 7000, 'creator', :'dname', '$guest');
+alter table public.contracts drop constraint contracts_dod_shape_check;
+insert into public.contracts (id, earner_user_id, project_name, dod, amount_jpy, performed_by, earner_display_name, invited_hirer_email) values
+  ('$cX', '$owner', :'pname', :'dover'::jsonb, 7000, 'creator', :'dname', '$guest');
+insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, created_at, expires_at, revoked_at) values
+  ('cccccccc-0000-4000-8000-0000000000c1', '$cW', '$owner', 'owner_account', $(h 9), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('cccccccc-0000-4000-8000-0000000000c2', '$cX', '$owner', 'owner_account', $(h 0), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null);
+SQL
+expect 'cW: DoD, project and display names at their CHECK limits' '20000,500,200' \
+  "$(q "select length(dod::text) || ',' || length(project_name) || ',' || length(earner_display_name) from public.contracts where id = '$cW'")"
+for c in "$cW" "$cX"; do
+  insert_rows "[$(q "select jsonb_build_object('contract', to_jsonb(k), 'email', '$guest') from public.contracts k where id = '$c'" | acc_fx acceptance)]"
+  tipc="$(q "select event_hash from public.events where contract_id = '$c'")"
+  insert_rows "$(jq -c --arg o "$owner" --arg p "$tipc" --argjson t "$note" '{contract: ., ownerId: $o, prev: $p, notes: [range(499) | $t]}' <<< "$(contract_json "$c")" | fx trail)"
+done
+measure() { local sz; sz="$(size "$@")"
+  local text; text="$(tail -n +2 <<< "$sz")"
+  echo "$(head -1 <<< "$sz"),$(printf '%s' "$text" | wc -c | tr -d ' '),$(jq -r '[.read_boundary.returned_count, .read_boundary.returned_bytes, (.receipt.acts | length)] | map(tostring) | join(",")' <<< "$text")"; }
+IFS=, read -r w_bytes w_over w_text w_n w_ev w_acts <<< "$(measure "$cW" cccccccc-0000-4000-8000-0000000000c1 9)"
+IFS=, read -r x_bytes x_over x_text x_n x_ev x_acts <<< "$(measure "$cX" cccccccc-0000-4000-8000-0000000000c2 0)"
+echo "MEASURE cW schema worst case: $w_bytes bytes, $w_n events ($w_ev event-array bytes), $w_acts acts; cX past the DoD limit: $x_bytes bytes; ceiling 2097152"
+expect 'size: the measured bytes are the UTF-8 length of the text the route sends' "$w_bytes|$x_bytes" "$w_text|$x_text"
+expect 'size: cW has near-cap events and near-500 acts' 1 "$(( w_n >= 450 && w_ev >= 1000000 && w_acts == w_n ))"
+expect 'size: the schema-admitted worst case fits under the ceiling' 'false' "$w_over"
+expect 'size: past the schema limit the route would answer response_too_large' 'true' "$x_over"
 
 echo 'ALL PASS'

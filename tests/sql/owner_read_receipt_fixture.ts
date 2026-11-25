@@ -2,24 +2,27 @@
 // and the REAL Edge shaping module, so the receipt the route would emit is the
 // one handed to scripts/verify-receipt.mjs.
 //
-//   trail  stdin {contract, ownerId, notes: string[]} -> owner rows exactly as
-//          log-event's account-session path builds them, chained from genesis,
+//   trail  stdin {contract, ownerId, notes: string[], prev?} -> owner rows exactly
+//          as log-event's account-session path builds them, chained from `prev`
+//          (default genesis),
 //          one per note, each a distinct millisecond
 //   shape  stdin a read_delegated_owner_deal `ok` result -> the 200 envelope
 //          (shapeOwnerRead), compact JSON, as the route serializes it
+//   size   stdin the same -> "<bytes>,<over>" from encodeOwnerRead, the route's
+//          2 MiB ceiling, then the encoded text on the next line
 //
 // Local only; reads stdin, writes stdout, no network.
 import { buildEventRecord } from '../../supabase/functions/_shared/eventRecord.ts'
 import { assuranceFromClaims } from '../../supabase/functions/_shared/authAssurance.ts'
 import { GENESIS_HASH, SNAPSHOT_VERSION } from '../../supabase/functions/_shared/eventCanonical.ts'
-import { shapeOwnerRead } from '../../supabase/functions/_shared/ownerReadResponse.ts'
+import { encodeOwnerRead, shapeOwnerRead } from '../../supabase/functions/_shared/ownerReadResponse.ts'
 
 const mode = Deno.args[0]
 const input = JSON.parse(await new Response(Deno.stdin.readable).text())
 
 if (mode === 'trail') {
   const rows = []
-  let prev = GENESIS_HASH
+  let prev = input.prev ?? GENESIS_HASH
   for (const note of input.notes as string[]) {
     // A distinct created_at per row, so (created_at, id) order is chain order.
     await new Promise(r => setTimeout(r, 2))
@@ -40,6 +43,10 @@ if (mode === 'trail') {
   console.log(JSON.stringify(rows))
 } else if (mode === 'shape') {
   console.log(JSON.stringify(await shapeOwnerRead(input)))
+} else if (mode === 'size') {
+  const e = encodeOwnerRead(await shapeOwnerRead(input))
+  console.log(`${e.bytes},${e.over}`)
+  console.log(e.text)
 } else {
   throw new Error(`unknown mode ${mode}`)
 }

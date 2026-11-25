@@ -586,3 +586,52 @@ describe('3A: legacy constants unchanged', () => {
     expect(HASH_VERSION).toBe(4)
   })
 })
+
+// T247 (Codex T202 option (a)): a legacy row whose canonical input the reader
+// withheld by design reports its hash unavailable; nothing else is relaxed.
+describe('withheldInputs: a declared withheld input makes the hash unavailable, never a pass', () => {
+  const unprojected = { ...COMPLETE, projected: false }
+  async function withheldChain() {
+    const [a, b, c] = await mixedChain()
+    delete a.actor_id
+    return [a, b, c]
+  }
+
+  it('without the option a missing input is a mismatch (unchanged)', async () => {
+    const r = await verifyEvidenceSlice(await withheldChain(), unprojected)
+    expect(r.rows[0].hash).toBe('mismatch')
+    expect(r.overall).toBe('failed')
+  })
+
+  it('with it: hash unavailable, link and agreement still judged, the slice incomplete', async () => {
+    const r = await verifyEvidenceSlice(await withheldChain(), { ...unprojected, withheldInputs: [['actor_id']] })
+    expect(r.rows[0]).toMatchObject({ hash: 'unavailable', link: 'linked', agreement: 'match', reason: 'withheld by the reader: actor_id' })
+    expect(r.rows.slice(1).map(x => x.hash)).toEqual(['match', 'match'])
+    expect(r.dimensions.hash).toBe('indeterminate')
+    expect(r.overall).toBe('incomplete')
+  })
+
+  it('a malformed stored digest on that row is still invalid', async () => {
+    const rows = await withheldChain()
+    rows[0].event_hash = 'nope'
+    const r = await verifyEvidenceSlice(rows, { ...unprojected, withheldInputs: [['actor_id']] })
+    expect(r.rows[0].hash).toBe('invalid_input')
+    expect(r.overall).toBe('failed')
+  })
+
+  it('a substituted digest on that row is caught by the next link', async () => {
+    const rows = await withheldChain()
+    rows[0].event_hash = D('e')
+    const r = await verifyEvidenceSlice(rows, { ...unprojected, withheldInputs: [['actor_id']] })
+    expect(r.rows[1].link).toBe('broken')
+    expect(r.overall).toBe('failed')
+  })
+
+  it('applies to legacy rows only: a v5 row is verified as stored', async () => {
+    const rows = await mixedChain()
+    rows[1].dod_hash = D('9')
+    const r = await verifyEvidenceSlice(rows, { ...COMPLETE, withheldInputs: [null, ['actor_id']] })
+    expect(r.rows[1].hash).toBe('mismatch')
+    expect(r.overall).toBe('failed')
+  })
+})

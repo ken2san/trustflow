@@ -415,3 +415,116 @@ describe('T205: a receipt is bound to one deal', { timeout: TEST_MS }, () => {
     expect(out).toContain('RECEIPT NOT VERIFIED — incomplete')
   })
 })
+
+// ── T247: a declared withheld input is unavailable (exit 3), never a pass ────
+// Codex T202 option (a), Kenji 2026-11-25. The delegated owner read withholds a
+// legacy guest actor (guest:<address>) and declares it in canonical_withheld.
+import { OWNER_READ_SOURCE } from '../../supabase/functions/_shared/ownerReadResponse.ts'
+import { WITHHELD_LIMIT } from '../../supabase/functions/_shared/receiptV2.ts'
+
+async function withheldReceipt({ source = OWNER_READ_SOURCE, read = COMPLETE_READ } = {}) {
+  const snapshot = buildAgreementSnapshot(CONTRACT_V2)
+  const accepted = await sha256Hex(stableStringify(snapshot))
+  const a = await v4Row(1, 'GENESIS', { type: 'dod.consent_recorded', payload: { _agreement: snapshot }, agreement: accepted })
+  // The acceptance as a guest wrote it, hashed over its real actor ...
+  a.actor_id = 'guest:withheld-canary'
+  a.event_hash = await sha256Hex(eventCanonical(a, 4))
+  const b = await v5Row(2, a.event_hash, { agreement: accepted })
+  const c = await v4Row(3, b.event_hash, { agreement: accepted })
+  // ... and as the owner read projects it: actor absent, declared withheld.
+  delete a.actor_id
+  a.withheld = ['actor_id']
+  return buildReceiptV2({ contract: CONTRACT_V2, rows: [a, b, c], read, source, issuedAt: '2026-04-01T00:00:00.000Z', carriesIdempotencyKey: false })
+}
+const failLines = out => out.split('\n').filter(l => l.startsWith('FAIL'))
+
+describe('T247: canonical_withheld on the delegated owner read', { timeout: TEST_MS }, () => {
+  it('the declared legacy guest actor: exit 3, no failure, its hash unavailable, everything else checked', async () => {
+    const receipt = await withheldReceipt()
+    expect(receipt.acts[0].canonical_withheld).toEqual(['actor_id'])
+    expect('actor_id' in receipt.acts[0].canonical).toBe(false)
+    expect(receipt.not_verifiable_here).toContain(WITHHELD_LIMIT)
+    expect(JSON.stringify(receipt)).not.toContain('withheld-canary')
+    const { status, out } = runReceipt('withheld-ok', receipt)
+    expect(failLines(out)).toEqual([])
+    expect(out).toContain(' ok  [0] dod.consent_recorded declares a supported withheld input')
+    expect(out).toContain('withheld by the reader: actor_id')
+    expect(out).toMatch(/\[0\] legacy hash=unavailable link=linked agreement=match/)
+    expect(out).toMatch(/\[1\] v5 hash=match link=linked/)
+    expect(out).toContain(' ok  the accepted agreement follows from its snapshot and the acceptance act')
+    expect(out).toContain('RECEIPT NOT VERIFIED — incomplete')
+    expect(out).not.toContain('RECEIPT VERIFIED')
+    expect(status).toBe(3)
+  })
+
+  it('two such receipts are never compared as a match', async () => {
+    const r = await withheldReceipt()
+    const { status, out } = runReceipt('withheld-compare', r, r)
+    expect(out).toContain('Comparison skipped')
+    expect(out).not.toContain('same acts, in the same order')
+    expect(status).toBe(3)
+  })
+
+  const misdeclared = [
+    ['outside the delegated owner read', r => { r.source = SOURCE }, 'only the delegated owner read may declare'],
+    ['undeclared omission', r => { delete r.acts[0].canonical_withheld }, 'missing: actor_id'],
+    ['declared but present', r => { r.acts[0].canonical.actor_id = 'guest:x' }, 'declared but present: actor_id'],
+    ['duplicate entries', r => { r.acts[0].canonical_withheld = ['actor_id', 'actor_id'] }, 'duplicate entries'],
+    ['empty declaration', r => { r.acts[0].canonical_withheld = [] }, 'not a non-empty list'],
+    ['not a list', r => { r.acts[0].canonical_withheld = 'actor_id' }, 'not a non-empty list'],
+    ['an unknown key', r => { delete r.acts[0].canonical.dod_hash; r.acts[0].canonical_withheld = ['actor_id', 'dod_hash'] }, 'not a withholdable input: dod_hash'],
+    ['an absent input left out of the declaration', r => { delete r.acts[0].canonical.dod_hash }, 'absent but undeclared: dod_hash'],
+    ['on a v5 act', r => { delete r.acts[1].canonical.actor_id; r.acts[1].canonical_withheld = ['actor_id'] }, 'only a legacy act may withhold an input (this act is v5)'],
+    ['a v5 authority omission', r => { delete r.acts[1].canonical.credential_id; r.acts[1].canonical_withheld = ['credential_id'] }, 'not a withholdable input: credential_id'],
+  ]
+  for (const [label, mutate, reason] of misdeclared) {
+    it(`misdeclared (${label}): exit 1`, async () => {
+      const receipt = await withheldReceipt()
+      mutate(receipt)
+      const { status, out } = runReceipt(`withheld-${label}`, receipt)
+      expect(out, label).toContain(reason)
+      expect(failLines(out).length, label).toBeGreaterThan(0)
+      expect(status, label).toBe(1)
+    })
+  }
+
+  it('a malformed stored hash on the withheld act still fails', async () => {
+    const receipt = await withheldReceipt()
+    receipt.acts[0].event_hash = 'not-a-digest'
+    const { status, out } = runReceipt('withheld-malformed-hash', receipt)
+    expect(out).toMatch(/FAIL \[0\] legacy hash=invalid_input/)
+    expect(status).toBe(1)
+  })
+
+  it('a substituted stored hash on the withheld act breaks the next link', async () => {
+    const receipt = await withheldReceipt()
+    receipt.acts[0].event_hash = 'e'.repeat(64)
+    const { status, out } = runReceipt('withheld-broken-link', receipt)
+    expect(out).toMatch(/\[0\] legacy hash=unavailable/)
+    expect(out).toMatch(/FAIL \[1\] v5 hash=match link=broken/)
+    expect(status).toBe(1)
+  })
+
+  it('tampering in the later, fully supplied v5 act still fails', async () => {
+    const receipt = await withheldReceipt()
+    receipt.acts[1].canonical.dod_hash = 'f'.repeat(64)
+    const { status, out } = runReceipt('withheld-v5-tamper', receipt)
+    expect(out).toMatch(/FAIL \[1\] v5 hash=mismatch/)
+    expect(status).toBe(1)
+  })
+
+  it('a tampered accepted snapshot still fails beside the unavailable hash', async () => {
+    const receipt = await withheldReceipt()
+    receipt.agreement.accepted.snapshot.amount = 1
+    const { status, out } = runReceipt('withheld-snapshot', receipt)
+    expect(out).toContain('FAIL the accepted agreement follows from its snapshot and the acceptance act')
+    expect(status).toBe(1)
+  })
+
+  it('CLI receipts are unchanged: no declaration, no extra limit, the idempotency key field kept', async () => {
+    const receipt = await receiptOf(await mixedRows())
+    expect(receipt.acts.every(a => !('canonical_withheld' in a) && 'idempotency_key' in a)).toBe(true)
+    expect(receipt.not_verifiable_here).not.toContain(WITHHELD_LIMIT)
+    expect(runReceipt('cli-unchanged', receipt).status).toBe(0)
+  })
+})
