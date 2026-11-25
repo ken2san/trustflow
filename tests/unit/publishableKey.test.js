@@ -13,8 +13,10 @@ describe('selectPublishableKey', () => {
     expect(selectPublishableKey(rows(legacy, secret, { name: 'default', type: 'publishable', api_key: PUB }))).toBe(PUB)
   })
 
-  it('a named key can be selected', () => {
-    expect(selectPublishableKey(rows({ name: 'web', type: 'publishable', api_key: PUB }), 'web')).toBe(PUB)
+  it('only the fixed alias is accepted, and its refusal does not echo the requested name', () => {
+    let message = ''
+    try { selectPublishableKey(rows({ name: 'web', type: 'publishable', api_key: PUB }), 'web-CANARY') } catch (e) { message = e.message }
+    expect(message).toBe('unsupported publishable key alias')
   })
 
   it.each([
@@ -24,6 +26,9 @@ describe('selectPublishableKey', () => {
     ['two with the same name', rows({ name: 'default', type: 'publishable', api_key: PUB }, { name: 'default', type: 'publishable', api_key: PUB })],
     ['a mislabelled secret', rows({ name: 'default', type: 'publishable', api_key: 'sb_secret_abc' })],
     ['a missing value', rows({ name: 'default', type: 'publishable' })],
+    ['a value with a space', rows({ name: 'default', type: 'publishable', api_key: `${PUB} x` })],
+    ['a value with a comma', rows({ name: 'default', type: 'publishable', api_key: `${PUB}, ${PUB}` })],
+    ['a bare prefix', rows({ name: 'default', type: 'publishable', api_key: 'sb_publishable_' })],
   ])('refuses %s, with a message that carries no key', (_label, json) => {
     let message = ''
     try { selectPublishableKey(json) } catch (e) { message = e.message }

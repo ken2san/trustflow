@@ -109,6 +109,8 @@ describe('log-event delegated route: dispatch and admission', () => {
     ]) {
       expect(await reply(await post(write, h))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
     }
+    state.env.SUPABASE_PUBLISHABLE_KEYS = JSON.stringify({ bad: `${PUB}, ${PUB}` })
+    expect(await reply(await post(write, { apikey: `${PUB}, ${PUB}` }))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
     state.env.SUPABASE_PUBLISHABLE_KEYS = 'not json'
     expect(await reply(await post(write))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
     expect(state.getUserCalls).toBe(0)

@@ -164,6 +164,18 @@ describe('delegated-owner-read: route, admission and refusals', () => {
     expect(state.rpcCalls).toEqual([])
   })
 
+  it('a repeated apikey is the one 403, even with that merged text configured (Codex T208)', async () => {
+    state.env.SUPABASE_PUBLISHABLE_KEYS = JSON.stringify({ default: PUB, bad: `${PUB}, ${PUB}` })
+    const headers = new Headers({ 'Content-Type': 'application/json', apikey: PUB, 'x-trustflow-grant': `${GRANT_ID}.${SECRET}` })
+    headers.append('apikey', PUB)
+    const req = new Request('http://fake.invalid/functions/v1/delegated-owner-read', {
+      method: 'POST', headers, body: JSON.stringify({ contract_id: CONTRACT_ID }),
+    })
+    expect(await reply(await state.handler(req))).toEqual(REFUSED)
+    // The well-formed entry beside it still works.
+    expect((await post({ contract_id: CONTRACT_ID })).status).toBe(200)
+  })
+
   it('the legacy SUPABASE_ANON_KEY is never read as transport', async () => {
     state.env.SUPABASE_PUBLISHABLE_KEYS = undefined
     state.env.SUPABASE_ANON_KEY = PUB

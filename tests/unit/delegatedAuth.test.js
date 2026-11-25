@@ -34,6 +34,19 @@ describe('publishableKeys', () => {
     expect(publishableKeys(raw)).toEqual([])
   })
 
+  it.each([
+    ['a space', `${PUB} ${PUB2}`],
+    ['a merged repeat', `${PUB}, ${PUB}`],
+    ['a comma', `${PUB},x`],
+    ['a tab', `${PUB}\tx`],
+    ['a newline', `${PUB}\n`],
+    ['quotes', `"${PUB}"`],
+    ['a dot', `${PUB}.x`],
+  ])('a configured value with %s is not one key token and is dropped (Codex T208)', (_label, bad) => {
+    expect(publishableKeys(JSON.stringify({ bad, ok: PUB }))).toEqual([PUB])
+    expect(publishableKeys(JSON.stringify({ bad }))).toEqual([])
+  })
+
   it('never takes a secret key, a legacy JWT, a bare prefix or a non-string', () => {
     expect(publishableKeys(JSON.stringify({
       s: 'sb_secret_abc', j: LEGACY_ANON_JWT, p: 'sb_publishable_', n: 5, o: { k: PUB }, ok: PUB,
@@ -109,6 +122,18 @@ describe('delegatedAdmission', () => {
     const h = new Headers(ok)
     h.append('apikey', PUB)
     expect(await delegatedAdmission(h, KEYS)).toEqual(refused('public_key'))
+  })
+
+  it('a merged repeat is refused even against a configuration holding that exact merged text', async () => {
+    const merged = `${PUB}, ${PUB}`
+    // Through the parser: the malformed value never enters the list.
+    expect(await delegatedAdmission(headers({ ...ok, apikey: merged }), publishableKeys(JSON.stringify({ bad: merged }))))
+      .toEqual(refused('public_key'))
+    // Even a direct caller passing it is refused: request and list entries are token-checked.
+    const h = new Headers(ok)
+    h.append('apikey', PUB)
+    expect(await delegatedAdmission(h, [merged])).toEqual(refused('public_key'))
+    expect(await delegatedAdmission(headers({ ...ok, apikey: `${PUB} x` }), [`${PUB} x`])).toEqual(refused('public_key'))
   })
 
   it('rotation: every listed key is accepted; a key no longer listed is refused', async () => {
