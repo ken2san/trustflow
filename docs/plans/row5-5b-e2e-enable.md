@@ -43,15 +43,23 @@ This follows the T238 procedure:
 - **Type check:** `deno check --no-lock supabase/functions/delegated-owner-read/index.ts` must be clean.
 - **Deploy:** with Docker running for local bundling, run `supabase functions deploy delegated-owner-read --project-ref yqjtawffpesplqyurlpj` **once**.
   - Always name the function explicitly; never a bare deploy.
-  - Never pass `--no-verify-jwt`.
+  - **The initial deploy** never passes `--no-verify-jwt`. Only the approved fallback below may change that, with its own 🔑.
 
-**Checks (read-only):**
-- `list_edge_functions` shows `delegated-owner-read` ACTIVE at v1, with `verify_jwt: true`. Record the ezbr.
-- `log-event` and `guest-contract-events` are unchanged from step 0.
-- **Probes** (a scratchpad Playwright spec reusing `tests/e2e/liveEnv.js`; `.env.e2e` is never printed):
-  - an OPTIONS preflight from `https://project-trustflow.vercel.app` gives 200, with that allow-origin, `x-trustflow-grant` in the allowed headers, and `Cache-Control: private, no-store`;
-  - a POST with no Authorization header is rejected by the gateway with 401, so the request never reaches the function;
-  - a POST with the anon key and a well-formed **fake** grant gives `503 delegated_read_unavailable`, so the flag is off.
+**Baseline before the deploy (read-only):** record every deployed function's slug, version, `verify_jwt` and ezbr from `list_edge_functions`. Assume no count.
+
+**Checks after the deploy (read-only):**
+- `list_edge_functions` shows `delegated-owner-read` ACTIVE at a new version, with `verify_jwt: true`. Record the ezbr.
+- Every other function equals the baseline: same version, `verify_jwt` and ezbr.
+
+**The one current probe sequence** (scratchpad, reusing `tests/e2e/liveEnv.js` for the URL and `tests/e2e/publishableKey.js` for the key; neither `.env.e2e` nor the key is ever printed):
+1. An OPTIONS preflight from `https://project-trustflow.vercel.app` gives 200, with that allow-origin, `x-trustflow-grant` in the allowed headers, and `Cache-Control: private, no-store`. A disallowed origin gets no allow-origin.
+2. **The transport probe**, with the flag off: `apikey: <publishable key>`, **no `Authorization`**, a well-formed fake grant.
+   - 503 `delegated_read_unavailable`: the transport reaches the handler. Continue.
+   - 401: the gateway stopped it. Stop rule, then the fallback below.
+3. GET with the same transport gives 405, no-store.
+4. A log canary search with a known delivery control, as T256 did.
+
+This replaces the earlier legacy-anon-key probe and the unconditional "no Authorization gives 401" probe. Both described the pre-T258 transport.
 
 ### Transport after T258 (supersedes "the anon key as bearer" below)
 - **The T256 failure:** the trial stopped at step 3 because admission compared the bearer with `SUPABASE_ANON_KEY`. On hosted E2E that variable holds the `sb_publishable_` key, while clients sent the legacy anon JWT (T257).
@@ -73,14 +81,17 @@ This follows the T238 procedure:
 
 **Fallback after a gateway 401 (Codex T208 must-fix 2)**
 1. **Rule out the key first** (read-only; no key text printed):
-   - the probe's key is this project's active publishable key: compare the digest of `readPublishableKey`'s value with `SUPABASE_PUBLISHABLE_KEYS`, as in T257;
+   - **The probe's key is one of the function's allowed values.** The env holds a JSON object, so a digest of the whole object can't show membership by itself. Use one of these non-disclosing checks:
+     - **(a)** Rebuild in-process the object the platform would hold for exactly this key (`{"default":"<key>"}`, with the platform's serialization), and compare its sha256 with the `SUPABASE_PUBLISHABLE_KEYS` digest from `supabase secrets list`. Only "match" or "no match" is printed. A match proves the value is the only entry.
+     - **(b)** Rely on the function's own verdict: with the flag on, a fake grant's fixed refusal reason in `function_logs` is anything but `public_key`. That means the key passed admission's membership test.
+     - **If neither establishes membership, stop.**
    - the request reached the intended project and function;
    - the 401 body and `function_edge_logs` record say "missing Authorization" (for example `UNAUTHORIZED_NO_AUTH_HEADER`), not an invalid or wrong-project key.
 
-   A wrong, retired or other-project key is a configuration fault. Fix that and re-probe; it is not a reason to touch `verify_jwt`.
+   A wrong, retired or other-project key is a configuration fault, not a reason to touch `verify_jwt`. **Fixing that configuration and re-probing each need separate authorization under the stop rule at the top.**
 2. **Only for a confirmed gateway requirement: change `delegated-owner-read` only.**
    - Pin `verify_jwt = false` for **this one function** in `supabase/config.toml` under `[functions.delegated-owner-read]`, with **no other function block**. Or pass `--no-verify-jwt` on its single deploy, with a written reason.
-   - Read back `verify_jwt: false` for `delegated-owner-read`, and `true` for the other five functions.
+   - Read back `verify_jwt: false` for `delegated-owner-read`, and every other function unchanged from the step 2 baseline.
    - 🔑 with Kenji's OK, recorded as a redo in HANDOFF and in `Decisions.md`.
    - Then re-run the first probe (expect 503) and continue with step 3.
 3. **`log-event` is not switched with it.** Its gateway check also guards the owner (user JWT) and guest paths. Changing it needs its own staging check on hosted E2E, its own 🔑 and its own Decisions entry:
