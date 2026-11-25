@@ -353,7 +353,25 @@ function resolveAcceptance(rows: readonly unknown[], opts: SliceOptions):
 }
 
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const ZONED_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/
+const ZONED_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/
+
+/**
+ * A zoned timestamp that names a real instant AS WRITTEN (Codex T204). Each
+ * field is checked against the calendar itself, never left for Date to roll
+ * over (V8 turns 2026-02-29 into 1 March). 24:00 is refused: PostgreSQL's
+ * timestamptz output never emits it, normalizing to the next day.
+ */
+function zonedTimestampOk(text: string): boolean {
+  const m = ZONED_TIMESTAMP.exec(text)
+  if (!m) return false
+  const [y, mo, d, h, mi, sec] = m.slice(1, 7).map(Number)
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (y < 1 || mo < 1 || mo > 12 || d < 1 || d > days[mo - 1]) return false
+  if (h > 23 || mi > 59 || sec > 59) return false
+  if (m[7] !== undefined && (Number(m[7]) > 23 || Number(m[8]) > 59)) return false
+  return !Number.isNaN(new Date(text).getTime())
+}
 const PRINTABLE = /^[\x20-\x7e]{1,200}$/
 
 /**
@@ -369,8 +387,7 @@ export function legacyWithheldShapeProblem(row: Record<string, unknown>, version
   if (typeof row.id !== 'string' || !UUID_TEXT.test(row.id)) return 'id: not a UUID'
   if (typeof row.contract_id !== 'string' || !UUID_TEXT.test(row.contract_id)) return 'contract_id: not a UUID'
   if (typeof row.type !== 'string' || !PRINTABLE.test(row.type)) return 'type: not a recorded event type'
-  if (typeof row.created_at !== 'string' || !ZONED_TIMESTAMP.test(row.created_at)
-      || Number.isNaN(new Date(row.created_at).getTime())) return 'created_at: not a zoned timestamp'
+  if (typeof row.created_at !== 'string' || !zonedTimestampOk(row.created_at)) return 'created_at: not a zoned timestamp'
   if (!nullOr(row.dod_hash, isDigest)) return 'dod_hash: not a digest or null'
   const prevOk = version < 2 ? row.prev_event_hash === null
     : nullOr(row.prev_event_hash, v => v === GENESIS_HASH || isDigest(v))
