@@ -142,6 +142,16 @@ select pg_temp.ev('$cN', 'payment.acknowledged', '{"note":"n","_authentication":
 select pg_temp.ev('$cN', 'payment.reported', '{"note":{"cc":"nested-note@example.test"},"_authentication":{"assurance":"account_session","method":"otp","aal":"aal1","seconds_since_authentication":12}}', null, null);
 insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
 values (gen_random_uuid(), 'payment.reported', '$cN', '$owner', '{"note":"n"}', clock_timestamp(), 'not-a-digest', 99, repeat('1', 64), repeat('3', 64));
+-- Codex T200: wrong JSON types ahead of casts/array expansion, the method
+-- vocabulary, aal, and a recorded null counterparty_name.
+select pg_temp.ev('$cN', 'dod.consent_recorded', '{"counterparty_name":null,"dod_items":"not-an-array"}', null, null);
+select pg_temp.ev('$cN', 'dod.consent_recorded', '{"counterparty_name":{"n":"nested-name@example.test"},"dod_items":{"0":"x"}}', null, null);
+select pg_temp.ev('$cN', 'contract.initiated', '{"step":"abc","title":"T"}', null, null);
+select pg_temp.ev('$cN', 'payment.acknowledged', '{"note":"n","_authentication":{"assurance":"bearer_capability","recent_authentication_window_seconds":"abc"}}', null, null);
+select pg_temp.ev('$cN', 'payment.reported', '{"note":"n","_authentication":{"assurance":"account_session","method":"arbitrary_label","aal":"aal1"}}', null, null);
+select pg_temp.ev('$cN', 'payment.reported', '{"note":"n","_authentication":{"assurance":"account_session","credential":"account_jwt","method":"email_change","aal":"aal2","seconds_since_authentication":3,"recent_authentication":true,"recent_authentication_window_seconds":300}}', null, null);
+select pg_temp.ev('$cN', 'payment.reported', '{"note":"n","_authentication":{"assurance":"account_session","method":"sso/saml","aal":"aal1"}}', null, null);
+select pg_temp.ev('$cN', 'payment.reported', '{"note":"n","_authentication":{"assurance":"account_session","method":"otp","aal":"aal3"}}', null, null);
 SQL
 read() { q "select public.read_delegated_owner_deal('$1', '$2', $3)${4:-}"; }
 
@@ -430,6 +440,20 @@ expect 'the only address left is the free-text note (statement content, by desig
   "$(grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+' <<< "$out" | sort -u | paste -sd, -)"
 expect 'withheld lists only fixed approved names, never a party key' 0 \
   "$(j '[.events[].withheld[]] | map(select(. != "actor_id" and (test("^payload\\.(_actor_role|_role_in_agreement|_auth_method|_claimed_identity_verified|_authentication|_agreement|title|note|reason|counterparty_name|step|rating|budgetPoints|dod_items)$") | not))) | length')"
+
+expect 'the read over malformed rows succeeds and returns every row' 20 "$(j '.events | length')"
+expect 'non-array dod_items withheld; recorded null counterparty_name kept' 'counterparty_name|payload.dod_items' "$(row 12)"
+expect 'the recorded null itself crosses' 'null' "$(j '.events[12].payload.counterparty_name')"
+expect 'object dod_items and structured counterparty_name withheld' '|payload.counterparty_name,payload.dod_items' "$(row 13)"
+expect 'non-numeric string step withheld; title kept' 'title|payload.step' "$(row 14)"
+expect 'string recency window: assurance withheld whole' 'note|payload._authentication' "$(row 15)"
+expect 'identifier-shaped unsupported method: assurance withheld whole' 'note|payload._authentication' "$(row 16)"
+expect 'supported non-otp method (email_change) with aal2 crosses verbatim' 'true|' \
+  "$(j '.events[17] | ((.payload._authentication == {"assurance":"account_session","credential":"account_jwt","method":"email_change","aal":"aal2","seconds_since_authentication":3,"recent_authentication":true,"recent_authentication_window_seconds":300}) | tostring) + "|" + (.withheld | join(","))')"
+expect 'slashed method (sso/saml) crosses verbatim' 'sso/saml|' "$(j '.events[18] | .payload._authentication.method + "|" + (.withheld | join(","))')"
+expect 'aal3 is not a recorded level: assurance withheld whole' 'note|payload._authentication' "$(row 19)"
+expect 'no T200 canary crosses (nested-name, arbitrary_label, not-an-array, abc)' 0 \
+  "$(grep -cE 'nested-name|arbitrary_label|not-an-array|"abc"' <<< "$out" || true)"
 
 # canonical_inputs_complete is projection completeness, not recomputability.
 expect 'unsupported-format UUID-actor row: complete projection, stored format as is' 'true|99|not-a-digest' \
