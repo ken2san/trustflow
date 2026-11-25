@@ -61,11 +61,35 @@ This follows the T238 procedure:
   - `x-trustflow-grant`.
 - **What admission accepts:** only `SUPABASE_PUBLISHABLE_KEYS` values. Any bearer is a mixed credential, and the legacy anon JWT is never accepted.
 - **Where probes get the key:** in-process from `tests/e2e/publishableKey.js` (`readPublishableKey(SUPABASE_URL)`, using the Supabase CLI). Never printed, never added to `.env.e2e`.
-- **`verify_jwt` stays true for the re-run (Kenji, 11-25).**
-  - Supabase's current docs (*Edge Functions → Authorization headers*) say that with `verify_jwt` on, the platform requires a valid JWT in `Authorization`, and a missing header is a 401 before the handler.
-  - A bearer-less publishable request is therefore expected to get a **gateway 401** (`UNAUTHORIZED_NO_AUTH_HEADER`, as in T256's no-bearer probe), not reach admission.
-  - **If it does:** stop with the flag off, then switch both `delegated-owner-read` and `log-event` to `verify_jwt = false`, pinned in `supabase/config.toml`, recorded as a redo in HANDOFF and Decisions. Do not send any bearer to get past the gateway.
-- **The re-run's first probe tells the gateway 401 apart from admission's 403.** It is a bearer-less publishable request with a fake grant and the flag off. Expect 503 if it reaches the handler, 401 if the gateway stops it.
+- **Token rule:** the request `apikey` and each configured value must be exactly one key token, `^sb_publishable_[A-Za-z0-9_-]+$`, before any equality check. Whitespace, commas (a merged repeated header) or any other separator are refused (Codex T208).
+- **`verify_jwt` stays true for the first probe (Kenji, 11-25; Codex T207/T208).** The documents are read two ways:
+  - **One reading:** with verification on, a missing `Authorization` is a 401 before the handler.
+  - **Codex's reading:** a publishable key in `apikey` passes.
+
+  The probe decides. T256's no-bearer 401 also had no `apikey`, so it doesn't settle this.
+- **First probe (flag off):** a bearer-less request with `apikey: <publishable key>` and a fake grant, to `delegated-owner-read` only.
+  - **503 `delegated_read_unavailable`:** the transport reaches the handler. Continue with step 3.
+  - **401 at the gateway:** **stop.** Both feature flags (`ENTRY_DELEGATED_READ`, `ENTRY_DELEGATED_APPEND`) stay off, and the v5 write gate stays closed. No bearer of any kind is sent to get past it. Then follow the fallback below.
+
+**Fallback after a gateway 401 (Codex T208 must-fix 2)**
+1. **Rule out the key first** (read-only; no key text printed):
+   - the probe's key is this project's active publishable key: compare the digest of `readPublishableKey`'s value with `SUPABASE_PUBLISHABLE_KEYS`, as in T257;
+   - the request reached the intended project and function;
+   - the 401 body and `function_edge_logs` record say "missing Authorization" (for example `UNAUTHORIZED_NO_AUTH_HEADER`), not an invalid or wrong-project key.
+
+   A wrong, retired or other-project key is a configuration fault. Fix that and re-probe; it is not a reason to touch `verify_jwt`.
+2. **Only for a confirmed gateway requirement: change `delegated-owner-read` only.**
+   - Pin `verify_jwt = false` for **this one function** in `supabase/config.toml` under `[functions.delegated-owner-read]`, with **no other function block**. Or pass `--no-verify-jwt` on its single deploy, with a written reason.
+   - Read back `verify_jwt: false` for `delegated-owner-read`, and `true` for the other five functions.
+   - 🔑 with Kenji's OK, recorded as a redo in HANDOFF and in `Decisions.md`.
+   - Then re-run the first probe (expect 503) and continue with step 3.
+3. **`log-event` is not switched with it.** Its gateway check also guards the owner (user JWT) and guest paths. Changing it needs its own staging check on hosted E2E, its own 🔑 and its own Decisions entry:
+   - the delegated path with the append flag off;
+   - the owner path with no token, an expired token and an invalid token;
+   - the guest path with no token and an invalid token;
+   - no fallback for an invalid or malformed grant (a grant header always means the delegated route, refused);
+   - a deployed-setting readback;
+   - all with the v5 write gate closed, until the append-specific proof in row 4.
 
 ### `verify_jwt`: recommend **true** (T254, before T258)
 - **It matches `log-event`.** T241 proved on E2E that the anon key as the bearer plus `x-trustflow-grant` gets through the gateway with `verify_jwt` true. So the clients the route is meant for are not blocked.
