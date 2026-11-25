@@ -49,12 +49,12 @@ const OWNER_ID = '11111111-1111-4111-8111-111111111111'
 const CONTRACT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
 const GRANT_ID = 'cccccccc-0000-4000-8000-000000000001'
 const SECRET = '7'.repeat(64)
-const ANON = 'anon-public-key'
+const PUB = 'sb_publishable_testkeyAAAA'
 
 const post = (body, headers = {}) => state.handler(new Request('http://fake.invalid/functions/v1/log-event', {
   method: 'POST',
   headers: {
-    'Content-Type': 'application/json', Authorization: `Bearer ${ANON}`,
+    'Content-Type': 'application/json', apikey: PUB,
     'x-trustflow-grant': `${GRANT_ID}.${SECRET}`, ...headers,
   },
   body: JSON.stringify(body),
@@ -72,7 +72,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   state.env = {
-    ENTRY_DELEGATED_APPEND: 'on', SUPABASE_ANON_KEY: ANON,
+    ENTRY_DELEGATED_APPEND: 'on', SUPABASE_PUBLISHABLE_KEYS: JSON.stringify({ default: PUB }),
     SUPABASE_URL: 'http://fake.invalid', SUPABASE_SERVICE_ROLE_KEY: 'service',
   }
   state.contract = { id: CONTRACT_ID, state: 'DRAFTING', dod: ['test'], performed_by: 'creator', earner_user_id: OWNER_ID }
@@ -98,6 +98,19 @@ describe('log-event delegated route: dispatch and admission', () => {
   it('a present grant header never falls back: a user JWT alongside is mixed, refused 403, no session check', async () => {
     const r = await reply(await post(write, { Authorization: 'Bearer user-session-jwt' }))
     expect(r).toEqual({ status: 403, body: { error: 'delegation_refused' } })
+    expect(state.getUserCalls).toBe(0)
+    expect(state.rpcCalls).toEqual([])
+  })
+
+  it('the legacy anon JWT as bearer, or an unlisted apikey, is the same 403 with no RPC', async () => {
+    for (const h of [
+      { Authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.sig' },
+      { apikey: 'sb_publishable_otherproject' },
+    ]) {
+      expect(await reply(await post(write, h))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
+    }
+    state.env.SUPABASE_PUBLISHABLE_KEYS = 'not json'
+    expect(await reply(await post(write))).toEqual({ status: 403, body: { error: 'delegation_refused' } })
     expect(state.getUserCalls).toBe(0)
     expect(state.rpcCalls).toEqual([])
   })

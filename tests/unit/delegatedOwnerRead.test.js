@@ -36,14 +36,15 @@ const OWNER_ID = '11111111-1111-4111-8111-111111111111'
 const CONTRACT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
 const GRANT_ID = 'cccccccc-0000-4000-8000-000000000001'
 const SECRET = '7'.repeat(64)
-const ANON = 'anon-public-key'
+const PUB = 'sb_publishable_testkeyAAAA'
+const PUB_KEYS = JSON.stringify({ default: PUB })
 const CANARY = 'noncredential-canary-5b'
 const ORIGIN = 'https://project-trustflow.vercel.app'
 
 const post = (body, headers = {}, method = 'POST') => state.handler(new Request('http://fake.invalid/functions/v1/delegated-owner-read', {
   method,
   headers: {
-    'Content-Type': 'application/json', Authorization: `Bearer ${ANON}`,
+    'Content-Type': 'application/json', apikey: PUB,
     'x-trustflow-grant': `${GRANT_ID}.${SECRET}`, 'x-canary': CANARY, ...headers,
   },
   ...(method === 'POST' ? { body: typeof body === 'string' ? body : JSON.stringify(body) } : {}),
@@ -83,7 +84,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   state.env = {
-    ENTRY_DELEGATED_READ: 'on', SUPABASE_ANON_KEY: ANON,
+    ENTRY_DELEGATED_READ: 'on', SUPABASE_PUBLISHABLE_KEYS: PUB_KEYS,
     SUPABASE_URL: 'http://fake.invalid', SUPABASE_SERVICE_ROLE_KEY: 'service',
   }
   state.rpcCalls = []
@@ -134,20 +135,38 @@ describe('delegated-owner-read: route, admission and refusals', () => {
       { 'x-trustflow-grant': 'nope' },
       { 'x-trustflow-grant': `${GRANT_ID}.${SECRET}, ${GRANT_ID}.${SECRET}` },
       { Authorization: 'Bearer user-session-jwt' },
+      { Authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.sig' },
+      { Authorization: `Bearer ${PUB}` },
       { Authorization: '' },
       { 'x-guest-access-token': 'g'.repeat(43) },
+      { apikey: 'sb_publishable_otherproject' },
+      { apikey: 'sb_secret_abc' },
     ]
     for (const h of cases) expect(await reply(await post({ contract_id: CONTRACT_ID }, h))).toEqual(REFUSED)
-    const none = new Request('http://fake.invalid/functions/v1/delegated-owner-read', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ANON}` },
-      body: JSON.stringify({ contract_id: CONTRACT_ID }),
-    })
-    expect(await reply(await state.handler(none))).toEqual(REFUSED)
+    // A grant with no apikey, and an apikey with no grant.
+    for (const headers of [
+      { 'Content-Type': 'application/json', 'x-trustflow-grant': `${GRANT_ID}.${SECRET}` },
+      { 'Content-Type': 'application/json', apikey: PUB },
+    ]) {
+      const req = new Request('http://fake.invalid/functions/v1/delegated-owner-read', {
+        method: 'POST', headers, body: JSON.stringify({ contract_id: CONTRACT_ID }),
+      })
+      expect(await reply(await state.handler(req))).toEqual(REFUSED)
+    }
     expect(state.rpcCalls).toEqual([])
   })
 
-  it('an empty anon key configuration admits nothing', async () => {
-    state.env.SUPABASE_ANON_KEY = ''
+  it('a missing, malformed or empty publishable key configuration admits nothing', async () => {
+    for (const v of [undefined, '', 'not json', '[]', '{}', JSON.stringify({ default: 'sb_secret_abc' })]) {
+      state.env.SUPABASE_PUBLISHABLE_KEYS = v
+      expect(await reply(await post({ contract_id: CONTRACT_ID }))).toEqual(REFUSED)
+    }
+    expect(state.rpcCalls).toEqual([])
+  })
+
+  it('the legacy SUPABASE_ANON_KEY is never read as transport', async () => {
+    state.env.SUPABASE_PUBLISHABLE_KEYS = undefined
+    state.env.SUPABASE_ANON_KEY = PUB
     expect(await reply(await post({ contract_id: CONTRACT_ID }))).toEqual(REFUSED)
     expect(state.rpcCalls).toEqual([])
   })
@@ -234,13 +253,16 @@ describe('delegated-owner-read: route, admission and refusals', () => {
     state.rpcAnswer = ok({ status: 'revoked' })
     await post({ contract_id: CONTRACT_ID })
     await post({ contract_id: CONTRACT_ID }, { Authorization: 'Bearer user-session-jwt' })
+    await post({ contract_id: CONTRACT_ID }, { apikey: 'sb_publishable_otherproject' })
     const all = logs.join('\n')
     expect(all).not.toContain(SECRET)
+    expect(all).not.toContain('sb_publishable_')
     expect(all).not.toContain(CANARY)
     expect(all).not.toContain('user-session-jwt')
     expect(logs.map((l) => JSON.parse(l))).toEqual([
       { fn: 'delegated-owner-read', delegated_read_refusal: 'revoked', contract_id: CONTRACT_ID, credential_id: GRANT_ID },
       { fn: 'delegated-owner-read', delegated_read_refusal: 'mixed_credentials', contract_id: CONTRACT_ID, credential_id: null },
+      { fn: 'delegated-owner-read', delegated_read_refusal: 'public_key', contract_id: CONTRACT_ID, credential_id: null },
     ])
   })
 
