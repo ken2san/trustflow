@@ -117,25 +117,79 @@ begin
   return jsonb_typeof(s->'deadline') = 'null';
 end $$;
 
--- A recorded assurance crosses only if its keys are among assuranceForRecord's
--- (authAssurance.ts; older rows carry fewer) and every value is a scalar.
+-- A safe non-negative integer as jsonb: a number with no fraction, <= 2^53 - 1.
+create function private.owner_read_count_ok(v jsonb) returns boolean
+language sql immutable set search_path = '' as $$
+  select coalesce(jsonb_typeof(v) = 'number'
+    and (v #>> '{}')::numeric = trunc((v #>> '{}')::numeric)
+    and (v #>> '{}')::numeric between 0 and 9007199254740991, false)
+$$;
+
+-- The value domain of each key that may cross the projection: statement keys
+-- (the approved map) and the scalar metadata fields. A shape check, not a
+-- content check: an allowed free-text string is statement content and may say
+-- anything its author wrote; what it cannot be is an object, array or other
+-- structure the map did not approve. Metadata fields carry only the values the
+-- writers record (eventRecord.ts, authAssurance.ts legacyAuthMethod).
+create function private.owner_read_value_ok(p_key text, v jsonb) returns boolean
+language plpgsql immutable set search_path = '' as $$
+begin
+  return coalesce(case p_key
+    when 'title' then jsonb_typeof(v) = 'string'
+    when 'note' then jsonb_typeof(v) = 'string'
+    when 'reason' then jsonb_typeof(v) = 'string'
+    when 'counterparty_name' then jsonb_typeof(v) = 'string'
+    when 'step' then private.owner_read_count_ok(v)
+    when 'rating' then private.owner_read_count_ok(v)
+    -- The app writes String(amountMinor); older rows may carry the number.
+    when 'budgetPoints' then private.owner_read_count_ok(v)
+      or (jsonb_typeof(v) = 'string' and v #>> '{}' ~ '^[0-9]{1,16}$')
+    when 'dod_items' then jsonb_typeof(v) = 'array'
+      and not exists (select 1 from jsonb_array_elements(v) x where jsonb_typeof(x) <> 'string')
+    when '_actor_role' then v in ('"earner"'::jsonb, '"guest_hirer"'::jsonb)
+    when '_role_in_agreement' then v in ('"performer"'::jsonb, '"receiver"'::jsonb)
+    when '_auth_method' then v in ('"entry_agent_grant"'::jsonb, '"anonymous"'::jsonb,
+                                   '"invite_capability"'::jsonb, '"account_session"'::jsonb)
+    when '_claimed_identity_verified' then jsonb_typeof(v) = 'boolean'
+    else false
+  end, false);
+end $$;
+
+-- A recorded assurance crosses whole only if every key is one of
+-- assuranceForRecord's (authAssurance.ts; older rows carry fewer) and every
+-- value is in that key's domain. Otherwise it is withheld whole.
 create function private.owner_read_authentication_ok(a jsonb) returns boolean
 language plpgsql immutable set search_path = '' as $$
 begin
   if a is null or jsonb_typeof(a) <> 'object' then return false; end if;
   return not exists (
     select 1 from jsonb_each(a) x
-     where x.key not in ('assurance', 'credential', 'method', 'aal', 'seconds_since_authentication',
-                         'recent_authentication', 'recent_authentication_window_seconds',
-                         'act_bound_authentication', 'act_binding_mechanism')
-        or jsonb_typeof(x.value) not in ('string', 'number', 'boolean', 'null'));
+     where not coalesce(case x.key
+       when 'assurance' then x.value in ('"bearer_capability"'::jsonb, '"account_session"'::jsonb, '"anonymous"'::jsonb)
+       when 'credential' then x.value in ('null'::jsonb, '"invite_token"'::jsonb, '"guest_access_token"'::jsonb,
+                                          '"account_jwt"'::jsonb, '"entry_agent_grant"'::jsonb)
+       -- Supabase amr method names (otp, magiclink, password, ...): an identifier token.
+       when 'method' then x.value = 'null'::jsonb
+         or (jsonb_typeof(x.value) = 'string' and x.value #>> '{}' ~ '^[a-z][a-z0-9_]{0,31}$')
+       when 'aal' then x.value = 'null'::jsonb
+         or (jsonb_typeof(x.value) = 'string' and x.value #>> '{}' ~ '^aal[1-3]$')
+       when 'seconds_since_authentication' then x.value = 'null'::jsonb or private.owner_read_count_ok(x.value)
+       when 'recent_authentication' then jsonb_typeof(x.value) = 'boolean'
+       when 'recent_authentication_window_seconds' then private.owner_read_count_ok(x.value)
+         and (x.value #>> '{}')::numeric > 0
+       -- Always the literal false and null: no act-binding mechanism exists.
+       when 'act_bound_authentication' then x.value = 'false'::jsonb
+       when 'act_binding_mechanism' then x.value = 'null'::jsonb
+       else false
+     end, false));
 end $$;
 
 -- The payload an owner read may carry, and which recorded fields were withheld
 -- at the boundary. A field is passed verbatim or omitted; it is never rewritten,
 -- so nothing shown can stand in for hashed evidence it does not match.
--- `withheld` names only those boundary decisions, never an unlisted party key
--- (a key name is content too).
+-- `withheld` names only those boundary decisions, as `payload.<key>` with a key
+-- from the fixed approved set; never an unlisted party key (a key name is
+-- content too).
 create function private.owner_read_payload(p_type text, p_payload jsonb, out payload jsonb, out withheld text[])
 language plpgsql immutable set search_path = '' as $$
 declare
@@ -149,11 +203,9 @@ begin
   for x in select * from jsonb_each(p_payload) loop
     v_ok := null;
     if left(x.key, 1) <> '_' then
-      if v_keys ? x.key then payload := payload || jsonb_build_object(x.key, x.value); end if;
-    elsif x.key in ('_actor_role', '_role_in_agreement', '_auth_method') then
-      v_ok := jsonb_typeof(x.value) = 'string';
-    elsif x.key = '_claimed_identity_verified' then
-      v_ok := jsonb_typeof(x.value) = 'boolean';
+      if v_keys ? x.key then v_ok := private.owner_read_value_ok(x.key, x.value); end if;
+    elsif x.key in ('_actor_role', '_role_in_agreement', '_auth_method', '_claimed_identity_verified') then
+      v_ok := private.owner_read_value_ok(x.key, x.value);
     elsif x.key = '_authentication' then
       v_ok := private.owner_read_authentication_ok(x.value);
     elsif x.key = '_agreement' and p_type = 'dod.consent_recorded' then
@@ -170,6 +222,8 @@ end $$;
 
 revoke all on function private.owner_read_statement_keys() from public, anon, authenticated, service_role;
 revoke all on function private.owner_read_snapshot_ok(jsonb) from public, anon, authenticated, service_role;
+revoke all on function private.owner_read_count_ok(jsonb) from public, anon, authenticated, service_role;
+revoke all on function private.owner_read_value_ok(text, jsonb) from public, anon, authenticated, service_role;
 revoke all on function private.owner_read_authentication_ok(jsonb) from public, anon, authenticated, service_role;
 revoke all on function private.owner_read_payload(text, jsonb) from public, anon, authenticated, service_role;
 
@@ -203,6 +257,10 @@ revoke all on function private.owner_read_payload(text, jsonb) from public, anon
 --     an event lists "actor_id" in `withheld` and has
 --     canonical_inputs_complete = false: its hash cannot be recomputed from
 --     this read, and nothing here substitutes a value that would claim it can.
+--     canonical_inputs_complete means PROJECTION completeness only: this read
+--     withheld none of the row's canonical inputs. It is not a claim that the
+--     stored row is well formed or that its hash verifies; a reader (5b)
+--     classifies the stored format and runs the verifier separately.
 --     No idempotency key, raw payload or server-only column.
 create function public.read_delegated_owner_deal(
   p_contract_id uuid, p_credential_id uuid, p_secret_hash text
@@ -245,7 +303,7 @@ begin
     from public.contracts k where k.id = p_contract_id;
 
   with base as (
-    select e.id, e.type, row_number() over (order by e.created_at, e.id) as rn, count(*) over () as total
+    select e.id, e.type, row_number() over (order by e.created_at, e.id) as rn
       from public.events e
      where e.contract_id = p_contract_id::text
   ), projected as (
@@ -317,6 +375,7 @@ declare
   v_rpc constant text := 'public.read_delegated_owner_deal(uuid,uuid,text)';
   v_private constant text[] := array['private.resolve_owner_read_grant(uuid,uuid,text)',
     'private.owner_read_statement_keys()', 'private.owner_read_snapshot_ok(jsonb)',
+    'private.owner_read_count_ok(jsonb)', 'private.owner_read_value_ok(text,jsonb)',
     'private.owner_read_authentication_ok(jsonb)', 'private.owner_read_payload(text,jsonb)'];
 begin
   foreach r in array array['anon', 'authenticated', 'public'] loop
