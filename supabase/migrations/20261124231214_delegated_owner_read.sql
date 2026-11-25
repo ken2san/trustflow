@@ -117,13 +117,21 @@ begin
   return jsonb_typeof(s->'deadline') = 'null';
 end $$;
 
+-- Every value check below is an ordered IF chain: the type test returns before
+-- any ::numeric cast or jsonb_array_elements runs, because PostgreSQL does not
+-- guarantee AND/OR operand order. Malformed stored JSON therefore makes only
+-- that field (or that assurance object) unavailable; it never raises.
+
 -- A safe non-negative integer as jsonb: a number with no fraction, <= 2^53 - 1.
 create function private.owner_read_count_ok(v jsonb) returns boolean
-language sql immutable set search_path = '' as $$
-  select coalesce(jsonb_typeof(v) = 'number'
-    and (v #>> '{}')::numeric = trunc((v #>> '{}')::numeric)
-    and (v #>> '{}')::numeric between 0 and 9007199254740991, false)
-$$;
+language plpgsql immutable set search_path = '' as $$
+declare
+  n numeric;
+begin
+  if v is null or jsonb_typeof(v) <> 'number' then return false; end if;
+  n := (v #>> '{}')::numeric;
+  return n = trunc(n) and n between 0 and 9007199254740991;
+end $$;
 
 -- The value domain of each key that may cross the projection: statement keys
 -- (the approved map) and the scalar metadata fields. A shape check, not a
@@ -134,25 +142,32 @@ $$;
 create function private.owner_read_value_ok(p_key text, v jsonb) returns boolean
 language plpgsql immutable set search_path = '' as $$
 begin
-  return coalesce(case p_key
-    when 'title' then jsonb_typeof(v) = 'string'
-    when 'note' then jsonb_typeof(v) = 'string'
-    when 'reason' then jsonb_typeof(v) = 'string'
-    when 'counterparty_name' then jsonb_typeof(v) = 'string'
-    when 'step' then private.owner_read_count_ok(v)
-    when 'rating' then private.owner_read_count_ok(v)
+  if v is null then return false; end if;
+  if p_key in ('title', 'note', 'reason') then
+    return jsonb_typeof(v) = 'string';
+  elsif p_key = 'counterparty_name' then
+    -- validate-invite-token records null when no name was supplied.
+    return jsonb_typeof(v) in ('string', 'null');
+  elsif p_key in ('step', 'rating') then
+    return private.owner_read_count_ok(v);
+  elsif p_key = 'budgetPoints' then
     -- The app writes String(amountMinor); older rows may carry the number.
-    when 'budgetPoints' then private.owner_read_count_ok(v)
-      or (jsonb_typeof(v) = 'string' and v #>> '{}' ~ '^[0-9]{1,16}$')
-    when 'dod_items' then jsonb_typeof(v) = 'array'
-      and not exists (select 1 from jsonb_array_elements(v) x where jsonb_typeof(x) <> 'string')
-    when '_actor_role' then v in ('"earner"'::jsonb, '"guest_hirer"'::jsonb)
-    when '_role_in_agreement' then v in ('"performer"'::jsonb, '"receiver"'::jsonb)
-    when '_auth_method' then v in ('"entry_agent_grant"'::jsonb, '"anonymous"'::jsonb,
-                                   '"invite_capability"'::jsonb, '"account_session"'::jsonb)
-    when '_claimed_identity_verified' then jsonb_typeof(v) = 'boolean'
-    else false
-  end, false);
+    if jsonb_typeof(v) = 'string' then return v #>> '{}' ~ '^[0-9]{1,16}$'; end if;
+    return private.owner_read_count_ok(v);
+  elsif p_key = 'dod_items' then
+    if jsonb_typeof(v) <> 'array' then return false; end if;
+    return not exists (select 1 from jsonb_array_elements(v) x where jsonb_typeof(x) <> 'string');
+  elsif p_key = '_actor_role' then
+    return v in ('"earner"'::jsonb, '"guest_hirer"'::jsonb);
+  elsif p_key = '_role_in_agreement' then
+    return v in ('"performer"'::jsonb, '"receiver"'::jsonb);
+  elsif p_key = '_auth_method' then
+    return v in ('"entry_agent_grant"'::jsonb, '"anonymous"'::jsonb,
+                 '"invite_capability"'::jsonb, '"account_session"'::jsonb);
+  elsif p_key = '_claimed_identity_verified' then
+    return jsonb_typeof(v) = 'boolean';
+  end if;
+  return false;
 end $$;
 
 -- A recorded assurance crosses whole only if every key is one of
@@ -160,28 +175,50 @@ end $$;
 -- value is in that key's domain. Otherwise it is withheld whole.
 create function private.owner_read_authentication_ok(a jsonb) returns boolean
 language plpgsql immutable set search_path = '' as $$
+declare
+  x record;
 begin
   if a is null or jsonb_typeof(a) <> 'object' then return false; end if;
-  return not exists (
-    select 1 from jsonb_each(a) x
-     where not coalesce(case x.key
-       when 'assurance' then x.value in ('"bearer_capability"'::jsonb, '"account_session"'::jsonb, '"anonymous"'::jsonb)
-       when 'credential' then x.value in ('null'::jsonb, '"invite_token"'::jsonb, '"guest_access_token"'::jsonb,
-                                          '"account_jwt"'::jsonb, '"entry_agent_grant"'::jsonb)
-       -- Supabase amr method names (otp, magiclink, password, ...): an identifier token.
-       when 'method' then x.value = 'null'::jsonb
-         or (jsonb_typeof(x.value) = 'string' and x.value #>> '{}' ~ '^[a-z][a-z0-9_]{0,31}$')
-       when 'aal' then x.value = 'null'::jsonb
-         or (jsonb_typeof(x.value) = 'string' and x.value #>> '{}' ~ '^aal[1-3]$')
-       when 'seconds_since_authentication' then x.value = 'null'::jsonb or private.owner_read_count_ok(x.value)
-       when 'recent_authentication' then jsonb_typeof(x.value) = 'boolean'
-       when 'recent_authentication_window_seconds' then private.owner_read_count_ok(x.value)
-         and (x.value #>> '{}')::numeric > 0
-       -- Always the literal false and null: no act-binding mechanism exists.
-       when 'act_bound_authentication' then x.value = 'false'::jsonb
-       when 'act_binding_mechanism' then x.value = 'null'::jsonb
-       else false
-     end, false));
+  for x in select * from jsonb_each(a) loop
+    if x.key = 'assurance' then
+      if x.value not in ('"bearer_capability"'::jsonb, '"account_session"'::jsonb, '"anonymous"'::jsonb) then
+        return false;
+      end if;
+    elsif x.key = 'credential' then
+      if x.value not in ('null'::jsonb, '"invite_token"'::jsonb, '"guest_access_token"'::jsonb,
+                         '"account_jwt"'::jsonb, '"entry_agent_grant"'::jsonb) then
+        return false;
+      end if;
+    elsif x.key = 'method' then
+      -- assuranceFromClaims copies the issuer's amr method verbatim: null or one
+      -- of the labels Supabase Auth documents for amr.method. Nothing else is
+      -- a recorded authentication fact.
+      if x.value not in ('null'::jsonb, '"oauth"'::jsonb, '"password"'::jsonb, '"otp"'::jsonb,
+                         '"totp"'::jsonb, '"recovery"'::jsonb, '"invite"'::jsonb, '"sso/saml"'::jsonb,
+                         '"magiclink"'::jsonb, '"email/signup"'::jsonb, '"email_change"'::jsonb,
+                         '"token_refresh"'::jsonb, '"anonymous"'::jsonb) then
+        return false;
+      end if;
+    elsif x.key = 'aal' then
+      -- Supabase Auth documents aal1 and aal2 only.
+      if x.value not in ('null'::jsonb, '"aal1"'::jsonb, '"aal2"'::jsonb) then return false; end if;
+    elsif x.key = 'seconds_since_authentication' then
+      if x.value <> 'null'::jsonb and not private.owner_read_count_ok(x.value) then return false; end if;
+    elsif x.key = 'recent_authentication' then
+      if jsonb_typeof(x.value) <> 'boolean' then return false; end if;
+    elsif x.key = 'recent_authentication_window_seconds' then
+      if not private.owner_read_count_ok(x.value) then return false; end if;
+      if (x.value #>> '{}')::numeric <= 0 then return false; end if;
+    -- Always the literal false and null: no act-binding mechanism exists.
+    elsif x.key = 'act_bound_authentication' then
+      if x.value <> 'false'::jsonb then return false; end if;
+    elsif x.key = 'act_binding_mechanism' then
+      if x.value <> 'null'::jsonb then return false; end if;
+    else
+      return false;
+    end if;
+  end loop;
+  return true;
 end $$;
 
 -- The payload an owner read may carry, and which recorded fields were withheld
