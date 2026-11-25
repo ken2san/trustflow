@@ -60,6 +60,7 @@ cO=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4   # owner changes after issuance
 cV=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5   # carries a writer-built v5 row
 cL=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6   # large trail, for the caps
 cG=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7   # a genuine invite acceptance, then a v5 event
+cN=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8   # value-domain canaries under approved keys
 gR=cccccccc-0000-4000-8000-000000000001   # read on cA
 gW=cccccccc-0000-4000-8000-000000000002   # cA, write scope only
 gB=cccccccc-0000-4000-8000-000000000003   # read on cB
@@ -74,6 +75,7 @@ gL=cccccccc-0000-4000-8000-00000000000b   # read on cL
 gP=cccccccc-0000-4000-8000-00000000000c   # read + payment.acknowledged on cA, parity
 gG=cccccccc-0000-4000-8000-00000000000d   # read on cG
 gH=cccccccc-0000-4000-8000-00000000000e   # write on cG, for the real writer
+gN=cccccccc-0000-4000-8000-00000000000f   # read on cN
 guest=guest-actor@example.test            # a real guest actor: actor_id guest:<address>
 h() { printf "repeat('%s', 64)" "$1"; }
 psql_pg > /dev/null <<SQL
@@ -89,7 +91,8 @@ insert into public.contracts (id, earner_user_id, project_name, dod, amount_jpy,
   ('$cO', '$owner', 'read cO', '["test"]', 1, 'creator', null, null, null, null, null, null),
   ('$cV', '$owner', 'read cV', '["test"]', 1, 'creator', null, null, null, null, null, null),
   ('$cL', '$owner', 'read cL', '["test"]', 1, 'creator', null, null, null, null, null, null),
-  ('$cG', '$owner', 'read cG', '["deliver the report"]', 5000, 'creator', 'Owner G', '$guest', null, null, null, null);
+  ('$cG', '$owner', 'read cG', '["deliver the report"]', 5000, 'creator', 'Owner G', '$guest', null, null, null, null),
+  ('$cN', '$owner', 'read cN', '["test"]', 1, 'creator', null, null, null, null, null, null);
 insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_kind, secret_hash, scopes, created_at, expires_at, revoked_at) values
   ('$gR', '$cA', '$owner', 'owner_account', $(h 1), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
   ('$gW', '$cA', '$owner', 'owner_account', $(h 2), array['payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
@@ -104,7 +107,8 @@ insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_k
   ('$gL', '$cL', '$owner', 'owner_account', $(h b), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
   ('$gP', '$cA', '$owner', 'owner_account', $(h c), array['read', 'payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
   ('$gG', '$cG', '$owner', 'owner_account', $(h d), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
-  ('$gH', '$cG', '$owner', 'owner_account', $(h e), array['payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null);
+  ('$gH', '$cG', '$owner', 'owner_account', $(h e), array['payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
+  ('$gN', '$cN', '$owner', 'owner_account', $(h f), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null);
 update public.contracts set earner_user_id = '$other' where id = '$cO';
 -- A legacy trail on cA: statement keys, recorded metadata, a real guest actor,
 -- and values that must be withheld: contact addresses (top level, in the guest
@@ -122,6 +126,22 @@ select pg_temp.ev('$cA', 'contract.accepted', '{"step":2,"user_agent":"UA/1","_a
 select pg_temp.ev('$cA', 'payment.reported', '{"note":"sent","_claimed_identity_verified":false,"_authentication":{"assurance":"account_session","aal":"aal1","recent_authentication":true}}', null, null);
 select pg_temp.ev('$cA', 'x.custom', '{"note":"unknown type","_actor_role":"earner"}', null, null);
 select pg_temp.ev('$cA', 'dispute.opened', '{"reason":"withheld _agreement","_agreement":{"snapshot_version":1},"_actor_role":{"email":"meta@example.test"}}', null, null);
+-- cN: wrong-shaped values under APPROVED keys (statement and metadata), one
+-- valid of each shape, an allowed free-text note that mentions an address, and
+-- a UUID-actor row of an unsupported format (projection completeness only).
+select pg_temp.ev('$cN', 'dispute.opened', '{"reason":{"to":"nested-reason@example.test"},"_actor_role":"admin-at@example.test"}', null, null);
+select pg_temp.ev('$cN', 'dod.consent_recorded', '{"counterparty_name":"N","dod_items":["ok",{"c":"nested-dod@example.test"}],"_auth_method":"meta-auth@example.test","_role_in_agreement":"owner"}', null, null);
+select pg_temp.ev('$cN', 'contract.initiated', '{"step":{"n":"nested-step@example.test"},"title":["nested-title@example.test"],"budgetPoints":"12a"}', null, null);
+select pg_temp.ev('$cN', 'contract.initiated', '{"step":1,"title":"T","budgetPoints":"5000"}', null, null);
+select pg_temp.ev('$cN', 'rating.submitted', '{"rating":4.5}', null, null);
+select pg_temp.ev('$cN', 'rating.submitted', '{"rating":4}', null, null);
+select pg_temp.ev('$cN', 'payment.reported', '{"note":"mail me at text-note@example.test","_authentication":{"assurance":"bearer_capability","credential":"cred@example.test"}}', null, null);
+select pg_temp.ev('$cN', 'payment.disputed', '{"note":"n","_authentication":{"assurance":"bearer_capability","act_binding_mechanism":"mech@example.test"}}', null, null);
+select pg_temp.ev('$cN', 'payment.acknowledged', '{"note":"n","_authentication":{"assurance":"bearer_capability","act_bound_authentication":true}}', null, null);
+select pg_temp.ev('$cN', 'payment.acknowledged', '{"note":"n","_authentication":{"assurance":"bearer_capability","credential":"entry_agent_grant","method":null,"aal":null,"seconds_since_authentication":null,"recent_authentication":false,"recent_authentication_window_seconds":300,"act_bound_authentication":false,"act_binding_mechanism":null}}', null, null);
+select pg_temp.ev('$cN', 'payment.reported', '{"note":{"cc":"nested-note@example.test"},"_authentication":{"assurance":"account_session","method":"otp","aal":"aal1","seconds_since_authentication":12}}', null, null);
+insert into public.events (id, type, contract_id, actor_id, payload, created_at, event_hash, hash_version, payload_hash, dod_hash)
+values (gen_random_uuid(), 'payment.reported', '$cN', '$owner', '{"note":"n"}', clock_timestamp(), 'not-a-digest', 99, repeat('1', 64), repeat('3', 64));
 SQL
 read() { q "select public.read_delegated_owner_deal('$1', '$2', $3)${4:-}"; }
 
@@ -371,7 +391,8 @@ SQL
 # ── Statement-key parity with the guest allowlist ───────────────────────────
 expect 'statement keys equal guestEventView PAYLOAD_ALLOWLIST minus counterparty_email' "$(fx allowlist | jq -S -c .)" \
   "$(q "select private.owner_read_statement_keys()" | jq -S -c .)"
-for f in 'owner_read_statement_keys()' 'owner_read_snapshot_ok(jsonb)' 'owner_read_authentication_ok(jsonb)' 'owner_read_payload(text,jsonb)'; do
+for f in 'owner_read_statement_keys()' 'owner_read_snapshot_ok(jsonb)' 'owner_read_count_ok(jsonb)' 'owner_read_value_ok(text,jsonb)' \
+         'owner_read_authentication_ok(jsonb)' 'owner_read_payload(text,jsonb)'; do
   expect "no client role or service_role can execute private.$f" '' \
     "$(q "select string_agg(rolname, ',') from pg_roles where rolname in ('anon', 'authenticated', 'service_role') and has_function_privilege(oid, 'private.$f', 'EXECUTE')")"
 done
@@ -387,5 +408,35 @@ SQL
 expect 'append under a read-only grant is refused (scope)' scope "$(appended payment.acknowledged)"
 expect 'append of type read is refused before authority (malformed type)' binding_mismatch "$(appended read)"
 expect 'the refused appends wrote nothing' 6 "$(q "select count(*) from public.events where contract_id = '$cA'")"
+
+# ── Value domains under approved keys (Codex T199) ──────────────────────────
+out="$(read "$cN" "$gN" "$(h f)")"
+row() { j ".events[$1] | (.payload | keys | join(\",\")) + \"|\" + (.withheld | join(\",\"))"; }
+expect 'nested object under reason; unsupported _actor_role string' '|payload._actor_role,payload.reason' "$(row 0)"
+expect 'nested object inside dod_items; contact under _auth_method; unknown role' 'counterparty_name|payload._auth_method,payload._role_in_agreement,payload.dod_items' "$(row 1)"
+expect 'object step, array title, non-digit budgetPoints' '|payload.budgetPoints,payload.step,payload.title' "$(row 2)"
+expect 'valid step, title and digit-string budgetPoints kept' 'budgetPoints,step,title|' "$(row 3)"
+expect 'fractional rating withheld' '|payload.rating' "$(row 4)"
+expect 'integer rating kept' 'rating|' "$(row 5)"
+expect 'contact under _authentication.credential: withheld whole; free-text note kept' 'note|payload._authentication' "$(row 6)"
+expect 'contact under _authentication.act_binding_mechanism: withheld whole' 'note|payload._authentication' "$(row 7)"
+expect 'act_bound_authentication true: withheld whole' 'note|payload._authentication' "$(row 8)"
+expect 'the recorded grant assurance crosses whole' 'payload._authentication: true|' \
+  "$(j '.events[9] | "payload._authentication: " + ((.payload._authentication == {"assurance":"bearer_capability","credential":"entry_agent_grant","method":null,"aal":null,"seconds_since_authentication":null,"recent_authentication":false,"recent_authentication_window_seconds":300,"act_bound_authentication":false,"act_binding_mechanism":null}) | tostring) + "|" + (.withheld | join(","))')"
+expect 'nested note withheld; a session assurance with method and age crosses' '_authentication|payload.note' "$(row 10)"
+expect 'no structural canary crosses (nested-, meta-, cred@, mech@, admin-at@)' 0 \
+  "$(grep -cE 'nested-|meta-auth|cred@|mech@|admin-at@' <<< "$out" || true)"
+expect 'the only address left is the free-text note (statement content, by design)' 'text-note@example.test' \
+  "$(grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+' <<< "$out" | sort -u | paste -sd, -)"
+expect 'withheld lists only fixed approved names, never a party key' 0 \
+  "$(j '[.events[].withheld[]] | map(select(. != "actor_id" and (test("^payload\\.(_actor_role|_role_in_agreement|_auth_method|_claimed_identity_verified|_authentication|_agreement|title|note|reason|counterparty_name|step|rating|budgetPoints|dod_items)$") | not))) | length')"
+
+# canonical_inputs_complete is projection completeness, not recomputability.
+expect 'unsupported-format UUID-actor row: complete projection, stored format as is' 'true|99|not-a-digest' \
+  "$(j '.events[11] | (.canonical_inputs_complete | tostring) + "|" + (.hash_version | tostring) + "|" + .event_hash')"
+expect 'the deliberately withheld legacy guest input: incomplete' 'false' \
+  "$(read "$cA" "$gR" "$(h 1)" "->'events'->1->>'canonical_inputs_complete'")"
+expect 'the window total is gone from the lock-held work' 0 \
+  "$(q "select count(*) from pg_proc where oid = 'public.read_delegated_owner_deal(uuid,uuid,text)'::regprocedure and prosrc ilike '%count(*) over ()%'")"
 
 echo 'ALL PASS'
