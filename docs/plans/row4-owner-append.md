@@ -52,7 +52,13 @@ Row 3 already shipped every reader, on E2E and on production. This row goes: res
 ### 4a. Admission and the shared resolver (about 1d)
 
 **Admission in `log-event`: two credentials, kept apart**
-- **Transport credential.** `log-event` is `verify_jwt: true` (`HANDOFF.md:55–59`), and that setting stays.
+- **Transport credential: superseded 2026-11-25 (T258).**
+  - A delegated request now carries `apikey: <active publishable key>` (from `SUPABASE_PUBLISHABLE_KEYS`) and **no `Authorization` header**. Any bearer is mixed, and the legacy anon JWT is never accepted.
+  - Why: on hosted E2E, `SUPABASE_ANON_KEY` is the publishable key while clients held the legacy JWT, so the exact-bearer check below could never match (T256/T257, Codex T207).
+  - `verify_jwt` for the re-run: see `docs/plans/row5-5b-e2e-enable.md`, "Transport after T258".
+
+  The original text follows, kept as the record of what was decided:
+- **Transport credential (original).** `log-event` is `verify_jwt: true` (`HANDOFF.md:55–59`), and that setting stays.
   - A delegated request carries `Authorization: Bearer <public anon key>` to pass the gateway.
   - The function checks that this value is exactly the configured public key, and treats it as transport only. It is never owner authentication.
   - Any other bearer, such as a user JWT, makes the request mixed.
@@ -421,7 +427,7 @@ What Edge does:
 
 Codex's view (T187/T188) is next to mine for each question; T229's report has the table.
 
-- **Q1 — how the AI presents its grant.** `x-trustflow-grant: <uuid>.<secret>`, with the anon key in `Authorization` as transport only, strict parsing, no URL or body form, and the CORS preflight. *Codex agrees.*
+- **Q1 — how the AI presents its grant.** (Transport superseded by T258: the publishable key in `apikey`, no `Authorization`; see "Transport credential" above.) `x-trustflow-grant: <uuid>.<secret>`, with the anon key in `Authorization` as transport only, strict parsing, no URL or body form, and the CORS preflight. *Codex agrees.*
 - **Q2 — which event types.** The grant's scopes ∩ the row 4 allowlist (`performance.asserted/accepted/rejected`, `payment.reported/acknowledged/disputed`) ∩ the locked role and state, in both `performed_by` directions. No `accept`, `read`, retired or server-only types. Payments stay claims. *Codex agrees.*
   - **Settled in T188:** the exclusion is the deal-acceptance scope. A properly scoped receiver may write `performance.accepted`.
 - **Q3 — `actor_id`.** The issuer account UUID, derived under the lock and bound with both authority fields. Assurance is recorded as grant possession. This depends on the owner-replay guard, which is now in 4b. *Codex agrees.*

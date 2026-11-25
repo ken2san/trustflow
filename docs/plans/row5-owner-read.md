@@ -36,7 +36,7 @@
 
 ## 5b. Edge transport and owner projection
 
-**Approved interface.** New `supabase/functions/delegated-owner-read/index.ts`, `POST` with JSON `{ "contract_id": "<uuid>" }`, existing public anon bearer for gateway transport, and `x-trustflow-grant` for actual authority. Reuse `_shared/delegatedAuth.ts` and `_shared/cors.ts`. Preserve the pinned gateway behavior and reject mixed guest/session credentials. Hash the header secret in Edge and send only the digest to SQL. Keep `ENTRY_DELEGATED_READ` default off and independent of the append rollout. Apply and confirm the RPC before deploying, and return 503 without a fallback if the RPC is unavailable. Verify preflight for allowed and disallowed origins. The Row 5 E2E deploy waits for Row 4's gateway, CORS and platform-log proofs.
+**Approved interface.** New `supabase/functions/delegated-owner-read/index.ts`, `POST` with JSON `{ "contract_id": "<uuid>" }`, existing public anon bearer for gateway transport (superseded 2026-11-25, T258: the publishable key in `apikey` and no `Authorization`; see `row5-5b-e2e-enable.md`), and `x-trustflow-grant` for actual authority. Reuse `_shared/delegatedAuth.ts` and `_shared/cors.ts`. Preserve the pinned gateway behavior and reject mixed guest/session credentials. Hash the header secret in Edge and send only the digest to SQL. Keep `ENTRY_DELEGATED_READ` default off and independent of the append rollout. Apply and confirm the RPC before deploying, and return 503 without a fallback if the RPC is unavailable. Verify preflight for allowed and disallowed origins. The Row 5 E2E deploy waits for Row 4's gateway, CORS and platform-log proofs.
 
 | Result | Wire behavior |
 |---|---|

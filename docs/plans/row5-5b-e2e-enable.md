@@ -53,7 +53,21 @@ This follows the T238 procedure:
   - a POST with no Authorization header is rejected by the gateway with 401, so the request never reaches the function;
   - a POST with the anon key and a well-formed **fake** grant gives `503 delegated_read_unavailable`, so the flag is off.
 
-### `verify_jwt`: recommend **true**
+### Transport after T258 (supersedes "the anon key as bearer" below)
+- **The T256 failure:** the trial stopped at step 3 because admission compared the bearer with `SUPABASE_ANON_KEY`. On hosted E2E that variable holds the `sb_publishable_` key, while clients sent the legacy anon JWT (T257).
+- **Since T258, a delegated request carries:**
+  - `apikey: <active publishable key>`;
+  - **no `Authorization` header at all;**
+  - `x-trustflow-grant`.
+- **What admission accepts:** only `SUPABASE_PUBLISHABLE_KEYS` values. Any bearer is a mixed credential, and the legacy anon JWT is never accepted.
+- **Where probes get the key:** in-process from `tests/e2e/publishableKey.js` (`readPublishableKey(SUPABASE_URL)`, using the Supabase CLI). Never printed, never added to `.env.e2e`.
+- **`verify_jwt` stays true for the re-run (Kenji, 11-25).**
+  - Supabase's current docs (*Edge Functions → Authorization headers*) say that with `verify_jwt` on, the platform requires a valid JWT in `Authorization`, and a missing header is a 401 before the handler.
+  - A bearer-less publishable request is therefore expected to get a **gateway 401** (`UNAUTHORIZED_NO_AUTH_HEADER`, as in T256's no-bearer probe), not reach admission.
+  - **If it does:** stop with the flag off, then switch both `delegated-owner-read` and `log-event` to `verify_jwt = false`, pinned in `supabase/config.toml`, recorded as a redo in HANDOFF and Decisions. Do not send any bearer to get past the gateway.
+- **The re-run's first probe tells the gateway 401 apart from admission's 403.** It is a bearer-less publishable request with a fake grant and the flag off. Expect 503 if it reaches the handler, 401 if the gateway stops it.
+
+### `verify_jwt`: recommend **true** (T254, before T258)
 - **It matches `log-event`.** T241 proved on E2E that the anon key as the bearer plus `x-trustflow-grant` gets through the gateway with `verify_jwt` true. So the clients the route is meant for are not blocked.
 - **True costs nothing.**
   - The route's authority is the grant alone. The bearer is transport only, and the code never reads a user identity from it.
@@ -71,6 +85,8 @@ This follows the T238 procedure:
 - Only this route reads the secret. `ENTRY_DELEGATED_APPEND` stays absent.
 - Confirm the flip by probe, not by reading the value: a fake grant must now give `403 delegation_refused` instead of 503.
 - If it is still 503 after a few minutes, stop and report. Don't redeploy.
+
+**Transport for every request below:** the T258 profile, meaning `apikey` from `readPublishableKey`, no `Authorization` header and the grant header. The "mixed" refusal cases add a bearer (a user session, or the legacy anon JWT) on top of that profile.
 
 **Fixture:**
 - **Deal:** an existing E2E fixture deal owned by the E2E earner whose acceptance is a legacy guest acceptance, with `actor_id` `guest:<address>`. That is the case decision (a) covers.
