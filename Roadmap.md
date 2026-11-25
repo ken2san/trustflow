@@ -49,7 +49,9 @@ and to **production 11-23 16:03 ET** (T224, after the gated check set T217–T22
 Production `guest-contract-events` **v14 from `1011b99`** deployed 11-23 16:06 ET (T225, Kenji OK; same bytes as E2E v13, OPTIONS 200).
 **v5 writes stay gated off**; writers come with later rows. Deferred nonblocking hardening: Codex T186 (RNG exit check in the check-set E2E wrapper).
 
-**Now: row 4 (owner delegated append + resolver), planned 2026-11-26..27, started 2026-11-24 (~2d early): 4a and 4b built and Codex-reviewed locally and pushed 11-24 (T237, tip `6856f41`, Vercel prod READY, served frontend unchanged); 4a migration on E2E. Next: E2E check update (23514→TF011) and apply `20261124130000` (each needs Kenji's OK)**, then 5–8 to M1 on 12-04.
+**Now: row 4 (owner delegated append + resolver), planned 2026-11-26..27, started 2026-11-24 (~2d early): 4a and 4b built, Codex-reviewed, and pushed 11-24 (T237); writer migration `20261124130000` on E2E (T238); log-event v16 and guest-contract-events v14 on E2E with the flag off (T239, `d16e1c8`); TF011 proven on E2E by a rolled-back insert (T240, `acb6b46`). real-grant admission + header-log redaction proof PASS with the flag off (T241, `2ed64cd`; agy fix `648653c` Codex YES, pushed). Next for row 4: migration C and gate open (each needs Kenji's OK).**
+
+**Row 5 (delegated owner read), planned 2026-11-30: started 2026-11-24 (~4 working days early)**, plan `docs/plans/row5-owner-read.md`; 5a (owner read SQL) signed off 11-24 after 4 Codex review rounds (T198–T201; redos recorded in HANDOFF); 5a pushed in T246, then Claude builds 5b (Edge route) locally, Codex reviews. Then 6–8 to M1 on 12-04.
 
 _Row 2 history below._
 
