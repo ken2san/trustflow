@@ -23,7 +23,7 @@ export const RECEIPT_VERSION = 2;
 
 /** The legacy (v1–v4) canonical block: exactly receipt v1's ten fields. */
 function legacyBlock(r: Row): Row {
-  return {
+  const block: Row = {
     id:              r.id,
     type:            r.type,
     contract_id:     r.contract_id,
@@ -35,6 +35,9 @@ function legacyBlock(r: Row): Row {
     agreement_hash:  r.agreement_hash ?? null,
     hash_version:    r.hash_version ?? null,
   };
+  // A withheld input is absent, not an own key holding undefined.
+  for (const k of withheldCanonical(r)) if (block[k] === undefined) delete block[k];
+  return block;
 }
 
 /** v5 (or v5-shaped invalid) rows: an exact own-key projection, nothing synthesized. */
@@ -46,14 +49,31 @@ function strictBlock(r: Row): Row {
   return block;
 }
 
+// Stated only on a receipt with an act that declares a withheld input.
+export const WITHHELD_LIMIT = 'The event hash of any act listing canonical_withheld. Its read withheld that '
+  + 'canonical input by design (a legacy counterparty actor is recorded as their contact '
+  + 'address), so its hash cannot be recomputed and is reported unavailable, never as a '
+  + 'match. The accepted snapshot can still match the agreement digest the acceptance act '
+  + 'recorded while that act\'s own event hash remains unavailable; links to and from it '
+  + 'are checked through its stored event_hash.'
+
 /** Canonical inputs this row's read withheld (owner read `withheld`), in key order. */
 function withheldCanonical(r: Row): string[] {
   const withheld = Array.isArray(r.withheld) ? r.withheld : []
   return CANONICAL_INPUTS_V5.filter(k => withheld.includes(k))
 }
 
-export async function buildReceiptV2({ contract, rows, read, source, issuedAt = new Date().toISOString(), accepted: acceptedOverride }: {
+export async function buildReceiptV2({
+  contract, rows, read, source, issuedAt = new Date().toISOString(), accepted: acceptedOverride,
+  carriesIdempotencyKey = true,
+}: {
   contract: Row, rows: Row[], read: Row, source: unknown, issuedAt?: string,
+  /**
+   * false when the read never carries idempotency keys (the delegated owner
+   * read): the acts then omit the field, so an uncarried key is not mistaken
+   * for a stored null. The CLI keeps the field.
+   */
+  carriesIdempotencyKey?: boolean,
   /** Set by a reader that knows more than its rows (the owner read's anchor and count): no accepted terms, this status. */
   accepted?: { status: string },
 }) {
@@ -75,7 +95,7 @@ export async function buildReceiptV2({ contract, rows, read, source, issuedAt = 
       authentication_as_recorded: r.payload?._auth_method ?? null,
       authentication: r.payload?._authentication ?? null,
       claimed_identity_verified: r.payload?._claimed_identity_verified ?? null,
-      idempotency_key: r.idempotency_key ?? null,
+      ...(carriesIdempotencyKey ? { idempotency_key: r.idempotency_key ?? null } : {}),
       timestamp_token_present: typeof r.timestamp_token_present === 'boolean'
         ? r.timestamp_token_present : Boolean(r.tsa_token),
       ...(withheldCanonical(r).length ? { canonical_withheld: withheldCanonical(r) } : {}),
@@ -140,6 +160,7 @@ export async function buildReceiptV2({ contract, rows, read, source, issuedAt = 
       + 'with the other party\'s receipt can show that.',
       'That anyone authenticated in order to perform an act. Consent given through '
       + 'an authenticated session is not a signature.',
+      ...(acts.some(a => 'canonical_withheld' in a) ? [WITHHELD_LIMIT] : []),
     ],
     counterparty_authority: assuranceMeaning(bearerAssurance('guest_access_token')),
   };

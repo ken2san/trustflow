@@ -236,7 +236,7 @@ export function checkV5Agreement(
  * Only not_in_format passes; the other three are indeterminate.
  */
 export type MissingProof = 'pre_chain' | 'missing' | 'not_recorded'
-export type HashCheck = 'match' | 'mismatch' | 'unsupported' | 'invalid_input' | MissingProof
+export type HashCheck = 'match' | 'mismatch' | 'unsupported' | 'invalid_input' | 'unavailable' | MissingProof
 export type LinkCheck = LinkVerdict | MissingProof | 'not_in_format'
 export type PayloadCheck = 'match' | 'mismatch' | 'unavailable' | 'not_in_format' | 'indeterminate' | 'invalid_input' | MissingProof
 export type AgreementCheck = AgreementVerdict | 'not_bound'
@@ -290,6 +290,14 @@ export interface SliceOptions {
    * and never reclassified (Codex T167).
    */
   knownInvalid?: ReadonlyArray<{ field: string, reason: string } | null | undefined>
+  /**
+   * Legacy rows whose canonical inputs a reader withheld BY DESIGN and declared
+   * (receipt v2 `canonical_withheld`, validated by the caller). Their event hash
+   * cannot be recomputed, so it is reported `unavailable` (indeterminate),
+   * never a mismatch. The stored digest must still be well formed, and link,
+   * payload and agreement are judged as for any other row.
+   */
+  withheldInputs?: ReadonlyArray<readonly string[] | null | undefined>
 }
 
 const FAIL = new Set(['mismatch', 'broken', 'invalid', 'invalid_input'])
@@ -405,9 +413,13 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
     } else {
       const version = cls.version
       const r = row as Record<string, unknown>
+      const withheld = opts.withheldInputs?.[index]
       result.hash = stored.value === null || stored.value === undefined
         ? missingProof()
-        : (await sha256Hex(eventCanonical(r as never, version))) === stored.value ? 'match' : 'mismatch'
+        : withheld?.length
+          ? (isDigest(stored.value) ? 'unavailable' : 'invalid_input')
+          : (await sha256Hex(eventCanonical(r as never, version))) === stored.value ? 'match' : 'mismatch'
+      if (withheld?.length) result.reason = `withheld by the reader: ${withheld.join(', ')}`
       const prev = dataValue(obj, 'prev_event_hash').value
       if (version < 2) result.link = 'not_in_format'
       else if (prev === null || prev === undefined) result.link = missingProof()

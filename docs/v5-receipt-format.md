@@ -56,6 +56,32 @@ Each act has `sequence`, a `canonical` block, the stored `event_hash`, and the h
 
 `credential_id` and `issuer_kind` are nonsecret recorded inputs. A receipt never carries the grant secret, its verifier, or the invite hash.
 
+### `canonical_withheld` (additive, delegated owner read only)
+Decision (a), Codex T202 and Kenji 2026-11-25. A receipt from the delegated owner read (`source.api: "delegated-owner-read"`, row 5b) may carry, on an act, `canonical_withheld: ["actor_id"]`.
+- **Why it exists:** a legacy act whose actor was a guest is recorded as `guest:<address>`. The owner read withholds that under the no-contact rule. The act's `canonical` block then lacks `actor_id`, and nothing stands in for it.
+- **What it means:** that act's event hash cannot be recomputed from this file. The verifier reports it as `hash=unavailable`, which makes the receipt incomplete (exit 3). It is never a match, never a mismatch, and never verified.
+- **Honoured only when all of these hold** (anything else about a declaration is a failed check, exit 1):
+  - the receipt's `source.api` is `delegated-owner-read`;
+  - the value is a non-empty list of distinct strings;
+  - every entry is `actor_id`, the only withholdable input;
+  - the act classifies as legacy (v1–v4). A v5 act, its authority inputs included, cannot declare anything;
+  - the declared set equals the set of required inputs actually absent: no undeclared absence, and no declaration for a present input.
+- **Still checked independently:**
+  - the stored `event_hash` must be a well-formed digest;
+  - links into and out of the act use that stored digest, so a substituted hash breaks the next link;
+  - the remaining canonical fields and the act's agreement citation;
+  - the accepted snapshot against the acceptance act's recorded `agreement_hash`;
+  - every other act.
+- **Limits:**
+  - the label and the declaration confer no verification;
+  - `compare` never runs on such a receipt, because it requires both receipts to verify;
+  - the receipt states the limit in `not_verifiable_here`: the accepted snapshot can match the recorded agreement digest while the acceptance act's own event hash stays unavailable.
+- **Not present** on CLI (`make-receipt`) receipts, which are unchanged.
+
+### `idempotency_key` on delegated receipts
+- The delegated owner read never carries idempotency keys. Its acts **omit** the field.
+- CLI receipts keep it, with `null` meaning stored as null.
+
 ## Verifier behaviour (`verify-receipt.mjs`)
 1. **Version 1 envelope:** today's behaviour. Any act that classifies as `v5`, or carries authority values, makes the receipt fail ("v5 act in a v1 receipt"). It is never verified as legacy.
 2. **Version 2 envelope, per act:**

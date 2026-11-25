@@ -162,6 +162,32 @@ async function verify(receipt) {
   ok(!('verified_here' in receipt), 'the receipt contains no self-assessed verdict');
 }
 
+// Receipt v2 `canonical_withheld` (docs/v5-receipt-format.md): the one
+// omission a reader may declare, on the one surface that makes it. The
+// delegated owner read withholds a legacy guest actor (`guest:<address>`)
+// under the no-contact rule. A declaration only turns that act's hash check
+// into "unavailable"; it never satisfies any check, and anything else about it
+// is a failure.
+const WITHHELD_SOURCE_API = 'delegated-owner-read';
+const WITHHOLDABLE = new Set(['actor_id']);
+
+/** null when the declaration is the supported omission, else why it is not. */
+function withheldDeclarationProblem(receipt, kind, declared, missing) {
+  if (receipt?.source?.api !== WITHHELD_SOURCE_API) return 'only the delegated owner read may declare a withheld input';
+  if (!Array.isArray(declared) || declared.length === 0 || !declared.every(k => typeof k === 'string')) {
+    return 'not a non-empty list of input names';
+  }
+  if (new Set(declared).size !== declared.length) return 'duplicate entries';
+  const unknown = declared.filter(k => !WITHHOLDABLE.has(k));
+  if (unknown.length) return `not a withholdable input: ${unknown.join(', ')}`;
+  if (kind !== 'legacy') return `only a legacy act may withhold an input (this act is ${kind})`;
+  const present = declared.filter(k => !missing.includes(k));
+  if (present.length) return `declared but present: ${present.join(', ')}`;
+  const undeclared = missing.filter(k => !declared.includes(k));
+  if (undeclared.length) return `absent but undeclared: ${undeclared.join(', ')}`;
+  return null;
+}
+
 /**
  * Receipt v2 (docs/v5-receipt-format.md). Classify first, require each act's
  * own canonical inputs, prove the accepted agreement from its snapshot and the
@@ -196,10 +222,11 @@ async function verifyV2(receipt) {
   }
 
   const blocks = [];
+  const withheldInputs = [];
   for (const [i, act] of acts.entries()) {
     const c = act?.canonical;
     const label = `[${i}] ${c?.type ?? '?'}`;
-    if (!c || typeof c !== 'object') { ok(false, `${label} carries canonical inputs`); blocks.push({}); continue; }
+    if (!c || typeof c !== 'object') { ok(false, `${label} carries canonical inputs`); blocks.push({}); withheldInputs.push(null); continue; }
     if (Object.prototype.hasOwnProperty.call(c, 'prev_hash')) {
       ok(false, `${label} uses only prev_event_hash`, 'a prev_hash alias is not part of the format');
     }
@@ -208,8 +235,16 @@ async function verifyV2(receipt) {
     const kind = classifyStoredEvent(c).kind;
     const required = kind === 'v5' || kind === 'invalid' ? REQUIRED_CANONICAL_V5 : REQUIRED_CANONICAL;
     const missing = required.filter(k => !(k in c));
-    ok(missing.length === 0, `${label} carries every canonical input for its version`,
-      missing.length ? `missing: ${missing.join(', ')}` : '');
+    const declared = Object.prototype.hasOwnProperty.call(act, 'canonical_withheld') ? act.canonical_withheld : undefined;
+    let honoured = null;
+    if (declared !== undefined) {
+      const problem = withheldDeclarationProblem(receipt, kind, declared, missing);
+      if (ok(problem === null, `${label} declares a supported withheld input`, problem ?? declared.join(', '))) honoured = declared;
+    }
+    const undeclared = honoured ? missing.filter(k => !honoured.includes(k)) : missing;
+    ok(undeclared.length === 0, `${label} carries every canonical input for its version`,
+      undeclared.length ? `missing: ${undeclared.join(', ')}` : honoured ? `withheld by the reader: ${honoured.join(', ')}` : '');
+    withheldInputs.push(honoured);
     const copy = fromV5Transport({ ...c, event_hash: act.event_hash });
     blocks.push(copy.ok ? copy.row : c);
   }
@@ -244,6 +279,7 @@ async function verifyV2(receipt) {
   }
 
   const slice = await verifyEvidenceSlice(blocks, {
+    withheldInputs,
     startsAtChainStart: read?.start === 'first_event',
     tailComplete: read?.tail_complete === true,
     // A whole, complete read with no acceptance act is provably pre-acceptance.
