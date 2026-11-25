@@ -352,6 +352,38 @@ function resolveAcceptance(rows: readonly unknown[], opts: SliceOptions):
   return { marker: a, status: { status: 'caller' } }
 }
 
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ZONED_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/
+const PRINTABLE = /^[\x20-\x7e]{1,200}$/
+
+/**
+ * The structural check a withheld legacy act still owes (Codex T203). Its hash
+ * cannot be recomputed, so every input that WAS supplied must at least have the
+ * shape a recorded row of that version has; permitted legacy nulls stay
+ * permitted. null when well formed, else the first malformed field. Values of
+ * the right shape remain unprovable from a receipt; that is the declared limit.
+ */
+export function legacyWithheldShapeProblem(row: Record<string, unknown>, version: number): string | null {
+  const nullOr = (v: unknown, ok: (x: unknown) => boolean) => v === null || ok(v)
+  if (!Number.isInteger(version) || version < 1 || version > 4) return 'hash_version: not a legacy version'
+  if (typeof row.id !== 'string' || !UUID_TEXT.test(row.id)) return 'id: not a UUID'
+  if (typeof row.contract_id !== 'string' || !UUID_TEXT.test(row.contract_id)) return 'contract_id: not a UUID'
+  if (typeof row.type !== 'string' || !PRINTABLE.test(row.type)) return 'type: not a recorded event type'
+  if (typeof row.created_at !== 'string' || !ZONED_TIMESTAMP.test(row.created_at)
+      || Number.isNaN(new Date(row.created_at).getTime())) return 'created_at: not a zoned timestamp'
+  if (!nullOr(row.dod_hash, isDigest)) return 'dod_hash: not a digest or null'
+  const prevOk = version < 2 ? row.prev_event_hash === null
+    : nullOr(row.prev_event_hash, v => v === GENESIS_HASH || isDigest(v))
+  if (!prevOk) return 'prev_event_hash: not a digest, GENESIS or null for this version'
+  if (!(version < 3 ? row.payload_hash === null : nullOr(row.payload_hash, isDigest))) {
+    return 'payload_hash: not a digest or null for this version'
+  }
+  if (!(version < 4 ? row.agreement_hash === null : nullOr(row.agreement_hash, isDigest))) {
+    return 'agreement_hash: not a digest or null for this version'
+  }
+  return null
+}
+
 /**
  * Verify an ordered slice of stored rows (chronological) for one deal. Every
  * row is reported, none is skipped, and the overall result is `failed` if
@@ -414,12 +446,19 @@ export async function verifyEvidenceSlice(rows: readonly unknown[], opts: SliceO
       const version = cls.version
       const r = row as Record<string, unknown>
       const withheld = opts.withheldInputs?.[index]
-      result.hash = stored.value === null || stored.value === undefined
-        ? missingProof()
-        : withheld?.length
-          ? (isDigest(stored.value) ? 'unavailable' : 'invalid_input')
+      if (withheld?.length) {
+        // Checked first, before any missing-proof reading: a declaration is
+        // honoured only over otherwise well-formed evidence (Codex T203).
+        const problem = !isDigest(stored.value)
+          ? 'event_hash: not a recorded digest'
+          : legacyWithheldShapeProblem(r, version)
+        result.hash = problem ? 'invalid_input' : 'unavailable'
+        result.reason = problem ?? `withheld by the reader: ${withheld.join(', ')}`
+      } else {
+        result.hash = stored.value === null || stored.value === undefined
+          ? missingProof()
           : (await sha256Hex(eventCanonical(r as never, version))) === stored.value ? 'match' : 'mismatch'
-      if (withheld?.length) result.reason = `withheld by the reader: ${withheld.join(', ')}`
+      }
       const prev = dataValue(obj, 'prev_event_hash').value
       if (version < 2) result.link = 'not_in_format'
       else if (prev === null || prev === undefined) result.link = missingProof()
