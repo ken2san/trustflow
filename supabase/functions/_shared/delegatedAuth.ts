@@ -21,8 +21,10 @@
 // anon JWT is deliberately not accepted in any form.
 //
 // THE ALLOWLIST
-// Only the string values of SUPABASE_PUBLISHABLE_KEYS that are publishable
-// keys. SUPABASE_ANON_KEY is not read (its content differs by environment, and
+// Only the string values of SUPABASE_PUBLISHABLE_KEYS that are exactly one
+// publishable-key token (PUBLISHABLE_TOKEN: no whitespace, comma or other
+// separator, so no configured value can equal a merged or padded request
+// value; Codex T208). SUPABASE_ANON_KEY is not read (its content differs by environment, and
 // on some it is a legacy JWT), and nothing is ever taken from a secret or
 // service-role variable. A missing, malformed or empty configuration admits
 // nothing. A key removed from the project disappears from the platform's list
@@ -39,7 +41,10 @@ export const GRANT_HEADER = 'x-trustflow-grant'
 // Row 1's issue format: a lowercase UUID, one dot, 64 lowercase hex characters.
 const GRANT_FORMAT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([0-9a-f]{64})$/
 const GRANT_LENGTH = 36 + 1 + 64
-const PUBLISHABLE_PREFIX = 'sb_publishable_'
+// One publishable key: the prefix and a non-empty run of URL-safe characters.
+// Anything else (whitespace, a comma from a merged repeated header, quotes) is
+// not a key, in the configuration or in a request.
+export const PUBLISHABLE_TOKEN = /^sb_publishable_[A-Za-z0-9_-]+$/
 
 export type DelegatedAdmission =
   | { delegated: false }
@@ -63,7 +68,7 @@ export function publishableKeys(raw: string | undefined): string[] {
   try { parsed = JSON.parse(raw) } catch { return [] }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
   const keys = Object.values(parsed as Record<string, unknown>)
-    .filter((v): v is string => typeof v === 'string' && v.startsWith(PUBLISHABLE_PREFIX) && v.length > PUBLISHABLE_PREFIX.length)
+    .filter((v): v is string => typeof v === 'string' && PUBLISHABLE_TOKEN.test(v))
   return [...new Set(keys)]
 }
 
@@ -82,8 +87,9 @@ function sameText(a: string, b: string): boolean {
  * an empty list admits nothing.
  *
  * Repeated headers reach `Headers.get` joined with ", ", so a repeated grant or
- * apikey is refused by the same rule as a comma-joined one: neither format has
- * a comma.
+ * apikey is refused by the same rule as a comma-joined one: neither token
+ * grammar admits a comma or a space. `publicKeys` entries that are not one
+ * token are ignored as well, so a direct caller cannot reopen that path.
  */
 export async function delegatedAdmission(headers: Headers, publicKeys: readonly string[]): Promise<DelegatedAdmission> {
   const raw = headers.get(GRANT_HEADER)
@@ -100,8 +106,11 @@ export async function delegatedAdmission(headers: Headers, publicKeys: readonly 
   if (headers.get('authorization') !== null) {
     return { delegated: true, ok: false, reason: 'mixed_credentials' }
   }
+  // The request value must itself be one token before any comparison: a
+  // repeated apikey arrives comma-joined and is refused here, whatever the list.
   const apikey = headers.get('apikey')
-  if (apikey === null || !publicKeys.some(k => sameText(apikey, k))) {
+  if (apikey === null || !PUBLISHABLE_TOKEN.test(apikey)
+      || !publicKeys.some(k => PUBLISHABLE_TOKEN.test(k) && sameText(apikey, k))) {
     return { delegated: true, ok: false, reason: 'public_key' }
   }
   return { delegated: true, ok: true, credentialId: m[1], secretHash: await sha256Hex(m[2]) }

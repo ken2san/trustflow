@@ -11,20 +11,27 @@
 
 import { execFileSync } from 'node:child_process'
 
-const PREFIX = 'sb_publishable_'
+// The same one-token grammar as supabase/functions/_shared/delegatedAuth.ts
+// (PUBLISHABLE_TOKEN), kept literal here because this file runs under Node
+// without the Deno function modules.
+const PUBLISHABLE_TOKEN = /^sb_publishable_[A-Za-z0-9_-]+$/
+// Key aliases this helper may select. Fixed so no caller-supplied text can
+// reach an error message.
+const ALIASES = new Set(['default'])
 
 /**
  * The publishable key named `name` from `supabase projects api-keys -o json`
  * output. Refuses anything that is not exactly one well-formed publishable key.
  */
 export function selectPublishableKey(json, name = 'default') {
+  if (!ALIASES.has(name)) throw new Error('unsupported publishable key alias')
   let rows
   try { rows = JSON.parse(json) } catch { throw new Error('api-keys output is not JSON') }
   if (!Array.isArray(rows)) throw new Error('api-keys output is not a list')
   const hits = rows.filter(r => r && r.type === 'publishable' && r.name === name)
-  if (hits.length !== 1) throw new Error(`expected exactly one publishable key named ${name}, found ${hits.length}`)
+  if (hits.length !== 1) throw new Error('expected exactly one publishable key with the selected alias')
   const key = hits[0].api_key
-  if (typeof key !== 'string' || !key.startsWith(PREFIX) || key.length <= PREFIX.length) {
+  if (typeof key !== 'string' || !PUBLISHABLE_TOKEN.test(key)) {
     throw new Error('the selected key is not a publishable key')
   }
   return key
@@ -37,7 +44,15 @@ export function projectRef(supabaseUrl) {
   return m[1]
 }
 
-/** Read the project's publishable key through the logged-in Supabase CLI. */
+/**
+ * Read the project's publishable key through the logged-in Supabase CLI.
+ *
+ * Measured against the installed CLI 2.105.0 (T257, T259): the explicit target
+ * flag is `--project-ref` (the newer `--remote`/`--reveal` flags do not exist
+ * there), and `-o json` yields rows of { name, type: legacy|publishable|secret,
+ * api_key }. No reveal flag is passed. This helper does not pin E2E: the caller
+ * keeps its exact target guard.
+ */
 export function readPublishableKey(supabaseUrl, name = 'default') {
   const ref = projectRef(supabaseUrl)
   let out
