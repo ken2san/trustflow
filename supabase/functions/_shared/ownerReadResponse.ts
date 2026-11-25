@@ -46,7 +46,22 @@ export async function shapeOwnerRead(result: Row): Promise<Row> {
     read: { start: 'first_event', tail_complete: boundary.truncated === false, pages: 1, row_cap: boundary.cap_events },
     source: OWNER_READ_SOURCE,
     issuedAt: result.authorized_at,
+    carriesIdempotencyKey: false,
     ...(acceptanceOverride(boundary) ? { accepted: acceptanceOverride(boundary) as { status: string } } : {}),
   })
   return { contract: result.contract, events, read_boundary: boundary, receipt }
+}
+
+/**
+ * The whole encoded 200 body has an application budget of 2 MiB of UTF-8
+ * (Codex T202). The SQL cap bounds only the projected event array; the
+ * contract, both agreement snapshots and the receipt's acts come on top.
+ * Serialized once: the measured text is the text sent.
+ */
+export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+export function encodeOwnerRead(envelope: unknown): { text: string, bytes: number, over: boolean } {
+  const text = JSON.stringify(envelope)
+  const bytes = new TextEncoder().encode(text).length
+  return { text, bytes, over: bytes > MAX_RESPONSE_BYTES }
 }

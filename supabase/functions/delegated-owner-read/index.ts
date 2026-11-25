@@ -15,18 +15,30 @@
 // 200 the envelope; 400 malformed body; 405 method; 403 `delegation_refused`
 // for every authorization refusal, one answer that reveals nothing about a
 // grant; 503 `delegated_read_unavailable` when the route is off or the RPC is
-// absent; 500 `internal_error` for anything else, never the raw error. Every
+// absent; 500 `response_too_large` when the encoded envelope would exceed
+// MAX_RESPONSE_BYTES (2 MiB UTF-8): no deal data, and no partial envelope,
+// since trimming would have to rebuild prefix, boundary and receipt together;
+// 500 `internal_error` for anything else, never the raw error. Every
 // answer is `Cache-Control: private, no-store`. Log lines carry a fixed reason
-// and validated ids or null: never a header, a secret or deal data.
+// and validated ids or null: never a header, a secret or deal data. A database
+// error code is logged only from LOGGED_ERROR_CODES, otherwise as `rpc_error`.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
 import { DELEGATION_REFUSED, delegatedAdmission, refusalAnswer } from '../_shared/delegatedAuth.ts'
-import { shapeOwnerRead } from '../_shared/ownerReadResponse.ts'
+import { MAX_RESPONSE_BYTES, encodeOwnerRead, shapeOwnerRead } from '../_shared/ownerReadResponse.ts'
 
 export const DELEGATED_READ_UNAVAILABLE = { error: 'delegated_read_unavailable', status: 503 } as const
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const NO_STORE = 'private, no-store'
+// Error codes this route may write to a log verbatim: the PostgreSQL states a
+// read can meet (serialization, deadlock, lock or statement timeout, aborted
+// transaction, connection), the project's isolation guard, and PostgREST's
+// own. Anything else, being whatever string arrived, is logged as rpc_error.
+const LOGGED_ERROR_CODES = new Set([
+  '40001', '40P01', '55P03', '57014', '25P02', '53300', '08006', 'TF005',
+  'PGRST000', 'PGRST001', 'PGRST002', 'PGRST003', 'PGRST301',
+])
 
 Deno.serve(async (req: Request) => {
   const cors = corsHeaders(req)
@@ -70,7 +82,8 @@ Deno.serve(async (req: Request) => {
         log('error', { delegated_read_fault: 'rpc_missing', contract_id: contractId })
         return json({ error: DELEGATED_READ_UNAVAILABLE.error }, DELEGATED_READ_UNAVAILABLE.status)
       }
-      log('error', { delegated_read_fault: typeof error.code === 'string' ? error.code : 'rpc_error', contract_id: contractId, credential_id: credentialId })
+      const code = typeof error.code === 'string' && LOGGED_ERROR_CODES.has(error.code) ? error.code : 'rpc_error'
+      log('error', { delegated_read_fault: code, contract_id: contractId, credential_id: credentialId })
       return json({ error: 'internal_error' }, 500)
     }
 
@@ -82,7 +95,14 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'internal_error' }, 500)
     }
 
-    return json(await shapeOwnerRead(data), 200)
+    const encoded = encodeOwnerRead(await shapeOwnerRead(data))
+    if (encoded.over) {
+      log('error', { delegated_read_fault: 'response_too_large', bytes: encoded.bytes, limit: MAX_RESPONSE_BYTES, contract_id: contractId, credential_id: credentialId })
+      return json({ error: 'response_too_large' }, 500)
+    }
+    return new Response(encoded.text, {
+      status: 200, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': NO_STORE },
+    })
   } catch {
     log('error', { delegated_read_fault: 'unexpected_throw' })
     return json({ error: 'internal_error' }, 500)
