@@ -528,3 +528,84 @@ describe('T247: canonical_withheld on the delegated owner read', { timeout: TEST
     expect(runReceipt('cli-unchanged', receipt).status).toBe(0)
   })
 })
+
+// ── T248 (Codex T203): a declaration is honoured only over well-formed evidence ─
+// The withheld act is the receipt's ONLY act, so no later link can fail in its
+// place: whatever fails here is the withheld act's own check.
+async function withheldOnly({ type = 'dod.consent_recorded' } = {}) {
+  const snapshot = buildAgreementSnapshot(CONTRACT_V2)
+  const accepted = await sha256Hex(stableStringify(snapshot))
+  const acceptance = type === 'dod.consent_recorded'
+  const a = await v4Row(1, 'GENESIS', { type, payload: acceptance ? { _agreement: snapshot } : { note: 'n' }, agreement: acceptance ? accepted : null })
+  a.actor_id = 'guest:withheld-canary'
+  a.event_hash = await sha256Hex(eventCanonical(a, 4))
+  delete a.actor_id
+  a.withheld = ['actor_id']
+  return buildReceiptV2({ contract: CONTRACT_V2, rows: [a], read: COMPLETE_READ, source: OWNER_READ_SOURCE, issuedAt: '2026-04-01T00:00:00.000Z', carriesIdempotencyKey: false })
+}
+
+describe('T248: the withheld act must otherwise be well formed', { timeout: TEST_MS }, () => {
+  it('control: the single declared act is incomplete (exit 3) with no failure', async () => {
+    const { status, out } = runReceipt('t248-control', await withheldOnly())
+    expect(failLines(out)).toEqual([])
+    expect(out).toMatch(/ ok {2}\[0\] legacy hash=unavailable link=linked agreement=match/)
+    expect(status).toBe(3)
+  })
+
+  for (const [label, mutate] of [
+    ['a null stored hash', r => { r.acts[0].event_hash = null }],
+    ['an absent stored hash', r => { delete r.acts[0].event_hash }],
+  ]) {
+    it(`${label} under a declaration fails (exit 1), not missing proof`, async () => {
+      const receipt = await withheldOnly()
+      mutate(receipt)
+      const { status, out } = runReceipt(`t248-${label}`, receipt)
+      expect(out).toMatch(/FAIL \[0\] legacy hash=invalid_input .*event_hash: not a recorded digest/)
+      expect(failLines(out)).toHaveLength(1)
+      expect(status).toBe(1)
+    })
+  }
+
+  // A complete key set, a valid declaration, one malformed remaining input.
+  for (const [field, value, reason] of [
+    ['payload_hash', 'not-a-digest', 'payload_hash: not a digest or null for this version'],
+    ['dod_hash', 'D'.repeat(64), 'dod_hash: not a digest or null'],
+    ['created_at', '2026-04-01 00:00:01', 'created_at: not a zoned timestamp'],
+    ['created_at', '2026-13-45T99:99:99Z', 'created_at: not a zoned timestamp'],
+    ['id', 'not-a-uuid', 'id: not a UUID'],
+    ['type', '', 'type: not a recorded event type'],
+    ['prev_event_hash', 'zz', 'prev_event_hash: not a digest, GENESIS or null for this version'],
+    ['agreement_hash', 42, 'agreement_hash: not a digest or null for this version'],
+  ]) {
+    it(`a malformed ${field} (${JSON.stringify(value)}) on the withheld act fails (exit 1)`, async () => {
+      const receipt = await withheldOnly()
+      receipt.acts[0].canonical[field] = value
+      expect(Object.keys(receipt.acts[0].canonical).sort()).toEqual(
+        ['agreement_hash', 'contract_id', 'created_at', 'dod_hash', 'hash_version', 'id', 'payload_hash', 'prev_event_hash', 'type'])
+      expect(receipt.acts[0].canonical_withheld).toEqual(['actor_id'])
+      const { status, out } = runReceipt(`t248-${field}-${String(value).slice(0, 8)}`, receipt)
+      // The declaration itself is valid; the failure is the malformed input.
+      expect(out).toMatch(/ ok {2}\[0\] .*declares a supported withheld input/)
+      expect(out).toMatch(new RegExp(`FAIL \\[0\\] legacy hash=invalid_input .*${reason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+      expect(status).toBe(1)
+    })
+  }
+
+  it('permitted legacy nulls stay permitted: null payload, DoD and agreement digests are incomplete, not failed', async () => {
+    const receipt = await withheldOnly({ type: 'performance.asserted' })
+    Object.assign(receipt.acts[0].canonical, { payload_hash: null, dod_hash: null, agreement_hash: null })
+    const { status, out } = runReceipt('t248-nulls', receipt)
+    expect(failLines(out)).toEqual([])
+    expect(out).toMatch(/\[0\] legacy hash=unavailable/)
+    expect(status).toBe(3)
+  })
+
+  it('a non-UTC zoned timestamp, as the RPC can emit it, is well formed', async () => {
+    const receipt = await withheldOnly()
+    receipt.acts[0].canonical.created_at = receipt.acts[0].canonical.created_at.replace(/\.\d{3}Z$/, '.123456-05:00')
+    const { status, out } = runReceipt('t248-zone', receipt)
+    expect(out).toMatch(/\[0\] legacy hash=unavailable/)
+    expect(failLines(out)).toEqual([])
+    expect(status).toBe(3)
+  })
+})
