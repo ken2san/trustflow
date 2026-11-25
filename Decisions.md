@@ -1,6 +1,6 @@
 # TrustFlow — Architecture Decisions
 
-_Last updated: 2026-11-24_
+_Last updated: 2026-11-25_
 
 > This file records significant design decisions and the reasoning behind them.
 > AI agents must read this before proposing changes to established patterns.
@@ -14,6 +14,24 @@ _Last updated: 2026-11-24_
 ---
 
 ## Current scope
+
+### [2026-11-25] — A withheld canonical input is unavailable (exit 3), not a failure
+
+**Decision**: On the delegated owner read, a receipt act may declare the one input withheld by design: a legacy guest `actor_id` (`guest:<address>`), via `canonical_withheld: ["actor_id"]`. The offline verifier then reports that act's hash as unavailable, and the receipt is incomplete (exit 3). Any other omission or declaration fails (exit 1). Kenji: "(a) でええ。伏せた項目は判定不能（exit 3）にして、2MiB上限も一緒に直して".
+
+**Context**: The no-contact rule withholds the guest actor from the owner read. Without a declaration, today's verifier failed every guest-accepted deal's receipt with a hash mismatch (Codex T202). That reads as tampering when the record is intact.
+
+**Alternatives considered**:
+
+- (b) keep exit 1. Rejected: it conflates a deliberate omission with a failed integrity check.
+- A redacted or hashed stand-in for the address. Rejected: it would claim a hash match over a value that is not the input.
+
+**Consequences**:
+- **The rules:** the declaration is honoured only on `source.api: "delegated-owner-read"`, only for a legacy act, and only when the declared set equals the absent set (`docs/v5-receipt-format.md`).
+- **What it never does:** produce exit 0 or allow `compare`.
+- **The route's budget:** the same change gives the route a 2 MiB UTF-8 ceiling on the whole response. An oversized read answers `500 response_too_large`, with no data.
+
+---
 
 ### [2026-11-24] — Row 4 plan signed off; row 4 is built by Claude and reviewed by Codex
 
