@@ -609,3 +609,33 @@ describe('T248: the withheld act must otherwise be well formed', { timeout: TEST
     expect(status).toBe(3)
   })
 })
+
+// ── T249 (Codex T204): the calendar day itself, never a Date rollover ───────
+describe('T249: withheld-act timestamps are checked against the calendar', { timeout: TEST_MS }, () => {
+  const at = async (created_at) => {
+    const receipt = await withheldOnly()
+    receipt.acts[0].canonical.created_at = created_at
+    return runReceipt(`t249-${created_at}`, receipt)
+  }
+  for (const bad of [
+    '2026-02-29T00:00:01.000Z',       // not a leap year: Date would roll it to 1 March
+    '1900-02-29T00:00:01.000Z',       // century, not a leap year
+    '2026-04-31T00:00:01.000Z',       // April has 30 days
+    '2026-04-01T24:00:00.000Z',       // PostgreSQL never emits 24:00
+    '2026-04-01T00:00:01.000+24:00',  // no such offset
+  ]) {
+    it(`${bad} fails (exit 1)`, async () => {
+      const { status, out } = await at(bad)
+      expect(out).toMatch(/FAIL \[0\] legacy hash=invalid_input .*created_at: not a zoned timestamp/)
+      expect(status).toBe(1)
+    })
+  }
+  for (const good of ['2028-02-29T00:00:01.000Z', '2000-02-29T00:00:01.000Z', '2026-04-01T00:00:01.123456-05:00']) {
+    it(`${good} is well formed (exit 3)`, async () => {
+      const { status, out } = await at(good)
+      expect(out).toMatch(/\[0\] legacy hash=unavailable/)
+      expect(failLines(out)).toEqual([])
+      expect(status).toBe(3)
+    })
+  }
+})
