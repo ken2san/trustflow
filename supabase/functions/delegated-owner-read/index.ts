@@ -4,9 +4,9 @@
 // retrieves one deal's authorized projection and a portable receipt.
 //
 // AUTHORITY
-// `Authorization: Bearer <public anon key>` is gateway transport only. The
-// grant travels in `x-trustflow-grant`; only the SHA-256 of its secret leaves
-// this function (_shared/delegatedAuth.ts). The database decides everything
+// `apikey: <publishable key>` is transport only, with no Authorization header
+// (_shared/delegatedAuth.ts). The grant travels in `x-trustflow-grant`; only
+// the SHA-256 of its secret leaves this function. The database decides everything
 // under its locks in ONE call, read_delegated_owner_deal, which also
 // materializes the data. This function never reads a table: no deal pre-read,
 // no event count, no acceptance lookup, no owner-session or guest fallback.
@@ -25,7 +25,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.1'
 import { corsHeaders } from '../_shared/cors.ts'
-import { DELEGATION_REFUSED, delegatedAdmission, refusalAnswer } from '../_shared/delegatedAuth.ts'
+import { DELEGATION_REFUSED, delegatedAdmission, publishableKeys, refusalAnswer } from '../_shared/delegatedAuth.ts'
 import { MAX_RESPONSE_BYTES, encodeOwnerRead, shapeOwnerRead } from '../_shared/ownerReadResponse.ts'
 
 export const DELEGATED_READ_UNAVAILABLE = { error: 'delegated_read_unavailable', status: 503 } as const
@@ -64,7 +64,7 @@ Deno.serve(async (req: Request) => {
     }
     const contractId: string = body.contract_id
 
-    const delegation = await delegatedAdmission(req.headers, Deno.env.get('SUPABASE_ANON_KEY') ?? '')
+    const delegation = await delegatedAdmission(req.headers, publishableKeys(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS')))
     const credentialId = delegation.delegated && delegation.ok ? delegation.credentialId : null
     const refuse = (reason: string) => {
       log('warn', { delegated_read_refusal: reason, contract_id: contractId, credential_id: credentialId })

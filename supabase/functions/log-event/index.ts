@@ -75,7 +75,7 @@ import {
   type AuthAssurance, assuranceFromClaims, bearerAssurance, claimsFromVerifiedJwt,
 } from '../_shared/authAssurance.ts'
 import {
-  DELEGATED_UNAVAILABLE, DELEGATION_REFUSED, GRANT_HEADER, delegatedAdmission, refusalAnswer,
+  DELEGATED_UNAVAILABLE, DELEGATION_REFUSED, GRANT_HEADER, delegatedAdmission, publishableKeys, refusalAnswer,
 } from '../_shared/delegatedAuth.ts'
 import {
   DELEGATED_TYPES, buildDelegatedEventV5, finalRecordedTree, inDelegatedDomain,
@@ -276,7 +276,7 @@ async function delegatedAppend(
   // An empty key would skip the replay lookup yet occupy the key in the index.
   if (op.idempotencyKey === '') return json({ error: 'invalid_idempotency_key' }, 400)
 
-  const delegation = await delegatedAdmission(req.headers, Deno.env.get('SUPABASE_ANON_KEY') ?? '')
+  const delegation = await delegatedAdmission(req.headers, publishableKeys(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS')))
   const credentialId = delegation.delegated && delegation.ok ? delegation.credentialId : null
   // The only contract id any delegated log line may carry: the request value
   // once it is a canonical lowercase UUID, otherwise null. Computed before the

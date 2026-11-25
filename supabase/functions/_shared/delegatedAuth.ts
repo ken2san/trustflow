@@ -1,14 +1,32 @@
 // supabase/functions/_shared/delegatedAuth.ts
 //
-// Admission for a delegated (agent grant) request to log-event: row 4a,
-// docs/plans/row4-owner-append.md §4a. Pure apart from hashing.
+// Admission for a delegated (agent grant) request: row 4a
+// (docs/plans/row4-owner-append.md §4a) for log-event, and row 5b for
+// delegated-owner-read. Pure apart from hashing.
 //
 // TWO CREDENTIALS, KEPT APART
-// `Authorization: Bearer <public anon key>` is transport only: it gets the
-// request through the gateway (log-event is verify_jwt: true) and is never
-// owner authentication. The grant travels in `x-trustflow-grant` as
-// `<credential_id>.<secret>`, and only the SHA-256 of the secret leaves this
-// module. The database decides everything else under its locks.
+// `apikey: <publishable key>` is transport only: it says the caller holds one
+// of this project's active public keys and is never owner authentication. The
+// grant travels in `x-trustflow-grant` as `<credential_id>.<secret>`, and only
+// the SHA-256 of the secret leaves this module. The database decides
+// everything else under its locks.
+//
+// WHY `apikey` AND NOT A BEARER (T256, T257, Codex T207)
+// The platform injects the new `sb_publishable_` key as SUPABASE_ANON_KEY,
+// while legacy clients sent the old anon JWT as a bearer, so an exact bearer
+// comparison could never match on hosted E2E. The new keys are not JWTs and
+// belong in `apikey`; `Authorization` is for user JWTs. So a delegated request
+// carries NO Authorization header at all: any value there (a user session, a
+// legacy anon JWT, a key sent as a bearer) is a mixed credential. The legacy
+// anon JWT is deliberately not accepted in any form.
+//
+// THE ALLOWLIST
+// Only the string values of SUPABASE_PUBLISHABLE_KEYS that are publishable
+// keys. SUPABASE_ANON_KEY is not read (its content differs by environment, and
+// on some it is a legacy JWT), and nothing is ever taken from a secret or
+// service-role variable. A missing, malformed or empty configuration admits
+// nothing. A key removed from the project disappears from the platform's list
+// and so from this one.
 //
 // A PRESENT HEADER COMMITS THE ROUTE
 // Once `x-trustflow-grant` is present at all (blank, malformed, repeated or
@@ -21,10 +39,11 @@ export const GRANT_HEADER = 'x-trustflow-grant'
 // Row 1's issue format: a lowercase UUID, one dot, 64 lowercase hex characters.
 const GRANT_FORMAT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([0-9a-f]{64})$/
 const GRANT_LENGTH = 36 + 1 + 64
+const PUBLISHABLE_PREFIX = 'sb_publishable_'
 
 export type DelegatedAdmission =
   | { delegated: false }
-  | { delegated: true, ok: false, reason: 'malformed_grant' | 'mixed_credentials' }
+  | { delegated: true, ok: false, reason: 'malformed_grant' | 'mixed_credentials' | 'public_key' }
   | { delegated: true, ok: true, credentialId: string, secretHash: string }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -33,14 +52,40 @@ async function sha256Hex(text: string): Promise<string> {
 }
 
 /**
- * Whether this request is delegated, and if so whether its credentials are
- * admissible as a pair. `anonKey` is the project's public anon key; an empty
- * value admits nothing, so a misconfigured function fails closed.
- *
- * Repeated headers reach `Headers.get` joined with ", ", so a repeated grant is
- * refused by the same rule as a comma-joined one: the format has no comma.
+ * The publishable keys this function accepts as transport, from the platform's
+ * SUPABASE_PUBLISHABLE_KEYS (a JSON object of name -> key). Anything else
+ * (unset, not JSON, not an object, a non-string value, a value that is not a
+ * publishable key) contributes nothing, so a bad configuration fails closed.
  */
-export async function delegatedAdmission(headers: Headers, anonKey: string): Promise<DelegatedAdmission> {
+export function publishableKeys(raw: string | undefined): string[] {
+  if (!raw) return []
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return [] }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+  const keys = Object.values(parsed as Record<string, unknown>)
+    .filter((v): v is string => typeof v === 'string' && v.startsWith(PUBLISHABLE_PREFIX) && v.length > PUBLISHABLE_PREFIX.length)
+  return [...new Set(keys)]
+}
+
+// Equality without an early exit on the first differing character. The keys
+// are public, so this is hygiene rather than secrecy.
+function sameText(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
+/**
+ * Whether this request is delegated, and if so whether its credentials are
+ * admissible as a pair. `publicKeys` is the allowlist from publishableKeys();
+ * an empty list admits nothing.
+ *
+ * Repeated headers reach `Headers.get` joined with ", ", so a repeated grant or
+ * apikey is refused by the same rule as a comma-joined one: neither format has
+ * a comma.
+ */
+export async function delegatedAdmission(headers: Headers, publicKeys: readonly string[]): Promise<DelegatedAdmission> {
   const raw = headers.get(GRANT_HEADER)
   if (raw === null) return { delegated: false }
   // Capped before any parsing.
@@ -50,10 +95,14 @@ export async function delegatedAdmission(headers: Headers, anonKey: string): Pro
   if (headers.get('x-guest-access-token') !== null) {
     return { delegated: true, ok: false, reason: 'mixed_credentials' }
   }
-  // The bearer must be exactly the public anon key. A user JWT, any other
-  // bearer, or none at all makes the request mixed.
-  if (!anonKey || headers.get('authorization') !== `Bearer ${anonKey}`) {
+  // No bearer of any kind: a user JWT, a legacy anon JWT or a key sent as a
+  // bearer all make the request mixed. An empty header counts as present.
+  if (headers.get('authorization') !== null) {
     return { delegated: true, ok: false, reason: 'mixed_credentials' }
+  }
+  const apikey = headers.get('apikey')
+  if (apikey === null || !publicKeys.some(k => sameText(apikey, k))) {
+    return { delegated: true, ok: false, reason: 'public_key' }
   }
   return { delegated: true, ok: true, credentialId: m[1], secretHash: await sha256Hex(m[2]) }
 }
