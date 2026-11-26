@@ -84,6 +84,39 @@ export async function publishableKey() {
   return selectPublishableKey(r.stdout)
 }
 
+const GATE_SQL = 'select open from private.v5_write_gate where id'
+
+/**
+ * The CLI arguments for one gate query. `--agent no` pins the output shape:
+ * CLI 2.105.0 wraps `-o json` rows as { boundary, rows, warning } only when
+ * it detects an AI agent in its environment, and prints a bare array
+ * otherwise (T278: the wrapper under an agent shell, a bare array under
+ * run()'s allowlisted env). Pinned, the shape no longer depends on who runs it.
+ */
+export const gateQueryArgs = dbUrl => ['db', 'query', '--agent', 'no', '--db-url', dbUrl, '-o', 'json', GATE_SQL]
+
+/**
+ * 'open' or 'closed' from the CLI's stdout. Exactly a bare JSON array of one
+ * { open: boolean } object with no other key; anything else, the agent
+ * wrapper included (it would mean the pin did not hold), is a TrialError.
+ */
+export function parseGateRows(stdout) {
+  let rows
+  try { rows = JSON.parse(stdout) } catch { rows = null }
+  if (!Array.isArray(rows) || rows.length !== 1 || rows[0] === null || typeof rows[0] !== 'object'
+      || Object.keys(rows[0]).length !== 1 || typeof rows[0].open !== 'boolean') {
+    throw new TrialError('gate readback: not exactly one boolean gate row')
+  }
+  return rows[0].open ? 'open' : 'closed'
+}
+
+/** One gate query through run(), i.e. under the env a real run gives the child. */
+export async function queryGate({ dbUrl, password }) {
+  const r = await run('supabase', gateQueryArgs(dbUrl), { env: { PGPASSWORD: password }, timeout: 90_000 })
+  if (r.status !== 0) throw new TrialError(`gate readback: supabase db query exited ${r.status}`)
+  return parseGateRows(r.stdout)
+}
+
 /**
  * The v5 gate as the E2E database holds it: 'open' or 'closed'. Read-only
  * connection; the password goes to the child's environment only.
@@ -92,16 +125,11 @@ export async function readGate() {
   const opEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('OP_')))
   const pw = await run('op', ['read', '--no-newline', DB_PASSWORD_REF], { env: opEnv, timeout: 90_000 })
   if (pw.status !== 0 || pw.stdout === '') throw new TrialError('gate readback: the E2E database password could not be read')
-  const r = await run('supabase', ['db', 'query', '--db-url', DB_URL, '-o', 'json',
-    'select open from private.v5_write_gate where id'], { env: { PGPASSWORD: pw.stdout }, timeout: 90_000 })
-  if (r.status !== 0) throw new TrialError(`gate readback: supabase db query exited ${r.status}`)
-  let rows
-  try { rows = JSON.parse(r.stdout).rows } catch { rows = null }
-  if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0]?.open !== 'boolean') {
-    throw new TrialError('gate readback: not exactly one boolean gate row')
-  }
-  return rows[0].open ? 'open' : 'closed'
+  return queryGate({ dbUrl: DB_URL, password: pw.stdout })
 }
+
+/** The E2E read-only connection string readGate uses (no credential in it). */
+export const E2E_GATE_DB_URL = DB_URL
 
 // ── The grant file ──────────────────────────────────────────────────────────
 
