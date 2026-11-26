@@ -33,13 +33,17 @@
 -- as `check (hash_version is distinct from 5) not valid` if v5 rows exist.
 
 -- ── Locks, then preconditions ───────────────────────────────────────────────
-lock table public.events in access exclusive mode;
-
+-- The lock is the DO block's first statement, not a top-level LOCK TABLE: the
+-- Supabase CLI sends a migration as one atomic batch that is not an explicit
+-- transaction block, where a top-level LOCK is refused (25P01, T267). Inside
+-- PL/pgSQL it is allowed and is held until the batch's transaction ends.
 do $$
 declare
   v_open boolean;
   r text;
 begin
+  lock table public.events in access exclusive mode;
+
   -- The gate row exists and is closed, held FOR SHARE until commit.
   select w.open into v_open from private.v5_write_gate w where w.id for share;
   if not found then
