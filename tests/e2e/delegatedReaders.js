@@ -11,16 +11,17 @@
 //   receipt  supabase/functions/_shared/receiptV2.ts buildReceiptV2, checked by
 //            scripts/verify-receipt.mjs (the receipt CLI's offline half)
 //
-// No network and no credentials here: the caller fetches the rows. That keeps
-// this file testable against a locally built trail (tests/unit/
-// delegatedReaders.test.js), which is the only dry run possible without a
-// hosted project.
+// No network and no credentials in the readers: the caller fetches the rows.
+// That keeps them testable against a locally built trail (tests/unit/
+// delegatedReaders.test.js), the only dry run possible without a hosted
+// project. runPinnedNode is the one networked runner, and its child is pinned
+// to E2E by scripts/lib/pinnedFetchPreload.mjs.
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyEvidenceSlice } from '../../supabase/functions/_shared/eventVerifyV5.ts'
 import { guestResponse } from '../../supabase/functions/_shared/guestResponse.ts'
 import { acceptedAgreementHashOf } from '../../supabase/functions/_shared/guestEventView.ts'
@@ -29,6 +30,10 @@ import { buildAuditDocument } from '../../src/lib/auditExport.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const VERIFY_RECEIPT = path.join(REPO_ROOT, 'scripts/verify-receipt.mjs')
+const PINNED_PRELOAD = pathToFileURL(path.join(REPO_ROOT, 'scripts/lib/pinnedFetchPreload.mjs')).href
+// The verifier's line for a full (post-acceptance) recomputation. Its
+// pre-acceptance variant is not a pass for an accepted deal.
+const VERIFIED_LINE = 'RECEIPT VERIFIED — recomputed offline'
 
 /** The four per-row checks every reader reports for a v5 row, all passing. */
 export const ROW_MATCH = Object.freeze({ hash: 'match', link: 'linked', payload: 'match', agreement: 'match' })
@@ -85,19 +90,41 @@ export async function readerVerdicts({ contract, rows, read, eventId }) {
   }
 }
 
-/** Run the receipt CLI's verifier on a receipt object: { status, out }. */
-export function verifyReceipt(receipt) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'tf-delegated-receipt-'))
-  const file = path.join(dir, 'receipt.json')
-  writeFileSync(file, JSON.stringify(receipt), { mode: 0o600 })
-  return runNode([VERIFY_RECEIPT, file])
+/**
+ * The receipt CLI's offline verifier on a file: { status, verified }, where
+ * verified needs exit 0 and the full recomputation line. Its output is never
+ * returned, so nothing from the receipt can reach a test message.
+ */
+export function verifyReceiptFile(file) {
+  const { status, out } = runNode([VERIFY_RECEIPT, file])
+  return { status, verified: status === 0 && out.includes(VERIFIED_LINE) }
 }
 
-/** Run a repository script under Node; never throws on a non-zero exit. */
-export function runNode(args, { timeout = 120_000 } = {}) {
+/** The same, on a receipt object; its temporary directory is removed after. */
+export function verifyReceipt(receipt) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'tf-delegated-receipt-'))
   try {
-    return { status: 0, out: execFileSync('node', args, { cwd: REPO_ROOT, encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'] }) }
+    const file = path.join(dir, 'receipt.json')
+    writeFileSync(file, JSON.stringify(receipt), { mode: 0o600 })
+    return verifyReceiptFile(file)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * A networked repository script in a child whose fetch is pinned to E2E
+ * before its first module runs (scripts/lib/pinnedFetchPreload.mjs), with
+ * exactly the environment the caller passes. Exit status only.
+ */
+export function runPinnedNode(args, env) {
+  return { status: runNode(['--import', PINNED_PRELOAD, ...args], { env }).status }
+}
+
+function runNode(args, { env = { PATH: process.env.PATH }, timeout = 120_000 } = {}) {
+  try {
+    return { status: 0, out: execFileSync('node', args, { cwd: REPO_ROOT, env, encoding: 'utf8', timeout, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'] }) }
   } catch (e) {
-    return { status: e.status ?? -1, out: `${e.stdout ?? ''}${e.stderr ?? ''}` }
+    return { status: typeof e.status === 'number' ? e.status : -1, out: '' }
   }
 }

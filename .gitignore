@@ -121,3 +121,7 @@ tests/e2e/.owner-api-key.json.next
 # cancellation-refusal.spec.js). Holds a guest token, revoked on every run.
 tests/e2e/.cancel-fixture.json
 tests/e2e/.cancel-fixture.json.lock
+
+# Delegated-append trial attempt records (tests/e2e/delegated-append.spec.js):
+# one file per approved attempt, kept so an attempt can never run twice.
+tests/e2e/.delegated-trial/

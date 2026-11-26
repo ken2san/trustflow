@@ -63,9 +63,7 @@ describe('delegated trial readers (dry run of the live spec helper)', () => {
     expect(v.guest.label).toBe('entry_agent_grant')
     expect(v.audit).toEqual({ overall: 'VERIFIED', row: ROW_MATCH })
     expect(v.receipt.act).toEqual({ credential_id: GRANT, issuer_kind: 'owner_account' })
-    const { status, out } = verifyReceipt(v.receipt.document)
-    expect(out).toContain('RECEIPT VERIFIED')
-    expect(status).toBe(0)
+    expect(verifyReceipt(v.receipt.document)).toEqual({ status: 0, verified: true })
   }, 60_000)
 
   it('a tampered authority field is a hash mismatch in every reader, and the receipt CLI refuses it', async () => {
@@ -77,8 +75,8 @@ describe('delegated trial readers (dry run of the live spec helper)', () => {
       expect(v.guest.row.hash, field).toBe('mismatch')
       expect(v.audit.row.hash, field).toBe('mismatch')
       expect(v.slice.overall, field).toBe('failed')
-      const { status, out } = verifyReceipt(v.receipt.document)
-      expect(out, field).not.toContain('RECEIPT VERIFIED')
+      const { status, verified } = verifyReceipt(v.receipt.document)
+      expect(verified, field).toBe(false)
       expect(status, field).not.toBe(0)
     }
   }, 60_000)
