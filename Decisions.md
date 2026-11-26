@@ -15,6 +15,23 @@ _Last updated: 2026-11-25_
 
 ## Current scope
 
+### [2026-11-26] — Delegated trial: comparison deal and grant issuance for the closed run
+
+**Decision**: The closed run uses `TF_DELEGATED_OTHER_DEAL=eaf3af86-acb1-4616-8cac-dae5cd1e812d`. Its trial grant is issued by Claude, inside the approved run, through `public.issue_entry_agent_credential` over SQL. The secret is generated locally into a 0600 file in the session scratchpad, and only its sha256 is sent. Kenji left the deal choice to the agents (2026-11-26 18:06 ET). Picked in T274.
+
+**Context**: Codex T213 required a real, separately controlled deal for the cross-deal refusal, plus a safe issuance path. T274 read E2E without writing. The pick is an "Event Ingestion Probe" deal: same owner, `TERMS_ACCEPTED`, creator-performed, one v4 acceptance with a numeric snapshot version, no grants, and never written to again by its spec. A broken grant binding would be admitted there up to the gate, so a 403 is real evidence.
+
+**Alternatives considered**:
+
+- The expired-token fixture `fffffff0-…`. Rejected: other suites use it, it has no events and no acceptance, and so it proves nothing.
+- The issuance endpoint. Rejected: it needs `ENTRY_CREDENTIAL_ISSUANCE` on, a second flag change, and it returns the secret in an HTTP body.
+- A raw insert into `entry_agent_credentials`. Rejected: it skips the issuance function's validation.
+
+**Consequences**:
+- **Fallback deal:** `2bc71eb0-9f7c-46f8-a95e-e16ab277b2f8`, same shape.
+- **One grant per run:** each run (closed, then open) gets a fresh grant and a fresh file. Cleanup revokes it, and the file is deleted afterwards.
+- **No code change:** the spec re-checks the deal and the grant at run time.
+
 ### [2026-11-25] — A withheld canonical input is unavailable (exit 3), not a failure
 
 **Decision**: On the delegated owner read, a receipt act may declare the one input withheld by design: a legacy guest `actor_id` (`guest:<address>`), via `canonical_withheld: ["actor_id"]`. The offline verifier then reports that act's hash as unavailable, and the receipt is incomplete (exit 3). Any other omission or declaration fails (exit 1). Kenji: "(a) でええ。伏せた項目は判定不能（exit 3）にして、2MiB上限も一緒に直して".
