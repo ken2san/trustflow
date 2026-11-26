@@ -8,9 +8,9 @@
 //       record (tests/e2e/.delegated-trial/<attempt>.json) says it owns them,
 //       confirm the 503, read the gate, check the row budget, record it all.
 //
-//   node scripts/delegated-trial-cleanup.mjs --grant-id <uuid> [--unset-flag]
+//   node scripts/delegated-trial-cleanup.mjs [--grant-id <uuid>] [--unset-flag]
 //       a run that died before creating its record: the operator names what
-//       to undo. The grant must be listed on the fixture deal.
+//       to undo, either or both. The grant must be listed on the fixture deal.
 //
 // E2E only (scripts/lib/pinnedFetch.mjs, scripts/lib/tfClient.mjs). Prints
 // fixed text, status codes and error words; exit 0 only when every step was
@@ -22,13 +22,14 @@ const argv = process.argv.slice(2)
 const at = flag => { const i = argv.indexOf(flag); return i > -1 ? argv[i + 1] ?? null : null }
 const grantId = at('--grant-id')
 const attempt = argv[0] && !argv[0].startsWith('--') ? argv[0] : null
-if (!attempt && !grantId) {
-  console.error('usage: node scripts/delegated-trial-cleanup.mjs <attempt> | --grant-id <uuid> [--unset-flag]')
+const unsetFlag = argv.includes('--unset-flag')
+if (!attempt && !grantId && !unsetFlag) {
+  console.error('usage: node scripts/delegated-trial-cleanup.mjs <attempt> | [--grant-id <uuid>] [--unset-flag]')
   process.exit(2)
 }
 
 try {
-  const { problems, result } = await cleanupTrial({ attempt, grantId, unsetFlag: argv.includes('--unset-flag') })
+  const { problems, result } = await cleanupTrial({ attempt, grantId, unsetFlag })
   for (const [k, v] of Object.entries(result)) console.log(`${k}: ${v}`)
   for (const p of problems) console.error(`PROBLEM ${p}`)
   console.log(problems.length ? 'CLEANUP INCOMPLETE' : 'CLEANUP VERIFIED')

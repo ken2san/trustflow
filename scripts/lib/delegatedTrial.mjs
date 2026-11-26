@@ -19,7 +19,7 @@
 // ENTRY_DELEGATED_APPEND once this attempt has taken ownership of it.
 
 import { execFile } from 'node:child_process'
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -108,12 +108,23 @@ export async function readGate() {
 /** `<grant-uuid>.<64 hex>` from a regular file owned by this user, mode exactly 0600. */
 export function readGrantFile(file) {
   if (!file) throw new TrialError('TF_DELEGATED_GRANT_FILE is not set')
-  let st
-  try { st = lstatSync(file) } catch { throw new TrialError('the grant file cannot be read') }
-  if (!st.isFile()) throw new TrialError('the grant file is not a regular file')
-  if (st.uid !== process.getuid()) throw new TrialError('the grant file is not owned by this user')
-  if ((st.mode & 0o777) !== 0o600) throw new TrialError('the grant file mode must be exactly 0600')
-  const grant = readFileSync(file, 'utf8').trim()
+  // One open, no symlink followed; every check is on that descriptor.
+  let fd
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW) } catch {
+    throw new TrialError('the grant file cannot be opened (missing, unreadable or a symlink)')
+  }
+  let grant
+  try {
+    const st = fstatSync(fd)
+    if (!st.isFile()) throw new TrialError('the grant file is not a regular file')
+    if (st.uid !== process.getuid()) throw new TrialError('the grant file is not owned by this user')
+    if ((st.mode & 0o7777) !== 0o600) throw new TrialError('the grant file mode must be exactly 0600')
+    grant = readFileSync(fd, 'utf8').trim()
+  } catch (e) {
+    throw e instanceof TrialError ? e : new TrialError('the grant file cannot be read')
+  } finally {
+    closeSync(fd)
+  }
   const m = GRANT_TOKEN.exec(grant)
   if (!m) throw new TrialError('the grant file does not hold "<uuid>.<64 hex>"')
   return { grant, grantId: m[1] }
@@ -150,9 +161,14 @@ export function readState(attempt) {
 /** Merge `patch` into the record, atomically (fresh 0600 file, then rename). */
 export function updateState(attempt, patch) {
   const next = { ...readState(attempt), ...patch, updated_at: new Date().toISOString() }
-  const tmp = `${statePath(attempt)}.${process.pid}.next`
-  writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600, flag: 'wx' })
-  renameSync(tmp, statePath(attempt))
+  const tmp = `${statePath(attempt)}.${randomBytes(6).toString('hex')}.next`
+  try {
+    writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600, flag: 'wx' })
+    renameSync(tmp, statePath(attempt))
+  } catch {
+    rmSync(tmp, { force: true })
+    throw new TrialError('the attempt record could not be updated')
+  }
   return next
 }
 
@@ -241,9 +257,11 @@ export async function cleanupTrial({ attempt = null, grantId = null, unsetFlag =
     try {
       installPinnedFetch()
       const pub = await publishableKey()
-      for (let i = 0; i < 10 && last?.status !== 503; i++) {
+      // Until the flag's own answer; a gateway or restart 503 is retried.
+      const off = r => r?.status === 503 && r?.error === 'delegated_append_unavailable'
+      for (let i = 0; i < 10 && !off(last); i++) {
         if (i) await new Promise(res => setTimeout(res, 3000))
-        last = await delegatedPost({ pub, grantHeader: fakeGrant(),
+        last = await delegatedPost({ pub, grantHeader: '',
           body: { type: TYPE, contract_id: DEAL, payload: {}, idempotency_key: null } }).catch(() => null)
       }
     } catch { /* recorded below */ }

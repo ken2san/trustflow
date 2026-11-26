@@ -124,6 +124,8 @@ test.describe('delegated append, live trial (row 4 step 5)', () => {
 
   test.beforeAll(async () => {
     test.setTimeout(600_000)
+    // Per repetition: only a run that creates its own attempt record cleans up.
+    armed = false
     // 1. Mode, attempt, run shape, target: before anything is read or sent.
     const testInfo = test.info()
     if (MODE !== 'closed' && MODE !== 'open') throw new Error('TF_DELEGATED_TRIAL must be exactly "closed" or "open"')
@@ -182,8 +184,13 @@ test.describe('delegated append, live trial (row 4 step 5)', () => {
 
     // 6. The flag: a fake grant must be refused 403 (flag on). Its own key, read back.
     pub = await publishableKey()
-    const probe = await delegatedPost({ pub, grantHeader: fakeGrant(), body: op({ idempotency_key: `${key}-probe` }) })
-    if (probe.status !== 403) throw new Error(`flag check: a fake grant got ${probe.status} ${probe.error}, not 403 (is ENTRY_DELEGATED_APPEND on?)`)
+    // A blank grant: refused in memory by delegatedAdmission when the flag is
+    // on, the flag's own 503 when it is off. Only the delegated route's 403
+    // word counts as "on"; any other 403 (a legacy route, a gateway) does not.
+    const probe = await delegatedPost({ pub, grantHeader: '', body: op({ idempotency_key: `${key}-probe` }) })
+    if (probe.status !== 403 || probe.error !== 'delegation_refused') {
+      throw new Error(`flag check: the probe got ${probe.status} ${probe.error}, not 403 delegation_refused (is ENTRY_DELEGATED_APPEND on?)`)
+    }
     // Seen on: from here cleanup turns it off.
     state = updateState(ATTEMPT_ID, { flag_owned: true })
     if (await keyed(`${key}-probe`) !== 0) throw new Error('the flag probe stored a row')
@@ -192,30 +199,41 @@ test.describe('delegated append, live trial (row 4 step 5)', () => {
   test.afterAll(async () => {
     if (!armed) return
     test.setTimeout(900_000)
-    const { problems } = await cleanupTrial({ attempt: ATTEMPT_ID })
-    expect(problems, 'afterAll cleanup (rerun: node scripts/delegated-trial-cleanup.mjs <attempt>)').toEqual([])
+    try {
+      const { problems } = await cleanupTrial({ attempt: ATTEMPT_ID })
+      expect(problems, 'afterAll cleanup (rerun: node scripts/delegated-trial-cleanup.mjs <attempt>)').toEqual([])
+    } finally {
+      armed = false
+    }
   })
 
   test('refusals: each bad grant, deal, type or credential mix is refused and stores no row (item 2; closed gate)', async () => {
     test.skip(MODE !== 'closed', 'cases that would store a row if broken run only behind the confirmed closed gate')
+    // [label, request overrides, status, error word]. dispute.opened passes
+    // pre-dispatch (ALLOWED_TYPES) and reaches the delegated route, outside
+    // DELEGATED_TYPES. A grant can never hold it as a scope (table CHECK and
+    // issuance), so the resolver's scope check would refuse it too: the uniform
+    // 403 proves the delegated route refused with no row, and only the function
+    // log's delegated_refusal "allowlist" tells which check did.
     const cases = [
-      ['wrong secret', { grantHeader: `${grantId}.${'0'.repeat(64)}` }, 403],
-      ['unknown grant', { grantHeader: fakeGrant() }, 403],
-      ['malformed grant', { grantHeader: `${grantId}.not-hex` }, 403],
-      ['blank grant', { grantHeader: '' }, 403],
-      ['the grant on a different real deal', { body: { contract_id: OTHER_DEAL } }, 403],
-      ['a type outside the grant', { body: { type: OUT_OF_SCOPE_TYPE } }, 403],
-      ['a type outside the allowlist', { body: { type: 'dod.consent_recorded' } }, 400],
-      ['grant with a bearer', { extra: [['Authorization', `Bearer ${pub}`]] }, 403],
-      ['two grants in one header', { grantHeader: `${grant}, ${fakeGrant()}` }, 403],
-      ['authority in the body', { body: { credential_id: grantId } }, 400],
+      ['wrong secret', { grantHeader: `${grantId}.${'0'.repeat(64)}` }, 403, 'delegation_refused'],
+      ['unknown grant', { grantHeader: fakeGrant() }, 403, 'delegation_refused'],
+      ['malformed grant', { grantHeader: `${grantId}.not-hex` }, 403, 'delegation_refused'],
+      ['blank grant', { grantHeader: '' }, 403, 'delegation_refused'],
+      ['the grant on a different real deal', { body: { contract_id: OTHER_DEAL } }, 403, 'delegation_refused'],
+      ['a type outside the grant', { body: { type: OUT_OF_SCOPE_TYPE } }, 403, 'delegation_refused'],
+      ['a type outside the delegated allowlist', { body: { type: 'dispute.opened' } }, 403, 'delegation_refused'],
+      ['a server-recorded type (refused before dispatch)', { body: { type: 'dod.consent_recorded' } }, 400, 'type_is_server_recorded'],
+      ['grant with a bearer', { extra: [['Authorization', `Bearer ${pub}`]] }, 403, 'delegation_refused'],
+      ['two grants in one header', { grantHeader: `${grant}, ${fakeGrant()}` }, 403, 'delegation_refused'],
+      ['authority in the body', { body: { credential_id: grantId } }, 400, 'authority_is_server_derived'],
     ]
-    for (const [i, [label, over, status]] of cases.entries()) {
+    for (const [i, [label, over, status, error]] of cases.entries()) {
       const k = `${key}-r${i}`
       const r = await delegatedPost({ pub, grantHeader: over.grantHeader ?? grant,
         body: op({ ...over.body, idempotency_key: k }), extra: over.extra ?? [] })
       expect(r.status, label).toBe(status)
-      if (status === 403) expect(r.error, label).toBe('delegation_refused')
+      expect(r.error, label).toBe(error)
       expect(await keyed(k), `${label}: rows with its key`).toBe(0)
     }
     await assertWritten('after refusals', 0)
