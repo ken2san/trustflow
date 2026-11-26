@@ -58,14 +58,44 @@ echo 'PASS migrations through B apply'
 # ── C's preconditions, on a second database (every failure rolls C back) ───
 docker exec "$container" createdb -U supabase_admin -O postgres "$pre"
 docker exec "$container" pg_restore -U supabase_admin -d "$pre" --exit-on-error -L "$dump.list" "$dump"
-apply_c_pre() {  # $1: the SQLSTATE C must fail with; asserts the CHECK is still there
+apply_c_pre() {  # $1: the SQLSTATE C must fail with, $2: label, $3: optional drift SQL run first in C's
+                 # transaction (so the failure rolls it back too), $4: optional psql user. Asserts the CHECK is still
+                 # there and, with drift, that the catalog fingerprint is exactly what it was before.
   local out rc
-  set +e; out=$(psql_pre -v VERBOSITY=verbose -1 -f - < "$C" 2>&1); rc=$?; set -e
+  set +e
+  out=$( { printf '%s\n' "${3:-}"; cat "$C"; } | docker exec -i "$container" psql -X -qAt -U "${4:-postgres}" -d "$pre" \
+         -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -1 -f - 2>&1); rc=$?
+  set -e
   [[ $rc -ne 0 ]] || { echo "FAIL C applied where it must not ($2)" >&2; exit 1; }
   grep -q "ERROR:  $1:" <<< "$out" || { echo "$out" >&2; echo "FAIL C on $2: expected $1" >&2; exit 1; }
-  [[ "$(psql_pre <<< "select count(*) from pg_constraint where conname = 'events_v5_writes_disabled'")" == 1 ]] \
-    || { echo "FAIL C on $2 left the CHECK dropped" >&2; exit 1; }
-  echo "PASS C refuses to apply $2 ($1); the CHECK is still present"
+  [[ "$(psql_pre <<< "select count(*) from pg_constraint where conname = 'events_v5_writes_disabled' and convalidated")" == 1 ]] \
+    || { echo "FAIL C on $2 left the CHECK dropped or not validated" >&2; exit 1; }
+  if [[ -n "${3:-}" ]]; then
+    [[ "$(fingerprint)" == "$fp" ]] || { echo "FAIL C on $2: the catalog differs after the rollback" >&2; exit 1; }
+    echo "PASS C refuses to apply $2 ($1); the CHECK and the catalog are as before"
+  else
+    echo "PASS C refuses to apply $2 ($1); the CHECK is still present"
+  fi
+}
+# Everything C checks or could be drifted by a case: triggers on events, its constraints, the gate, the trigger
+# functions, table and column ACLs of the private objects, event triggers, and any test-only function.
+fingerprint() {
+  psql_pre <<'SQL'
+select md5(concat_ws('#',
+  (select string_agg(pg_get_triggerdef(oid) || tgenabled::text, '|' order by tgname) from pg_trigger
+    where tgrelid = 'public.events'::regclass and not tgisinternal),
+  (select string_agg(conname || convalidated::text || pg_get_constraintdef(oid), '|' order by conname) from pg_constraint
+    where conrelid = 'public.events'::regclass),
+  (select open::text from private.v5_write_gate),
+  (select string_agg(proname || md5(prosrc) || prosecdef::text || coalesce(proconfig::text, '') || coalesce(proacl::text, ''), '|'
+     order by proname) from pg_proc where pronamespace = 'private'::regnamespace and proname like 'v5_write_ticket%'),
+  (select string_agg(relname || coalesce(relacl::text, ''), '|' order by relname) from pg_class
+    where oid in ('private.v5_write_gate'::regclass, 'private.v5_write_tickets'::regclass)),
+  (select string_agg(attrelid::regclass::text || attname || coalesce(attacl::text, ''), '|' order by attrelid, attnum)
+     from pg_attribute where attrelid in ('private.v5_write_gate'::regclass, 'private.v5_write_tickets'::regclass) and attnum > 0),
+  (select count(*)::text from pg_event_trigger),
+  (select count(*)::text from pg_proc where proname like 'tf_test_%')))
+SQL
 }
 # Through A only: B's triggers and ticket objects are absent.
 for m in $upto_b; do
@@ -83,6 +113,82 @@ apply_c_pre TF955 'with EXECUTE granted on a ticket trigger function'
 psql_pre <<< "revoke execute on function private.v5_write_ticket_check() from service_role; alter function private.v5_write_ticket_confirm() security invoker" > /dev/null
 apply_c_pre TF954 'with a ticket trigger function not security definer'
 psql_pre <<< "alter function private.v5_write_ticket_confirm() security definer" > /dev/null
+fp=$(fingerprint)
+
+# ── Trigger and function drift (Codex T210 must-fix 1): every variant runs in C's transaction ──
+when_b='when (new.hash_version is not distinct from 5 or new.credential_id is not null or new.issuer_kind is not null)'
+drop_bt='drop trigger zz_v5_write_ticket_check on public.events;'
+drop_at='drop trigger v5_write_ticket_confirm on public.events;'
+apply_c_pre TF953 'with the BEFORE trigger bound to another function' \
+  "$drop_bt create trigger zz_v5_write_ticket_check before insert on public.events for each row $when_b
+     execute function private.v5_write_ticket_confirm();"
+apply_c_pre TF953 'with the BEFORE trigger statement-level' \
+  "$drop_bt create trigger zz_v5_write_ticket_check before insert on public.events for each statement
+     execute function private.v5_write_ticket_check();"
+apply_c_pre TF953 'with the BEFORE trigger on INSERT OR UPDATE' \
+  "$drop_bt create trigger zz_v5_write_ticket_check before insert or update on public.events for each row $when_b
+     execute function private.v5_write_ticket_check();"
+apply_c_pre TF953 'with the BEFORE trigger WHEN narrowed to hash_version = 5' \
+  "$drop_bt create trigger zz_v5_write_ticket_check before insert on public.events for each row when (new.hash_version = 5)
+     execute function private.v5_write_ticket_check();"
+apply_c_pre TF953 'with the AFTER trigger a deferred constraint trigger' \
+  "$drop_at create constraint trigger v5_write_ticket_confirm after insert on public.events deferrable initially deferred
+     for each row $when_b execute function private.v5_write_ticket_confirm();"
+apply_c_pre TF953 'with the AFTER trigger made BEFORE' \
+  "$drop_at create trigger v5_write_ticket_confirm before insert on public.events for each row $when_b
+     execute function private.v5_write_ticket_confirm();"
+apply_c_pre TF954 'with the AFTER trigger function body replaced (still definer, empty search_path)' \
+  "create or replace function private.v5_write_ticket_confirm() returns trigger language plpgsql security definer
+     set search_path = '' as \$f\$ begin return null; end \$f\$;"
+
+# ── Column grants (Codex T210 must-fix 2) ────────────────────────────────────
+apply_c_pre TF955 'with a column SELECT grant on the gate to authenticated' \
+  'grant select (open) on private.v5_write_gate to authenticated;'
+apply_c_pre TF955 'with a column UPDATE grant on the tickets to service_role' \
+  'grant update (used) on private.v5_write_tickets to service_role;'
+apply_c_pre TF955 'with a column INSERT grant on the tickets to public' \
+  'grant insert (txid, event_id) on private.v5_write_tickets to public;'
+
+# ── The events lock is taken before the trigger catalog is read ─────────────
+# A concurrent session disables the AFTER trigger and holds it uncommitted. C must wait on its first statement
+# and then see the committed change (TF953). Had C read the catalog first, it would have passed on the stale
+# catalog and dropped the CHECK with the trigger disabled.
+( psql_pre <<< "begin; alter table public.events disable trigger v5_write_ticket_confirm; select pg_sleep(4); commit;" > /dev/null ) &
+bg=$!
+sleep 1.5
+t0=$(date +%s)
+set +e; out=$(psql_pre -v VERBOSITY=verbose -1 -f - < "$C" 2>&1); rc=$?; set -e
+waited=$(( $(date +%s) - t0 ))
+wait "$bg"
+[[ $rc -ne 0 ]] && grep -q 'ERROR:  TF953:' <<< "$out" || { echo "$out" >&2; echo 'FAIL C under a concurrent trigger disable must wait and fail TF953' >&2; exit 1; }
+[[ $waited -ge 2 ]] || { echo "FAIL C did not wait on the events lock (${waited}s)" >&2; exit 1; }
+[[ "$(psql_pre <<< "select count(*) from pg_constraint where conname = 'events_v5_writes_disabled'")" == 1 ]] || { echo 'FAIL CHECK dropped' >&2; exit 1; }
+psql_pre <<< "alter table public.events enable trigger v5_write_ticket_confirm" > /dev/null
+[[ "$(fingerprint)" == "$fp" ]] || { echo 'FAIL catalog differs after the concurrency case' >&2; exit 1; }
+echo "PASS C waits on the events lock (${waited}s) behind a concurrent trigger disable, then refuses (TF953); CHECK kept"
+
+# ── Post-drop self-test failures roll the drop back (Codex T210) ────────────
+apply_c_pre TF957 'with another v5 constraint not validated (fails after the drop)' \
+  "do \$d\$ declare v text; begin
+     select pg_get_constraintdef(oid) into v from pg_constraint where conrelid = 'public.events'::regclass and conname = 'events_v5_prev_link';
+     execute 'alter table public.events drop constraint events_v5_prev_link';
+     execute format('alter table public.events add constraint events_v5_prev_link %s not valid', v);
+   end \$d\$;"
+# Event triggers need a superuser; they fire on C's own ALTER TABLE, after the drop, inside C's transaction.
+apply_c_pre TF958 'when the gate is opened after the drop (event trigger)' \
+  "create function public.tf_test_open_gate() returns event_trigger language plpgsql as \$f\$
+     begin update private.v5_write_gate set open = true; end \$f\$;
+   create event trigger tf_test_open_gate on ddl_command_end when tag in ('ALTER TABLE') execute function public.tf_test_open_gate();" \
+  supabase_admin
+apply_c_pre TF956 'when the CHECK is re-added after the drop (event trigger)' \
+  "create function public.tf_test_readd() returns event_trigger language plpgsql as \$f\$
+     begin
+       if not exists (select 1 from pg_constraint where conrelid = 'public.events'::regclass and conname = 'events_v5_writes_disabled') then
+         alter table public.events add constraint events_v5_writes_disabled check (hash_version is distinct from 5) not valid;
+       end if;
+     end \$f\$;
+   create event trigger tf_test_readd on ddl_command_end when tag in ('ALTER TABLE') execute function public.tf_test_readd();" \
+  supabase_admin
 psql_pre -1 -f - < "$C" > /dev/null
 echo 'PASS C applies on the restored state'
 set +e; out=$(psql_pre -v VERBOSITY=verbose -1 -f - < "$C" 2>&1); rc=$?; set -e
@@ -91,7 +197,7 @@ echo 'PASS a second application of C fails (TF952, the CHECK is already gone)'
 
 # ── C on the main database ──────────────────────────────────────────────────
 psql_pg -1 -f - < "$C" > /dev/null
-echo 'PASS C applies with its preconditions (TF951-TF955) and self-test (TF956-TF958)'
+echo 'PASS C applies with its locks, preconditions (TF951-TF955) and self-test (TF956-TF958)'
 got=$(psql_pg <<< "select exists (select 1 from pg_constraint where conname = 'events_v5_writes_disabled')::text || '|' ||
   (select open from private.v5_write_gate)::text || '|' ||
   (select count(*) from pg_trigger where tgrelid = 'public.events'::regclass and tgenabled = 'O'
