@@ -63,7 +63,7 @@ import { test, expect } from '@playwright/test'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { SUPABASE_URL } from './liveEnv.js'
+import { SUPABASE_URL, SUPABASE_KEY } from './liveEnv.js'
 import { assertE2EProject, E2E_PROJECT_REF } from '../../scripts/lib/e2eGuard.mjs'
 import { E2E_ORIGIN, installPinnedFetch } from '../../scripts/lib/pinnedFetch.mjs'
 import {
@@ -182,12 +182,14 @@ test.describe('delegated append, live trial (row 4 step 5)', () => {
     const unverified = Object.keys(VERIFIED).filter(k => before.overall[k] !== VERIFIED[k])
     if (unverified.length) throw new Error(`the baseline is not verified in: ${unverified.join(', ')}; nothing is sent`)
 
-    // 6. The flag: a fake grant must be refused 403 (flag on). Its own key, read back.
+    // 6. The flag: a malformed grant must be refused 403 delegation_refused (flag on). Its own key, read back.
     pub = await publishableKey()
-    // A blank grant: refused in memory by delegatedAdmission when the flag is
-    // on, the flag's own 503 when it is off. Only the delegated route's 403
+    // A non-empty malformed grant: refused in memory by delegatedAdmission
+    // (its length) when the flag is on, the flag's own 503 when it is off.
+    // Not blank: an empty header could be stripped in transit (agy T5).
+    // The blank case is tested on its own in the refusal table. Only the delegated route's 403
     // word counts as "on"; any other 403 (a legacy route, a gateway) does not.
-    const probe = await delegatedPost({ pub, grantHeader: '', body: op({ idempotency_key: `${key}-probe` }) })
+    const probe = await delegatedPost({ pub, grantHeader: 'malformed', body: op({ idempotency_key: `${key}-probe` }) })
     if (probe.status !== 403 || probe.error !== 'delegation_refused') {
       throw new Error(`flag check: the probe got ${probe.status} ${probe.error}, not 403 delegation_refused (is ENTRY_DELEGATED_APPEND on?)`)
     }
@@ -224,7 +226,10 @@ test.describe('delegated append, live trial (row 4 step 5)', () => {
       ['a type outside the grant', { body: { type: OUT_OF_SCOPE_TYPE } }, 403, 'delegation_refused'],
       ['a type outside the delegated allowlist', { body: { type: 'dispute.opened' } }, 403, 'delegation_refused'],
       ['a server-recorded type (refused before dispatch)', { body: { type: 'dod.consent_recorded' } }, 400, 'type_is_server_recorded'],
-      ['grant with a bearer', { extra: [['Authorization', `Bearer ${pub}`]] }, 403, 'delegation_refused'],
+      // The legacy anon JWT: it passes the gateway's verify_jwt (T261, measured),
+      // so admission refuses the mix; a non-JWT bearer would be a gateway 401.
+      // Not an account, so a broken dispatch could not act as the owner.
+      ['grant with a bearer', { extra: [['Authorization', `Bearer ${SUPABASE_KEY}`]] }, 403, 'delegation_refused'],
       ['two grants in one header', { grantHeader: `${grant}, ${fakeGrant()}` }, 403, 'delegation_refused'],
       ['authority in the body', { body: { credential_id: grantId } }, 400, 'authority_is_server_derived'],
     ]

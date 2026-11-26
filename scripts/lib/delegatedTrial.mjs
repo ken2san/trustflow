@@ -224,10 +224,13 @@ export async function cleanupTrial({ attempt = null, grantId = null, unsetFlag =
   const flag = (state?.flag_owned ?? false) || unsetFlag
   const result = {}
   let tf, owner
-  try {
-    tf = await loadClient()
-    owner = await tf.ownerSession()
-  } catch { problems.push('the owner session could not be opened; revoke the grant and unset the flag by hand') }
+  // Only when something needs it: a flag-only cleanup has no owner step.
+  if (grantToRevoke || state?.baseline) {
+    try {
+      tf = await loadClient()
+      owner = await tf.ownerSession()
+    } catch { problems.push('the owner session could not be opened; revoke the grant and check the rows by hand') }
+  }
 
   if (grantToRevoke && owner) {
     try {
@@ -261,7 +264,7 @@ export async function cleanupTrial({ attempt = null, grantId = null, unsetFlag =
       const off = r => r?.status === 503 && r?.error === 'delegated_append_unavailable'
       for (let i = 0; i < 10 && !off(last); i++) {
         if (i) await new Promise(res => setTimeout(res, 3000))
-        last = await delegatedPost({ pub, grantHeader: '',
+        last = await delegatedPost({ pub, grantHeader: 'malformed',
           body: { type: TYPE, contract_id: DEAL, payload: {}, idempotency_key: null } }).catch(() => null)
       }
     } catch { /* recorded below */ }
