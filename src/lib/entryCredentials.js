@@ -4,6 +4,9 @@
 // `manage-entry-agent-credential` Edge Function.
 //
 // SECURITY INVARIANTS
+// - Default-off UI exposure: `isOwnerCredentialsUiEnabled()` is false unless
+//   `VITE_OWNER_CREDENTIALS_UI === 'on'`, keeping the panel unmounted and
+//   preventing calls until backend rollout is separately approved.
 // - Owner-account grants only (`issuer_kind: 'owner_account'`). Counterpart
 //   issuance belongs to Row 10 and is never sent from this module.
 // - Never sends `accept` (forbidden for owner_account by table CHECK and RPC),
@@ -11,21 +14,57 @@
 // - Technical expiry cap: strictly inside (now, now + 30 days], matching
 //   `supabase/functions/manage-entry-agent-credential/index.ts` and
 //   `20261118214020_entry_agent_credentials.sql`.
+// - Lowercase token grammar: `<lowercase-uuid>.<64 lowercase hex>` (101 chars),
+//   matching `supabase/functions/_shared/delegatedAuth.ts` (`GRANT_FORMAT`) and
+//   `scripts/lib/delegatedClient.mjs` (`GRANT_TOKEN`).
 // - Fail-closed on `issuance_disabled` (503), malformed responses, or
-//   cross-contract mismatches. Never fabricates a secret or persists one to
-//   storage or logs.
+//   cross-contract/cross-kind mismatches. Never fabricates a secret or persists
+//   one to storage or logs.
+// - Unseen issued grants: if an in-flight `issue` completes after sign-out,
+//   user-id change, or deal switch, the secret is discarded without display and
+//   NO automatic destructive revoke/cleanup is issued. The owner can inspect
+//   and revoke any unseen grant from the agreement's credential list.
 
 import { supabase, invokeErrorReason } from './supabase.js'
 
 const FUNCTION_NAME = 'manage-entry-agent-credential'
 
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// Strict lowercase UUID and 64-hex secret, matching `_shared/delegatedAuth.ts`.
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const SECRET_HEX_RE = /^[0-9a-f]{64}$/
+export const GRANT_TOKEN_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.[0-9a-f]{64}$/
 export const MAX_GRANT_DAYS = 30
 export const MAX_GRANT_MS = MAX_GRANT_DAYS * 24 * 60 * 60 * 1000
 // Subtract a small buffer when computing the 30-day preset so minor client/server
 // clock skew does not trip the server's `<= now + 30 days` cap.
 export const MAX_PRESET_SKEW_MS = 60 * 1000
+
+/**
+ * Default-off gate for Row 6 UI exposure until backend rollout is separately
+ * approved. Only exact `'on'` enables the owner credential panel.
+ */
+export function isOwnerCredentialsUiEnabled(env = import.meta.env) {
+  return env?.VITE_OWNER_CREDENTIALS_UI === 'on'
+}
+
+/**
+ * Single fail-closed predicate deciding whether the owner credential UI may
+ * mount for the current view and session.
+ */
+export function canShowOwnerCredentials({
+  uiEnabled = isOwnerCredentialsUiEnabled(),
+  agreementSource,
+  authStatus,
+  authUserId,
+  contract,
+} = {}) {
+  return uiEnabled === true
+    && agreementSource === 'owner'
+    && authStatus === 'signed_in'
+    && typeof authUserId === 'string' && authUserId.length > 0
+    && typeof contract?.id === 'string' && UUID_RE.test(contract.id)
+    && contract.earner_user_id === authUserId
+}
 
 /**
  * The 7 scopes an `owner_account` grant may carry (docs/entry-contract.md §2-3).
@@ -111,14 +150,15 @@ export function validateExpiryIso(value, nowMs = Date.now()) {
 }
 
 /**
- * Format the one-time presented grant token `<grant_id>.<64 hex>` expected by
- * `x-trustflow-grant` (`supabase/functions/_shared/delegatedAuth.ts`).
- * Returns null if either half is malformed.
+ * Format the one-time presented grant token `<lowercase-uuid>.<64 hex>` expected
+ * by `x-trustflow-grant` (`supabase/functions/_shared/delegatedAuth.ts`).
+ * Returns null if either half is malformed or uppercase.
  */
 export function formatGrantToken(grantId, secret) {
   if (typeof grantId !== 'string' || !UUID_RE.test(grantId)) return null
   if (typeof secret !== 'string' || !SECRET_HEX_RE.test(secret)) return null
-  return `${grantId}.${secret}`
+  const token = `${grantId}.${secret}`
+  return GRANT_TOKEN_RE.test(token) ? token : null
 }
 
 /**
@@ -135,8 +175,8 @@ export function grantStatus(grant, nowMs = Date.now()) {
 }
 
 /**
- * Verify a returned grant metadata object belongs to the requested deal and
- * carries the expected non-secret shape.
+ * Verify a returned grant metadata object belongs to the requested deal, is an
+ * `owner_account` grant, and carries the expected non-secret shape.
  */
 export function isGrantForContract(grant, contractId) {
   if (!grant || typeof grant !== 'object') return false
@@ -185,9 +225,9 @@ export function credentialErrorMessage(reason) {
 }
 
 /**
- * List the signed-in issuer's credentials for one deal.
+ * List the signed-in issuer's `owner_account` credentials for one deal.
  * Fail-closed: rejects invalid contract IDs, non-array payloads, or rows
- * belonging to another contract.
+ * belonging to another contract or non-owner issuer kind.
  *
  * @returns {Promise<{ grants: Array|null, reason: string|null }>}
  */
@@ -218,8 +258,8 @@ export async function listOwnerCredentials(contractId) {
 
 /**
  * Issue a scoped, finite-expiry `owner_account` credential for one deal.
- * Returns the one-time presented token `<grant.id>.<secret>` in memory only.
- * Never persists or logs the secret.
+ * Returns the one-time presented token `<lowercase-uuid>.<64 hex>` in memory
+ * only. Never persists or logs the secret.
  *
  * @returns {Promise<{ grant: object|null, token: string|null, reason: string|null }>}
  */
@@ -254,8 +294,7 @@ export async function issueOwnerCredential({ contractId, scopes, expiresAt, nowM
 
   const grant = result?.data?.grant
   const secret = result?.data?.secret
-  if (!grant || grant.status !== 'issued' || grant.issuer_kind !== 'owner_account'
-      || !isGrantForContract(grant, contractId)) {
+  if (!grant || grant.status !== 'issued' || !isGrantForContract(grant, contractId)) {
     return { grant: null, token: null, reason: 'invalid_response' }
   }
   const token = formatGrantToken(grant.id, secret)
@@ -296,4 +335,160 @@ export async function revokeOwnerCredential({ contractId, grantId }) {
     return { revoked: false, reason: 'invalid_response' }
   }
   return { revoked: true, reason: null }
+}
+
+/**
+ * Pure, session-scoped controller for `AgentCredentialsPanel`.
+ *
+ * Guarantees:
+ * - Any `SIGNED_OUT` event, user-id change (including cross-tab), deal switch,
+ *   or unmount calls `invalidate()`, immediately clearing the revealed token
+ *   and all credential state and invalidating every in-flight response.
+ * - Late `issue` responses arriving after invalidation are discarded without
+ *   revealing the token and WITHOUT automatic destructive cleanup/revoke; the
+ *   owner can inspect and revoke any unseen issued grant from the list later.
+ * - Successful `revoke` immediately clears `revealed` if it matches the
+ *   revoked grant id.
+ */
+export function createCredentialSessionController({
+  contractId,
+  ownerUserId,
+  listFn = listOwnerCredentials,
+  issueFn = issueOwnerCredential,
+  revokeFn = revokeOwnerCredential,
+  onState = () => {},
+} = {}) {
+  let active = Boolean(contractId && ownerUserId)
+  let generation = 0
+  let listSeq = 0
+  let state = {
+    grants: [],
+    loading: active,
+    listError: null,
+    issuing: false,
+    issueError: null,
+    issuanceDisabled: false,
+    revealed: null,
+    revokingId: null,
+    revokeError: null,
+  }
+
+  const emit = (patch) => {
+    state = { ...state, ...patch }
+    onState(state)
+    return state
+  }
+
+  const isCurrent = (gen) => active && gen === generation
+
+  const invalidate = () => {
+    active = false
+    generation += 1
+    listSeq += 1
+    return emit({
+      grants: [],
+      loading: false,
+      listError: null,
+      issuing: false,
+      issueError: null,
+      issuanceDisabled: false,
+      revealed: null,
+      revokingId: null,
+      revokeError: null,
+    })
+  }
+
+  const handleAuthEvent = (event, session) => {
+    if (!active) return false
+    const nextUser = session?.user ?? null
+    if (
+      event === 'SIGNED_OUT'
+      || !nextUser
+      || nextUser.is_anonymous !== false
+      || nextUser.id !== ownerUserId
+    ) {
+      invalidate()
+      return true
+    }
+    return false
+  }
+
+  const load = async () => {
+    if (!active) return state
+    const gen = generation
+    const seq = ++listSeq
+    emit({ loading: true, listError: null })
+    const { grants: rows, reason } = await listFn(contractId)
+    if (!isCurrent(gen) || listSeq !== seq) return state
+    if (reason) {
+      return emit({ loading: false, grants: [], listError: credentialErrorMessage(reason) })
+    }
+    return emit({ loading: false, grants: rows, listError: null })
+  }
+
+  const issue = async ({ scopes, expiresAt }) => {
+    if (!active || state.issuing || state.issuanceDisabled) return { ok: false }
+    const gen = generation
+    emit({ issuing: true, issueError: null })
+    const { grant, token, reason } = await issueFn({ contractId, scopes, expiresAt })
+    // Discard late response after sign-out, user change, or deal switch.
+    // No automatic destructive revoke is performed; unseen grants can be
+    // revoked later from the agreement's credential list.
+    if (!isCurrent(gen)) return { ok: false, discarded: true }
+    if (reason) {
+      emit({
+        issuing: false,
+        issuanceDisabled: reason === 'issuance_disabled' ? true : state.issuanceDisabled,
+        issueError: credentialErrorMessage(reason),
+      })
+      return { ok: false, reason }
+    }
+    emit({
+      issuing: false,
+      issueError: null,
+      revealed: {
+        contractId,
+        grantId: grant.id,
+        token,
+        scopes: grant.scopes,
+        expiresAt: grant.expires_at,
+      },
+    })
+    await load()
+    return { ok: true, grantId: grant.id }
+  }
+
+  const revoke = async (grantId) => {
+    if (!active || state.revokingId) return { ok: false }
+    const gen = generation
+    emit({ revokingId: grantId, revokeError: null })
+    const { revoked, reason } = await revokeFn({ contractId, grantId })
+    if (!isCurrent(gen)) return { ok: false, discarded: true }
+    if (!revoked) {
+      emit({ revokingId: null, revokeError: credentialErrorMessage(reason) })
+      return { ok: false, reason }
+    }
+    emit({
+      revokingId: null,
+      revokeError: null,
+      revealed: state.revealed?.grantId === grantId ? null : state.revealed,
+    })
+    await load()
+    return { ok: true }
+  }
+
+  const dismissReveal = () => emit({ revealed: null })
+  const clearIssueError = () => emit({ issueError: null })
+  const getState = () => state
+
+  return {
+    getState,
+    load,
+    issue,
+    revoke,
+    dismissReveal,
+    clearIssueError,
+    handleAuthEvent,
+    invalidate,
+  }
 }

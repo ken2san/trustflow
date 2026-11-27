@@ -1,17 +1,23 @@
 // src/components/AgentCredentialsPanel.jsx
 //
 // Minimal owner-only credential management UI (Schedule Row 6).
+// Default-off behind `VITE_OWNER_CREDENTIALS_UI === 'on'` (enforced by parent).
 // Allows the deal owner to list, issue (scoped, <= 30d expiry, secret shown
 // once), and revoke per-deal `owner_account` agent grants.
 //
-// SECRET HANDLING
-// The issued token `<grant_id>.<secret>` lives only in transient component
-// state inside a ModalDialog and is wiped on dismiss, revoke, deal switch, or
-// unmount. It is never written to storage, URLs, logs, or grant list rows.
+// SECRET & SESSION HANDLING
+// - The issued token `<lowercase-uuid>.<64 hex>` lives only in transient
+//   controller state inside a ModalDialog and is wiped on dismiss, revoke,
+//   SIGNED_OUT / user-id change (including cross-tab), deal switch, or unmount.
+// - Late responses arriving after sign-out, user change, or deal switch are
+//   discarded without displaying the secret and without automatic destructive
+//   cleanup; any unseen issued grant remains visible and revocable from the
+//   agreement's credential list once signed in as the owner.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyRound, Copy, ShieldOff, AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import ModalDialog from './ui/ModalDialog'
+import { supabase } from '../lib/supabase.js'
 import {
   OWNER_SCOPES,
   EXPIRY_PRESETS,
@@ -19,9 +25,7 @@ import {
   computeExpiryIso,
   grantStatus,
   credentialErrorMessage,
-  listOwnerCredentials,
-  issueOwnerCredential,
-  revokeOwnerCredential,
+  createCredentialSessionController,
 } from '../lib/entryCredentials.js'
 
 const SCOPE_LABELS = Object.fromEntries(OWNER_SCOPES.map(s => [s.id, s.label]))
@@ -34,76 +38,60 @@ function formatStamp(iso) {
   })
 }
 
-export default function AgentCredentialsPanel({ contract }) {
+export default function AgentCredentialsPanel({ contract, ownerUserId }) {
   const contractId = contract?.id ?? null
   const ownerRole = contract?.performed_by === 'counterparty' ? 'receiver' : 'performer'
 
-  const [grants, setGrants] = useState([])
-  const [loading, setLoading] = useState(Boolean(contractId))
-  const [listError, setListError] = useState(null)
-
+  const [panel, setPanel] = useState(() => ({
+    grants: [],
+    loading: Boolean(contractId && ownerUserId),
+    listError: null,
+    issuing: false,
+    issueError: null,
+    issuanceDisabled: false,
+    revealed: null,
+    revokingId: null,
+    revokeError: null,
+  }))
   const [selectedScopes, setSelectedScopes] = useState([])
   const [expiryMode, setExpiryMode] = useState('24h')
   const [customDays, setCustomDays] = useState('7')
-  const [issuing, setIssuing] = useState(false)
-  const [issueError, setIssueError] = useState(null)
-  const [issuanceDisabled, setIssuanceDisabled] = useState(false)
-
-  // Transient one-time reveal: wiped on close, revoke, contract change, or unmount.
-  const [revealed, setRevealed] = useState(null)
+  const [validationError, setValidationError] = useState(null)
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(null)
 
-  const [revokingId, setRevokingId] = useState(null)
-  const [revokeError, setRevokeError] = useState(null)
-
-  // Guard against stale async responses and same-tick double submits.
-  const activeContractRef = useRef(contractId)
-  const listSeqRef = useRef(0)
-  const issuingRef = useRef(false)
+  const controllerRef = useRef(null)
   const copyTimerRef = useRef(null)
 
   useEffect(() => {
-    activeContractRef.current = contractId
-    if (!contractId) return () => { activeContractRef.current = null }
-    let cancelled = false
-    const seq = ++listSeqRef.current
-    listOwnerCredentials(contractId).then(({ grants: rows, reason }) => {
-      if (cancelled || activeContractRef.current !== contractId || listSeqRef.current !== seq) return
-      setLoading(false)
-      if (reason) {
-        setGrants([])
-        setListError(credentialErrorMessage(reason))
-        return
-      }
-      setGrants(rows)
-      setListError(null)
+    if (!contractId || !ownerUserId) return undefined
+    const controller = createCredentialSessionController({
+      contractId,
+      ownerUserId,
+      onState: (next) => setPanel(next),
     })
+    controllerRef.current = controller
+    controller.load()
+
+    const { data } = supabase?.auth?.onAuthStateChange?.((event, session) => {
+      if (controller.handleAuthEvent(event, session)) {
+        setCopied(false)
+        setCopyError(null)
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+      }
+    }) ?? {}
+
     return () => {
-      cancelled = true
-      activeContractRef.current = null
+      data?.subscription?.unsubscribe?.()
+      controller.invalidate()
+      controllerRef.current = null
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
     }
-  }, [contractId])
-
-  const loadGrants = useCallback(async () => {
-    if (!contractId) return
-    const seq = ++listSeqRef.current
-    setLoading(true)
-    setListError(null)
-    const { grants: rows, reason } = await listOwnerCredentials(contractId)
-    if (activeContractRef.current !== contractId || listSeqRef.current !== seq) return
-    setLoading(false)
-    if (reason) {
-      setGrants([])
-      setListError(credentialErrorMessage(reason))
-      return
-    }
-    setGrants(rows)
-  }, [contractId])
+  }, [contractId, ownerUserId])
 
   const toggleScope = (scopeId) => {
-    setIssueError(null)
+    setValidationError(null)
+    controllerRef.current?.clearIssueError()
     setSelectedScopes(prev => (
       prev.includes(scopeId) ? prev.filter(s => s !== scopeId) : [...prev, scopeId]
     ))
@@ -111,14 +99,15 @@ export default function AgentCredentialsPanel({ contract }) {
 
   const handleIssue = async (e) => {
     e.preventDefault()
-    if (!contractId || issuing || issuingRef.current || issuanceDisabled) return
-    setIssueError(null)
+    const controller = controllerRef.current
+    if (!controller || panel.issuing || panel.issuanceDisabled) return
+    setValidationError(null)
 
     let durationMs
     if (expiryMode === 'custom') {
       const days = Number(customDays)
       if (!Number.isInteger(days) || days < 1 || days > MAX_GRANT_DAYS) {
-        setIssueError(`Choose a whole number of days between 1 and ${MAX_GRANT_DAYS}.`)
+        setValidationError(`Choose a whole number of days between 1 and ${MAX_GRANT_DAYS}.`)
         return
       }
       durationMs = days === MAX_GRANT_DAYS
@@ -130,70 +119,38 @@ export default function AgentCredentialsPanel({ contract }) {
 
     const expiry = computeExpiryIso(durationMs)
     if (!expiry.ok) {
-      setIssueError(credentialErrorMessage(expiry.reason))
+      setValidationError(credentialErrorMessage(expiry.reason))
       return
     }
 
-    issuingRef.current = true
-    setIssuing(true)
-    const { grant, token, reason } = await issueOwnerCredential({
-      contractId,
+    const res = await controller.issue({
       scopes: selectedScopes,
       expiresAt: expiry.expiresAt,
     })
-    issuingRef.current = false
-    if (activeContractRef.current !== contractId) return
-    setIssuing(false)
-
-    if (reason) {
-      if (reason === 'issuance_disabled') setIssuanceDisabled(true)
-      setIssueError(credentialErrorMessage(reason))
-      return
+    if (res.ok) {
+      setCopied(false)
+      setCopyError(null)
+      setSelectedScopes([])
     }
-
-    setRevealed({
-      contractId,
-      grantId: grant.id,
-      token,
-      scopes: grant.scopes,
-      expiresAt: grant.expires_at,
-    })
-    setCopied(false)
-    setCopyError(null)
-    setSelectedScopes([])
-    await loadGrants()
   }
 
   const handleRevoke = async (grantId) => {
-    if (!contractId || revokingId) return
-    setRevokingId(grantId)
-    setRevokeError(null)
-    const { revoked, reason } = await revokeOwnerCredential({ contractId, grantId })
-    if (activeContractRef.current !== contractId) return
-    setRevokingId(null)
-
-    if (!revoked) {
-      setRevokeError(credentialErrorMessage(reason))
-      return
-    }
-    if (revealed?.grantId === grantId) {
-      setRevealed(null)
-    }
-    await loadGrants()
+    await controllerRef.current?.revoke(grantId)
   }
 
   const dismissSecret = useCallback(() => {
-    setRevealed(null)
+    controllerRef.current?.dismissReveal()
     setCopied(false)
     setCopyError(null)
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
   }, [])
 
   const copyToken = async () => {
-    if (!revealed?.token) return
+    const token = panel.revealed?.token
+    if (!token) return
     setCopyError(null)
     try {
-      await navigator.clipboard.writeText(revealed.token)
+      await navigator.clipboard.writeText(token)
       setCopied(true)
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
       copyTimerRef.current = setTimeout(() => setCopied(false), 2000)
@@ -202,7 +159,12 @@ export default function AgentCredentialsPanel({ contract }) {
     }
   }
 
-  if (!contractId) return null
+  if (!contractId || !ownerUserId) return null
+
+  const activeReveal = panel.revealed && panel.revealed.contractId === contractId
+    ? panel.revealed
+    : null
+  const displayIssueError = validationError ?? panel.issueError
 
   return (
     <section
@@ -220,32 +182,32 @@ export default function AgentCredentialsPanel({ contract }) {
         </div>
         <button
           type="button"
-          onClick={loadGrants}
-          disabled={loading}
+          onClick={() => controllerRef.current?.load()}
+          disabled={panel.loading}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-white/10 text-slate-400 hover:text-white hover:bg-white/5 text-xs font-bold disabled:opacity-40 transition-all"
         >
-          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          <RefreshCw className={`w-3 h-3 ${panel.loading ? 'animate-spin' : ''}`} /> Refresh
         </button>
       </div>
 
       {/* Existing grants list */}
       <div className="space-y-2">
-        {listError && (
+        {panel.listError && (
           <p role="alert" className="flex items-start gap-2 text-xs text-amber-400">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {listError}
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {panel.listError}
           </p>
         )}
-        {revokeError && (
+        {panel.revokeError && (
           <p role="alert" className="flex items-start gap-2 text-xs text-rose-400">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {revokeError}
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {panel.revokeError}
           </p>
         )}
-        {!loading && !listError && grants.length === 0 && (
+        {!panel.loading && !panel.listError && panel.grants.length === 0 && (
           <p className="text-xs text-slate-500">No agent credentials issued for this agreement yet.</p>
         )}
-        {grants.length > 0 && (
+        {panel.grants.length > 0 && (
           <ul className="space-y-2">
-            {grants.map((g) => {
+            {panel.grants.map((g) => {
               const status = grantStatus(g)
               const badgeClass = status === 'active'
                 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
@@ -276,10 +238,10 @@ export default function AgentCredentialsPanel({ contract }) {
                     <button
                       type="button"
                       onClick={() => handleRevoke(g.id)}
-                      disabled={Boolean(revokingId)}
+                      disabled={Boolean(panel.revokingId)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200 text-xs font-bold disabled:opacity-40 transition-all shrink-0"
                     >
-                      {revokingId === g.id
+                      {panel.revokingId === g.id
                         ? <><Loader2 className="w-3 h-3 animate-spin" /> Revoking…</>
                         : <><ShieldOff className="w-3 h-3" /> Revoke</>}
                     </button>
@@ -295,13 +257,13 @@ export default function AgentCredentialsPanel({ contract }) {
       <form onSubmit={handleIssue} className="border-t border-white/10 pt-4 space-y-4">
         <div className="space-y-2">
           <p className="text-xs font-bold text-slate-300">Issue a new owner credential</p>
-          {issuanceDisabled && (
+          {panel.issuanceDisabled && (
             <p role="status" className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-2xl px-4 py-3">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               Agent credential issuance is currently disabled on this server. You can still list and revoke existing credentials above.
             </p>
           )}
-          <fieldset disabled={issuing || issuanceDisabled} className="space-y-2 disabled:opacity-50">
+          <fieldset disabled={panel.issuing || panel.issuanceDisabled} className="space-y-2 disabled:opacity-50">
             <legend className="text-[11px] text-slate-400">
               Permissions (select explicitly; your role on this agreement is <span className="text-slate-300 font-semibold">{ownerRole}</span>)
             </legend>
@@ -345,8 +307,8 @@ export default function AgentCredentialsPanel({ contract }) {
             <select
               id="credential-expiry"
               value={expiryMode}
-              onChange={(e) => { setExpiryMode(e.target.value); setIssueError(null) }}
-              disabled={issuing || issuanceDisabled}
+              onChange={(e) => { setExpiryMode(e.target.value); setValidationError(null); controllerRef.current?.clearIssueError() }}
+              disabled={panel.issuing || panel.issuanceDisabled}
               className="bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white outline-none disabled:opacity-50"
             >
               {EXPIRY_PRESETS.map(p => (
@@ -367,38 +329,40 @@ export default function AgentCredentialsPanel({ contract }) {
                 max={MAX_GRANT_DAYS}
                 step={1}
                 value={customDays}
-                onChange={(e) => { setCustomDays(e.target.value); setIssueError(null) }}
-                disabled={issuing || issuanceDisabled}
+                onChange={(e) => { setCustomDays(e.target.value); setValidationError(null); controllerRef.current?.clearIssueError() }}
+                disabled={panel.issuing || panel.issuanceDisabled}
                 className="w-24 bg-[#0f172a] border border-white/10 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white outline-none disabled:opacity-50"
               />
             </div>
           )}
           <button
             type="submit"
-            disabled={issuing || issuanceDisabled || selectedScopes.length === 0}
+            disabled={panel.issuing || panel.issuanceDisabled || selectedScopes.length === 0}
             className="px-5 py-2 rounded-2xl bg-white text-[#020617] font-black text-xs hover:bg-indigo-400 hover:text-white transition-all disabled:opacity-40 inline-flex items-center gap-1.5"
           >
-            {issuing ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Issuing…</> : 'Issue credential'}
+            {panel.issuing ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Issuing…</> : 'Issue credential'}
           </button>
         </div>
 
-        {issueError && !issuanceDisabled && (
+        {displayIssueError && !panel.issuanceDisabled && (
           <p role="alert" className="flex items-start gap-2 text-xs text-rose-400">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {issueError}
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {displayIssueError}
           </p>
         )}
 
         <p className="text-[11px] text-slate-500 leading-relaxed">
-          The secret is shown once and never stored by TrustFlow. Grant records are permanent
-          evidence — once a credential is issued, this agreement cannot be deleted even after
-          revocation. Revoking a credential stops new requests after commit; an in-flight request
-          already admitted may still finish, and anything already read stays read.
+          The secret is shown once and never stored by TrustFlow. If you sign out or leave this
+          screen before an issued secret is shown, it is discarded rather than auto-revoked — you
+          can still find and revoke any unseen grant from the list above. Grant records are
+          permanent evidence — once a credential is issued, this agreement cannot be deleted even
+          after revocation. Revoking a credential stops new requests after commit; an in-flight
+          request already admitted may still finish, and anything already read stays read.
         </p>
       </form>
 
       {/* One-time secret reveal modal */}
       <ModalDialog
-        open={Boolean(revealed && revealed.contractId === contractId)}
+        open={Boolean(activeReveal)}
         onClose={dismissSecret}
         title="Save your agent credential"
         actions={
@@ -422,7 +386,7 @@ export default function AgentCredentialsPanel({ contract }) {
           </>
         }
       >
-        {revealed && revealed.contractId === contractId && (
+        {activeReveal && (
           <div className="space-y-3 text-sm">
             <p className="text-amber-300 text-xs font-semibold">
               This credential is shown once. Copy it now — closing this dialog discards the secret permanently.
@@ -432,18 +396,18 @@ export default function AgentCredentialsPanel({ contract }) {
                 x-trustflow-grant token
               </p>
               <p className="font-mono text-xs text-white break-all select-all leading-relaxed">
-                {revealed.token}
+                {activeReveal.token}
               </p>
             </div>
             {copyError && (
               <p role="alert" className="text-xs text-amber-400">{copyError}</p>
             )}
             <p className="text-xs text-slate-400">
-              Grant ID: <span className="font-mono text-slate-300">{revealed.grantId}</span>
+              Grant ID: <span className="font-mono text-slate-300">{activeReveal.grantId}</span>
               <br />
-              Scopes: {(revealed.scopes ?? []).map(s => SCOPE_LABELS[s] ?? s).join(', ')}
+              Scopes: {(activeReveal.scopes ?? []).map(s => SCOPE_LABELS[s] ?? s).join(', ')}
               <br />
-              Expires: {formatStamp(revealed.expiresAt)}
+              Expires: {formatStamp(activeReveal.expiresAt)}
             </p>
           </div>
         )}

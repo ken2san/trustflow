@@ -66,6 +66,8 @@ import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { currentActorIdentity, ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
+import { canShowOwnerCredentials } from './lib/entryCredentials.js';
+import { supabase } from './lib/supabase.js';
 import { storeGuestAccessToken, listGuestAgreementIds, getGuestAgreementLabel } from './lib/guestSession.js';
 import {
   SUPPORTED_CURRENCIES, CURRENCY_MINOR_DIGITS, DEFAULT_CURRENCY,
@@ -456,9 +458,28 @@ const App = () => {
     await signOutEarner();
     setAuth({ status: 'anonymous', email: null, userId: null });
     setMyContracts([]);
+    setAgreement(prev => (prev?.source === 'owner' ? null : prev));
     setView('home');
     addToast('Signed out', 'This browser no longer holds your session.', 'info');
   }, [addToast]);
+
+  // Cross-tab and same-tab auth boundary: clear owner agreement & credential UI
+  // immediately on SIGNED_OUT or user-id change so owner tokens never outlive
+  // the signed-in owner session.
+  useEffect(() => {
+    const { data } = supabase?.auth?.onAuthStateChange?.((event, session) => {
+      const nextUser = session?.user ?? null;
+      const nextUserId = nextUser && nextUser.is_anonymous === false ? nextUser.id : null;
+      if (event === 'SIGNED_OUT' || (auth.userId && nextUserId !== auth.userId)) {
+        setAuth(nextUserId
+          ? { status: 'signed_in', email: nextUser.email ?? null, userId: nextUserId }
+          : { status: 'anonymous', email: null, userId: null });
+        setMyContracts([]);
+        setAgreement(prev => (prev?.source === 'owner' ? null : prev));
+      }
+    }) ?? {};
+    return () => data?.subscription?.unsubscribe?.();
+  }, [auth.userId]);
 
   const handleBYOCStart = useCallback(() => {
     // It used to reserve a client-side UUID here. Nothing reads it: the
@@ -1288,13 +1309,13 @@ const App = () => {
             exportKind={agreement?.source === 'guest' ? 'server_verified' : 'verifiable'}
             onCopyInvite={agreement?.source === 'owner' ? copyInviteLink : undefined}
             onReissueAccess={agreement?.source === 'owner' ? reissueAccess : undefined}
-            canManageCredentials={
-              agreement?.source === 'owner'
-              && auth.status === 'signed_in'
-              && Boolean(auth.userId)
-              && Boolean(agreement?.contract?.id)
-              && agreement.contract.earner_user_id === auth.userId
-            }
+            canManageCredentials={canShowOwnerCredentials({
+              agreementSource: agreement?.source,
+              authStatus: auth.status,
+              authUserId: auth.userId,
+              contract: agreement?.contract,
+            })}
+            ownerUserId={auth.status === 'signed_in' ? auth.userId : null}
             onBack={() => { setAgreement(null); setView(auth.status === 'signed_in' ? 'home' : 'invite-accepted'); }}
           />
         )}

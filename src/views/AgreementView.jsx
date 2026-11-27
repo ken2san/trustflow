@@ -102,7 +102,7 @@ export default function AgreementView({
   onAssertDelivery, onAccept, onRequestCorrection,
   onReportPayment, onAcknowledgePayment, onDisputePayment,
   onExport, exportKind, onCopyInvite, onReissueAccess,
-  canManageCredentials, onBack,
+  canManageCredentials, ownerUserId, onBack,
 }) {
   const [correcting, setCorrecting] = React.useState(false);
   const [reason, setReason] = React.useState('');
@@ -719,8 +719,8 @@ export default function AgreementView({
         </section>
       )}
 
-      {canManageCredentials && (
-        <AgentCredentialsPanel key={contract.id} contract={contract} />
+      {canManageCredentials && ownerUserId && (
+        <AgentCredentialsPanel key={`${contract.id}:${ownerUserId}`} contract={contract} ownerUserId={ownerUserId} />
       )}
 
       <section className="space-y-3">
