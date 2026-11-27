@@ -1,7 +1,7 @@
 # TrustFlow Roadmap
 
 _The canonical roadmap. Rebuilt 2026-11-18; maintained by 棟梁 (Kenji, 2026-11-20).
-Last updated **2026-11-27**, against `docs/schedule.md` rev 3 and HANDOFF through local Row 8 candidate `f17be05` (not pushed; Row 8 live E2E and production NOT done)._
+Last updated **2026-11-27**, against `docs/schedule.md` rev 3 and HANDOFF through **M1 achieved (`2026-11-27`, 7 calendar days ahead of `2026-12-04` baseline; pinned local candidate `37684db`; not pushed; Row 9 / M2 production NOT done)**._
 
 `HANDOFF.md` holds the current state and `Decisions.md` holds the reasons. If this file
 disagrees with either of them, this file is wrong. The longer product-strategy text that
@@ -53,10 +53,13 @@ Production `guest-contract-events` **v14 from `1011b99`** deployed 11-23 16:06 E
 
 **Row 5 (delegated owner read), planned 2026-11-30: started 2026-11-24 (~4 working days early)**, plan `docs/plans/row5-owner-read.md`; 5a (owner read SQL) signed off 11-24 after 4 Codex review rounds (T198–T201; redos recorded in HANDOFF); 5a pushed in T246; 5b (Edge route, default off) built T246, fixed T247–T249 after Codex T202–T204 NO (verifier option (a) exit 3 for withheld input, 2 MiB response cap, calendar checks), Codex T205 YES 11-25; pushed 11-25 (T251, Kenji OK; 584021a..ad5694e, Vercel prod READY; route not deployed, flag off). 5b E2E runbook step 1 done 11-25 (T255: migration 20261124231214 applied to hosted E2E, checks PASS). Steps 2-4 PASS on hosted E2E 11-25 (T260; T256 admission block fixed by publishable-key apikey transport T258/T259, Codex T208/T209): verify_jwt true, flag-on read 200, revoke 403, flag back off, data unchanged; pushed 11-25 (T261). 5b hosted E2E trial done.
 
-**Rows 6–7 (local code complete 2026-11-27, unpushed) and Row 8 (local candidate ready at `f17be05`, live E2E NOT done):**
-- **Row 6 (owner credential UI, default-off):** `f7edc32` → `2c8f057` → `3ce23d7` (Claude GO); offline Playwright browser regression harness (`f17be05` Claude GO, hardened 6/6 PASS offline; `npx playwright test --config tests/browser/playwright.row6.config.js` required in Row 8 pre-run).
+**Rows 6–8 & M1 achieved 2026-11-27 (7 calendar days ahead of rev 3 `2026-12-04` baseline; local candidate `37684db`, unpushed; Row 9 / M2 production NOT done):**
+- **Row 6 (owner credential UI, default-off):** `f7edc32` → `2c8f057` → `3ce23d7` (Claude GO); offline Playwright browser regression harness (`f17be05` → `e736886`, Claude GO, 6/6 PASS offline).
 - **Row 7 (delegated bot bootstrap + grant-only agent + fail-closed recovery):** `a19977e` → `4f62aea` → `001e149` → `ec4e10d` → `33f752e` (Claude GO).
-- **Row 8 (Phase 1 bot E2E — NOT done):** simulator `--delegated` (`5339af3`, Agy GO + Claude A3 GO), Post-C SQL races (`ee70e95`), `make check` (57 migrations, 1278/1278 unit tests, build PASS), and offline Row 6 browser harness (6/6 PASS) are ready locally. Next live E2E step is blocked on: decisions A6 (push vs local) / A7 (read-only Vercel prod check that `VITE_OWNER_CREDENTIALS_UI` is absent before any push) / A8 (live-race scope), hosted E2E approvals B1–B5 (E2E ref `yqjtawffpesplqyurlpj` only; simulator budget `1/1/2`), and separate approved budgets for live-only Row 6 browser UI checks (§D) and expiry negative-check fixtures (§C). Row 9 / production remains untouched and unapproved.
+- **Row 8 & M1 (Phase 1 AI2Human E2E with bots — DONE 2026-11-27, Claude M1 GO `.ada/claude-review-row8-m1.md`):**
+  - Executed W0, B1 (`guest-contract-events` v27), W1 (`row8-w1-20261127`), W2/W2b (local E2E owner UI + direct-INSERT `401/42501` probe `37684db`), and W3 (post-expiry `403 delegation_refused` on read + append for fresh & G1 keys, `503` contrast, product-route revoke) on E2E `yqjtawffpesplqyurlpj` within exact **`1/2/2`** budget; full cleanup verified (`grants_live: 0`, gate closed, `0` `ENTRY_*` secrets, local secret dir removed).
+  - **Explicitly unproven live (bounded):** live guest export download (rests on W1 live guest v2 + offline tests), live browser OTP/CAPTCHA sign-in & session rotation (W2 used injected QA-earner fixture auth; offline harness covers UI auth boundary), same-grant post-expiry replay & live races (SQL-proven `ee70e95`), second owner / counterpart / mixed-release live runs. Owner export of a v5 deal reports `INDETERMINATE_INCOMPLETE_EVIDENCE` by design (`auditExport.js:233-235`).
+- **Next (Row 9 / M2 NOT started):** decision plate in `.ada/row9-next-decision-plate.md` (push + Vercel prod A7 check, minimum prod rollout sequence, owner export verdict decision, release-blocking vs acceptable live gaps). Phase 2 Row 10 prep plan: `.ada/row10-counterpart-entry-plan.md`.
 
 _Row 2 history below._
 
