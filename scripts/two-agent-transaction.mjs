@@ -48,9 +48,24 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SUPABASE_URL, SUPABASE_KEY } from '../tests/e2e/liveEnv.js';
 import { assertE2EProject } from './lib/e2eGuard.mjs';
-import { DEFAULT_KEY_FILE } from './lib/ownerKey.mjs';
+
+const [mode, ...args] = process.argv.slice(2);
+if (mode === '--delegated') {
+  const { main } = await import('./simulators/delegated-two-agent.mjs');
+  try { await main(args); } catch (err) {
+    console.error(err.message);
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
+if (mode !== undefined) {
+  console.error('unknown simulator mode');
+  process.exit(2);
+}
+
+const { SUPABASE_URL, SUPABASE_KEY } = await import('../tests/e2e/liveEnv.js');
+const { DEFAULT_KEY_FILE } = await import('./lib/ownerKey.mjs');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ref = assertE2EProject(SUPABASE_URL);
