@@ -22,6 +22,7 @@
 import React from 'react';
 import { ArrowLeft, CheckCircle2, Send, Loader2, AlertTriangle, Download, Copy } from 'lucide-react';
 import { clocksFor, relativeAge, sinceText, CLOCKS, formatAmount, cancellationClaimLabel } from '../lib/contractStatus.js';
+import AgentCredentialsPanel from '../components/AgentCredentialsPanel';
 
 /** Human wording for the attested event types, from the reader's side. */
 const RECORD_LABELS = {
@@ -100,7 +101,8 @@ export default function AgreementView({
   contract, events, viewerRole, busy, error,
   onAssertDelivery, onAccept, onRequestCorrection,
   onReportPayment, onAcknowledgePayment, onDisputePayment,
-  onExport, exportKind, onCopyInvite, onReissueAccess, onBack,
+  onExport, exportKind, onCopyInvite, onReissueAccess,
+  canManageCredentials, onBack,
 }) {
   const [correcting, setCorrecting] = React.useState(false);
   const [reason, setReason] = React.useState('');
@@ -715,6 +717,10 @@ export default function AgreementView({
             </>
           )}
         </section>
+      )}
+
+      {canManageCredentials && (
+        <AgentCredentialsPanel key={contract.id} contract={contract} />
       )}
 
       <section className="space-y-3">

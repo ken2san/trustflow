@@ -1288,6 +1288,13 @@ const App = () => {
             exportKind={agreement?.source === 'guest' ? 'server_verified' : 'verifiable'}
             onCopyInvite={agreement?.source === 'owner' ? copyInviteLink : undefined}
             onReissueAccess={agreement?.source === 'owner' ? reissueAccess : undefined}
+            canManageCredentials={
+              agreement?.source === 'owner'
+              && auth.status === 'signed_in'
+              && Boolean(auth.userId)
+              && Boolean(agreement?.contract?.id)
+              && agreement.contract.earner_user_id === auth.userId
+            }
             onBack={() => { setAgreement(null); setView(auth.status === 'signed_in' ? 'home' : 'invite-accepted'); }}
           />
         )}

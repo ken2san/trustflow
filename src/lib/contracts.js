@@ -98,7 +98,7 @@ export async function listContracts() {
   const { data, error } = await supabase
     .from('contracts')
     .select(
-      'id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, '
+      'id, earner_user_id, project_name, dod, amount_jpy, amount_minor, currency, deadline, state, '
       + 'earner_display_name, invited_hirer_email, hirer_email, '
       + 'invite_token, invite_token_expires_at, invite_token_used_at, created_at, performed_by, '
       // When the counterparty's credential lapses. Already SELECT-granted and
