@@ -42,6 +42,9 @@ const {
   issueOwnerCredential,
   revokeOwnerCredential,
   createCredentialSessionController,
+  resolveAppAuthChange,
+  subscribeAppAuthBoundary,
+  mountCredentialPanelSession,
 } = await import('../../src/lib/entryCredentials.js')
 
 const { default: AgreementView } = await import('../../src/views/AgreementView.jsx')
@@ -491,5 +494,296 @@ describe('Row 6 session controller regressions (sign-out, cross-tab user change,
     await ctrl.load()
     expect(ctrl.getState().grants).toEqual([])
     expect(ctrl.getState().listError).toContain('unexpected response')
+  })
+})
+
+describe('Row 6 App-level auth transitions (expired vs anonymous preservation)', () => {
+  const signedInOwner = { status: 'signed_in', email: 'owner@example.com', userId: OWNER_ID }
+  const expiredAuth = { status: 'expired', email: 'owner@example.com', userId: null }
+  const anonymousAuth = { status: 'anonymous', email: null, userId: 'anon-1111' }
+
+  it('preserves expired UX on SIGNED_OUT when an earner email is still remembered (e.g. failed refresh)', () => {
+    const res = resolveAppAuthChange(signedInOwner, 'SIGNED_OUT', null, {
+      rememberedEmail: 'owner@example.com',
+    })
+    expect(res).toEqual({
+      changed: true,
+      clearOwnerState: true,
+      nextAuth: { status: 'expired', email: 'owner@example.com', userId: null },
+    })
+  })
+
+  it('transitions to anonymous on SIGNED_OUT when remembered email was forgotten (explicit sign-out)', () => {
+    const res = resolveAppAuthChange(signedInOwner, 'SIGNED_OUT', null, {
+      rememberedEmail: null,
+    })
+    expect(res).toEqual({
+      changed: true,
+      clearOwnerState: true,
+      nextAuth: { status: 'anonymous', email: null, userId: null },
+    })
+  })
+
+  it('clears owner state and switches user when a different verified user signs in', () => {
+    const res = resolveAppAuthChange(
+      signedInOwner,
+      'SIGNED_IN',
+      { user: { id: OTHER_OWNER_ID, email: 'other@example.com', is_anonymous: false } },
+      { rememberedEmail: 'owner@example.com' },
+    )
+    expect(res).toEqual({
+      changed: true,
+      clearOwnerState: true,
+      nextAuth: { status: 'signed_in', email: 'other@example.com', userId: OTHER_OWNER_ID },
+    })
+  })
+
+  it('clears owner state and preserves expired-vs-anonymous when downgraded to anonymous or null session', () => {
+    const expiredRes = resolveAppAuthChange(
+      signedInOwner,
+      'USER_UPDATED',
+      { user: { id: 'anon-9999', is_anonymous: true } },
+      { rememberedEmail: 'owner@example.com' },
+    )
+    expect(expiredRes).toEqual({
+      changed: true,
+      clearOwnerState: true,
+      nextAuth: { status: 'expired', email: 'owner@example.com', userId: null },
+    })
+
+    const anonRes = resolveAppAuthChange(signedInOwner, 'USER_UPDATED', null, {
+      rememberedEmail: null,
+    })
+    expect(anonRes).toEqual({
+      changed: true,
+      clearOwnerState: true,
+      nextAuth: { status: 'anonymous', email: null, userId: null },
+    })
+  })
+
+  it('treats TOKEN_REFRESHED / SIGNED_IN / USER_UPDATED for the same verified user as a no-op', () => {
+    const sameSession = { user: { id: OWNER_ID, email: 'owner@example.com', is_anonymous: false } }
+    for (const event of ['TOKEN_REFRESHED', 'SIGNED_IN', 'USER_UPDATED']) {
+      expect(resolveAppAuthChange(signedInOwner, event, sameSession, {
+        rememberedEmail: 'owner@example.com',
+      })).toEqual({
+        changed: false,
+        clearOwnerState: false,
+        nextAuth: signedInOwner,
+      })
+    }
+  })
+
+  it('treats INITIAL_SESSION on mount or resubscribe as a no-op across all auth states', () => {
+    const sameSession = { user: { id: OWNER_ID, email: 'owner@example.com', is_anonymous: false } }
+    expect(resolveAppAuthChange(signedInOwner, 'INITIAL_SESSION', sameSession, {
+      rememberedEmail: 'owner@example.com',
+    })).toEqual({ changed: false, clearOwnerState: false, nextAuth: signedInOwner })
+
+    expect(resolveAppAuthChange(signedInOwner, 'INITIAL_SESSION', null, {
+      rememberedEmail: 'owner@example.com',
+    })).toEqual({ changed: false, clearOwnerState: false, nextAuth: signedInOwner })
+
+    expect(resolveAppAuthChange(expiredAuth, 'INITIAL_SESSION', null, {
+      rememberedEmail: 'owner@example.com',
+    })).toEqual({ changed: false, clearOwnerState: false, nextAuth: expiredAuth })
+  })
+
+  it('does not treat an anonymous user with non-null userId as a signed-in owner changing users', () => {
+    const anonSession = { user: { id: 'anon-1111', is_anonymous: true } }
+    expect(resolveAppAuthChange(anonymousAuth, 'TOKEN_REFRESHED', anonSession)).toEqual({
+      changed: false,
+      clearOwnerState: false,
+      nextAuth: anonymousAuth,
+    })
+    expect(resolveAppAuthChange(expiredAuth, 'TOKEN_REFRESHED', anonSession, {
+      rememberedEmail: 'owner@example.com',
+    })).toEqual({
+      changed: false,
+      clearOwnerState: false,
+      nextAuth: expiredAuth,
+    })
+  })
+})
+
+describe('Row 6 actual subscription & component wiring regressions', () => {
+  const validExpiry = new Date(NOW + 86_400_000).toISOString()
+  const ownerContract = {
+    id: DEAL,
+    earner_user_id: OWNER_ID,
+    project_name: 'Audit deal',
+    state: 'TERMS_ACCEPTED',
+    performed_by: 'creator',
+    dod: ['Deliver work'],
+  }
+
+  function createFakeAuthClient() {
+    let listener = null
+    const unsubscribe = vi.fn(() => { listener = null })
+    const onAuthStateChange = vi.fn((cb) => {
+      listener = cb
+      return { data: { subscription: { unsubscribe } } }
+    })
+    return {
+      authClient: { onAuthStateChange },
+      unsubscribe,
+      emit: (event, session) => listener?.(event, session),
+    }
+  }
+
+  it('subscribeAppAuthBoundary wires live auth events, preserves expired UX, clears owner state only, and unsubscribes', () => {
+    const { authClient, unsubscribe, emit } = createFakeAuthClient()
+    let auth = { status: 'signed_in', email: 'owner@example.com', userId: OWNER_ID }
+    let remembered = 'owner@example.com'
+    let myContracts = [ownerContract]
+    let agreement = { source: 'owner', contract: ownerContract }
+    const setAuth = vi.fn((next) => { auth = next })
+    const clearOwnerState = vi.fn(() => {
+      myContracts = []
+      agreement = agreement?.source === 'owner' ? null : agreement
+    })
+
+    const cleanup = subscribeAppAuthBoundary({
+      authClient,
+      getAuth: () => auth,
+      getRememberedEmail: () => remembered,
+      setAuth,
+      clearOwnerState,
+    })
+    expect(authClient.onAuthStateChange).toHaveBeenCalledTimes(1)
+
+    // INITIAL_SESSION and same-user TOKEN_REFRESHED are no-ops.
+    emit('INITIAL_SESSION', { user: { id: OWNER_ID, email: 'owner@example.com', is_anonymous: false } })
+    emit('TOKEN_REFRESHED', { user: { id: OWNER_ID, email: 'owner@example.com', is_anonymous: false } })
+    expect(setAuth).not.toHaveBeenCalled()
+    expect(clearOwnerState).not.toHaveBeenCalled()
+    expect(agreement?.source).toBe('owner')
+
+    // Refresh-token failure emits SIGNED_OUT while email is still remembered -> expired + owner cleared.
+    emit('SIGNED_OUT', null)
+    expect(auth).toEqual({ status: 'expired', email: 'owner@example.com', userId: null })
+    expect(myContracts).toEqual([])
+    expect(agreement).toBeNull()
+
+    // Explicit sign-out (remembered email cleared) on a guest agreement keeps guest agreement intact.
+    auth = { status: 'signed_in', email: 'owner@example.com', userId: OWNER_ID }
+    remembered = null
+    agreement = { source: 'guest', contract: ownerContract }
+    emit('SIGNED_OUT', null)
+    expect(auth).toEqual({ status: 'anonymous', email: null, userId: null })
+    expect(agreement?.source).toBe('guest')
+
+    // Cleanup unsubscribes so later events do not fire.
+    cleanup()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    setAuth.mockClear()
+    clearOwnerState.mockClear()
+    emit('SIGNED_OUT', null)
+    expect(setAuth).not.toHaveBeenCalled()
+    expect(clearOwnerState).not.toHaveBeenCalled()
+  })
+
+  it('mountCredentialPanelSession wires initial load, live auth invalidation, late-issue discard, and cleanup', async () => {
+    const { authClient, unsubscribe, emit } = createFakeAuthClient()
+    const pendingIssue = deferred()
+    const listFn = vi.fn().mockResolvedValue({ grants: [], reason: null })
+    const revokeFn = vi.fn()
+    const onAuthInvalidated = vi.fn()
+    let latestState = null
+
+    const { controller, cleanup } = mountCredentialPanelSession({
+      authClient,
+      contractId: DEAL,
+      ownerUserId: OWNER_ID,
+      onState: (s) => { latestState = s },
+      onAuthInvalidated,
+      listFn,
+      issueFn: () => pendingIssue.promise,
+      revokeFn,
+    })
+
+    expect(listFn).toHaveBeenCalledWith(DEAL)
+    expect(authClient.onAuthStateChange).toHaveBeenCalledTimes(1)
+
+    // Same-user token refresh must not invalidate the active panel.
+    emit('TOKEN_REFRESHED', { user: { id: OWNER_ID, is_anonymous: false } })
+    expect(onAuthInvalidated).not.toHaveBeenCalled()
+
+    // In-flight issue invalidated by live SIGNED_OUT event on the wired listener.
+    const issuePromise = controller.issue({ scopes: ['read'], expiresAt: validExpiry })
+    emit('SIGNED_OUT', null)
+    expect(onAuthInvalidated).toHaveBeenCalledTimes(1)
+    expect(latestState.revealed).toBeNull()
+
+    pendingIssue.resolve({
+      grant: {
+        status: 'issued',
+        id: GRANT_ID,
+        contract_id: DEAL,
+        issuer_kind: 'owner_account',
+        scopes: ['read'],
+        expires_at: validExpiry,
+      },
+      token: `${GRANT_ID}.${SECRET}`,
+      reason: null,
+    })
+    expect(await issuePromise).toEqual({ ok: false, discarded: true })
+    expect(latestState.revealed).toBeNull()
+    expect(revokeFn).not.toHaveBeenCalled()
+
+    // Cleanup unsubscribes and invalidates.
+    cleanup()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    onAuthInvalidated.mockClear()
+    emit('SIGNED_OUT', null)
+    expect(onAuthInvalidated).not.toHaveBeenCalled()
+  })
+
+  it('wires App -> AgreementView -> AgentCredentialsPanel default-off, keyed remount, and clipboard warning', () => {
+    // End-to-end predicate -> AgreementView render check (default-off vs enabled).
+    const defaultOffAllowed = canShowOwnerCredentials({
+      agreementSource: 'owner',
+      authStatus: 'signed_in',
+      authUserId: OWNER_ID,
+      contract: ownerContract,
+    })
+    expect(defaultOffAllowed).toBe(false)
+    const defaultHtml = renderToStaticMarkup(React.createElement(AgreementView, {
+      contract: ownerContract,
+      events: [],
+      viewerRole: 'performer',
+      canManageCredentials: defaultOffAllowed,
+      ownerUserId: OWNER_ID,
+    }))
+    expect(defaultHtml).not.toContain('Agent credentials')
+
+    const enabledAllowed = canShowOwnerCredentials({
+      uiEnabled: true,
+      agreementSource: 'owner',
+      authStatus: 'signed_in',
+      authUserId: OWNER_ID,
+      contract: ownerContract,
+    })
+    expect(enabledAllowed).toBe(true)
+    const enabledHtml = renderToStaticMarkup(React.createElement(AgreementView, {
+      contract: ownerContract,
+      events: [],
+      viewerRole: 'performer',
+      canManageCredentials: enabledAllowed,
+      ownerUserId: OWNER_ID,
+    }))
+    expect(enabledHtml).toContain('Agent credentials')
+
+    // Source-level wiring pins across App.jsx, AgreementView.jsx, and AgentCredentialsPanel.jsx.
+    const appSrc = readFileSync('src/App.jsx', 'utf8')
+    const agreementSrc = readFileSync('src/views/AgreementView.jsx', 'utf8')
+    const panelSrc = readFileSync('src/components/AgentCredentialsPanel.jsx', 'utf8')
+
+    expect(appSrc).toContain('subscribeAppAuthBoundary({')
+    expect(appSrc).toContain('getRememberedEmail: recallEarnerEmail')
+    expect(appSrc).toContain('canManageCredentials={canShowOwnerCredentials({')
+    expect(agreementSrc).toContain('<AgentCredentialsPanel key={`${contract.id}:${ownerUserId}`} contract={contract} ownerUserId={ownerUserId} />')
+    expect(panelSrc).toContain('mountCredentialPanelSession({')
+    expect(panelSrc).toContain('Clear your clipboard after pasting.')
   })
 })

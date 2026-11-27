@@ -25,7 +25,7 @@ import {
   computeExpiryIso,
   grantStatus,
   credentialErrorMessage,
-  createCredentialSessionController,
+  mountCredentialPanelSession,
 } from '../lib/entryCredentials.js'
 
 const SCOPE_LABELS = Object.fromEntries(OWNER_SCOPES.map(s => [s.id, s.label]))
@@ -65,25 +65,21 @@ export default function AgentCredentialsPanel({ contract, ownerUserId }) {
 
   useEffect(() => {
     if (!contractId || !ownerUserId) return undefined
-    const controller = createCredentialSessionController({
+    const { controller, cleanup } = mountCredentialPanelSession({
+      authClient: supabase?.auth,
       contractId,
       ownerUserId,
       onState: (next) => setPanel(next),
-    })
-    controllerRef.current = controller
-    controller.load()
-
-    const { data } = supabase?.auth?.onAuthStateChange?.((event, session) => {
-      if (controller.handleAuthEvent(event, session)) {
+      onAuthInvalidated: () => {
         setCopied(false)
         setCopyError(null)
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
-      }
-    }) ?? {}
+      },
+    })
+    controllerRef.current = controller
 
     return () => {
-      data?.subscription?.unsubscribe?.()
-      controller.invalidate()
+      cleanup()
       controllerRef.current = null
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
     }
@@ -389,7 +385,7 @@ export default function AgentCredentialsPanel({ contract, ownerUserId }) {
         {activeReveal && (
           <div className="space-y-3 text-sm">
             <p className="text-amber-300 text-xs font-semibold">
-              This credential is shown once. Copy it now — closing this dialog discards the secret permanently.
+              This credential is shown once — closing this dialog discards it here. Clear your clipboard after pasting.
             </p>
             <div className="rounded-2xl border border-indigo-500/30 bg-slate-950/80 px-4 py-3 space-y-1">
               <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">

@@ -492,3 +492,124 @@ export function createCredentialSessionController({
     invalidate,
   }
 }
+
+/**
+ * Pure App-level auth boundary transition for `supabase.auth.onAuthStateChange`.
+ *
+ * Guarantees:
+ * - Preserves existing `expired` vs `anonymous` UX when a session lapses or
+ *   signs out (`rememberedEmail` present -> `'expired'`, absent -> `'anonymous'`).
+ * - Immediately signals `clearOwnerState: true` on `SIGNED_OUT`, cross-tab
+ *   user-id change, or downgrade from a verified owner session so owner
+ *   agreements and credential secrets never outlive the owner session.
+ * - Treats `INITIAL_SESSION` (mount/resubscribe) and same-user `TOKEN_REFRESHED`
+ *   / `SIGNED_IN` / `USER_UPDATED` as strict no-ops.
+ */
+export function resolveAppAuthChange(
+  currentAuth,
+  event,
+  session,
+  { rememberedEmail = null } = {},
+) {
+  if (event === 'INITIAL_SESSION') {
+    return { changed: false, clearOwnerState: false, nextAuth: currentAuth }
+  }
+
+  const email = typeof rememberedEmail === 'string' && rememberedEmail.length > 0
+    ? rememberedEmail
+    : null
+  const fallbackAuth = email
+    ? { status: 'expired', email, userId: null }
+    : { status: 'anonymous', email: null, userId: null }
+
+  if (event === 'SIGNED_OUT') {
+    return { changed: true, clearOwnerState: true, nextAuth: fallbackAuth }
+  }
+
+  const wasSignedInOwner = currentAuth?.status === 'signed_in'
+    && typeof currentAuth.userId === 'string'
+    && currentAuth.userId.length > 0
+  if (!wasSignedInOwner) {
+    return { changed: false, clearOwnerState: false, nextAuth: currentAuth }
+  }
+
+  const nextUser = session?.user ?? null
+  const nextUserId = nextUser
+    && nextUser.is_anonymous === false
+    && typeof nextUser.id === 'string'
+    && nextUser.id.length > 0
+    ? nextUser.id
+    : null
+
+  if (nextUserId === currentAuth.userId) {
+    return { changed: false, clearOwnerState: false, nextAuth: currentAuth }
+  }
+
+  const nextAuth = nextUserId
+    ? { status: 'signed_in', email: nextUser.email ?? null, userId: nextUserId }
+    : fallbackAuth
+
+  return { changed: true, clearOwnerState: true, nextAuth }
+}
+
+/**
+ * Subscribe the App-level auth boundary to `authClient.onAuthStateChange`.
+ * Returns an unsubscribe cleanup function.
+ */
+export function subscribeAppAuthBoundary({
+  authClient,
+  getAuth,
+  getRememberedEmail,
+  setAuth,
+  clearOwnerState,
+} = {}) {
+  const { data } = authClient?.onAuthStateChange?.((event, session) => {
+    const transition = resolveAppAuthChange(getAuth?.(), event, session, {
+      rememberedEmail: getRememberedEmail?.() ?? null,
+    })
+    if (!transition.changed) return
+    setAuth?.(transition.nextAuth)
+    if (transition.clearOwnerState) clearOwnerState?.()
+  }) ?? {}
+
+  return () => data?.subscription?.unsubscribe?.()
+}
+
+/**
+ * Mount a session-scoped credential controller and wire it to
+ * `authClient.onAuthStateChange`, triggering the initial list load and
+ * returning `{ controller, cleanup }`.
+ */
+export function mountCredentialPanelSession({
+  authClient,
+  contractId,
+  ownerUserId,
+  onState,
+  onAuthInvalidated,
+  listFn,
+  issueFn,
+  revokeFn,
+} = {}) {
+  const controller = createCredentialSessionController({
+    contractId,
+    ownerUserId,
+    onState,
+    ...(listFn ? { listFn } : {}),
+    ...(issueFn ? { issueFn } : {}),
+    ...(revokeFn ? { revokeFn } : {}),
+  })
+  controller.load()
+
+  const { data } = authClient?.onAuthStateChange?.((event, session) => {
+    if (controller.handleAuthEvent(event, session)) {
+      onAuthInvalidated?.()
+    }
+  }) ?? {}
+
+  const cleanup = () => {
+    data?.subscription?.unsubscribe?.()
+    controller.invalidate()
+  }
+
+  return { controller, cleanup }
+}

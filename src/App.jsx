@@ -66,7 +66,7 @@ import { downloadGuestRecord } from './lib/guestRecordExport.js';
 import { loadRuntimeSnapshot, restorableView, saveRuntimeSnapshot } from './lib/runtimeState.js';
 import { currentActorIdentity, ensureActorIdentity } from './lib/identity.js';
 import { createContract, listContracts, inviteUrlFor, fetchInvite, acceptInvite, fetchGuestEvidence, deleteDraftContract, reissueGuestAccess, guestAccessUrlFor, shownTermsDigest } from './lib/contracts.js';
-import { canShowOwnerCredentials } from './lib/entryCredentials.js';
+import { canShowOwnerCredentials, subscribeAppAuthBoundary } from './lib/entryCredentials.js';
 import { supabase } from './lib/supabase.js';
 import { storeGuestAccessToken, listGuestAgreementIds, getGuestAgreementLabel } from './lib/guestSession.js';
 import {
@@ -76,7 +76,7 @@ import {
 import {
   requestEarnerVerification, verifyEarnerOtp, isEarnerVerified,
   requestSignInCode, verifySignInCode, getAuthState, signOutEarner,
-  describeAuthError,
+  recallEarnerEmail, describeAuthError,
 } from './lib/earnerAuth.js';
 
 
@@ -463,23 +463,27 @@ const App = () => {
     addToast('Signed out', 'This browser no longer holds your session.', 'info');
   }, [addToast]);
 
+  const authRef = useRef(auth);
+  useEffect(() => { authRef.current = auth; }, [auth]);
+  const agreementRef = useRef(agreement);
+  useEffect(() => { agreementRef.current = agreement; }, [agreement]);
+
   // Cross-tab and same-tab auth boundary: clear owner agreement & credential UI
   // immediately on SIGNED_OUT or user-id change so owner tokens never outlive
-  // the signed-in owner session.
-  useEffect(() => {
-    const { data } = supabase?.auth?.onAuthStateChange?.((event, session) => {
-      const nextUser = session?.user ?? null;
-      const nextUserId = nextUser && nextUser.is_anonymous === false ? nextUser.id : null;
-      if (event === 'SIGNED_OUT' || (auth.userId && nextUserId !== auth.userId)) {
-        setAuth(nextUserId
-          ? { status: 'signed_in', email: nextUser.email ?? null, userId: nextUserId }
-          : { status: 'anonymous', email: null, userId: null });
-        setMyContracts([]);
+  // the signed-in owner session, while preserving expired-vs-anonymous UX.
+  useEffect(() => subscribeAppAuthBoundary({
+    authClient: supabase?.auth,
+    getAuth: () => authRef.current,
+    getRememberedEmail: recallEarnerEmail,
+    setAuth,
+    clearOwnerState: () => {
+      setMyContracts([]);
+      if (agreementRef.current?.source === 'owner') {
         setAgreement(prev => (prev?.source === 'owner' ? null : prev));
+        setView(v => (v === 'agreement' ? 'home' : v));
       }
-    }) ?? {};
-    return () => data?.subscription?.unsubscribe?.();
-  }, [auth.userId]);
+    },
+  }), []);
 
   const handleBYOCStart = useCallback(() => {
     // It used to reserve a client-side UUID here. Nothing reads it: the
