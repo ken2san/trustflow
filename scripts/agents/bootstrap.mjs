@@ -27,14 +27,17 @@
 //        invite.json   the invite token, for the guest bot (a secret, 0600)
 //        manifest.json what was done, phase by phase (no secret in it)
 //
-// NO ORPHAN GRANT
+// NO ORPHAN GRANT, NO UNRELATED REVOCATION
 // The grant id is recorded (durably, fsync then rename) the moment an issue
 // response carries one, before the response is validated or any file is
-// written. Any failure after an issue was sent revokes every live grant on the
-// run's own deal (the deal was created by this run, so every grant on it is
-// the run's) and reads the revocation back; whatever it could not verify, the
-// operator finishes with `--revoke`, which works from any phase. On a failed
-// run, the invite and grant files are removed; `--revoke` removes them too.
+// written. Any failure after an issue was sent revokes exactly that grant and
+// reads it back. With no id (the answer was lost), only a grant proven to be
+// the run's is revoked: the sole grant ever on the run's fresh deal, matching
+// the recorded request; anything else is left for manual reconciliation. No
+// other grant is ever revoked. Whatever cleanup could not verify, the operator
+// finishes with `--revoke`, which works from any phase. On a failed run, the
+// invite and grant files are removed (after grant recovery, never instead of
+// it); `--revoke` removes them too.
 //
 // DETERMINISTIC AND NEVER RETRIED
 // The manifest is created exclusively, so a run id bootstraps at most once.
@@ -123,7 +126,8 @@ export function canonicalChannelDir(dir, { repoRoot = REPO_ROOT, isIgnored = git
   }
   const root = realpathSync(repoRoot)
   const rel = path.relative(root, canonical)
-  const inside = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  // A segment named `..chan` is inside; only `..` itself or `../…` leaves the root.
+  const inside = rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
   if (inside && !isIgnored(canonical)) throw new ClientError('the channel dir is inside the repository and not git-ignored')
   return { canonical, exists }
 }
@@ -145,6 +149,8 @@ export function prepareChannelDir(dir, { create = true, ...opts } = {}) {
 // ── Files: exclusive, no symlink, complete or absent ────────────────────────
 
 const file = (dir, name) => path.join(dir, name)
+/** rm that never throws: cleanup must not mask the error it cleans up after, nor stop grant recovery. */
+const tryRemove = p => { try { rmSync(p, { force: true }) } catch { /* reported by whoever checks presence */ } }
 const EXCL = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW
 
 /**
@@ -162,15 +168,15 @@ export function writeExclusive(dir, name, text, { write = writeFileSync } = {}) 
     fsyncSync(fd)
   } catch {
     try { closeSync(fd) } catch { /* already closed */ }
-    rmSync(file(dir, name), { force: true })
+    tryRemove(file(dir, name))
     throw new ClientError(`${name} could not be written; removed`)
   }
   closeSync(fd)
 }
 
-/** Remove both secret files; returns the names still present afterwards. */
+/** Remove both secret files; never throws; returns the names still present afterwards. */
 export function removeSecrets(dir) {
-  for (const n of SECRET_FILES) rmSync(file(dir, n), { force: true })
+  for (const n of SECRET_FILES) tryRemove(file(dir, n))
   return SECRET_FILES.filter(n => { try { lstatSync(file(dir, n)); return true } catch { return false } })
 }
 
@@ -187,7 +193,7 @@ export function phase(dir, name, detail = {}) {
     writeExclusive(dir, tmpName, JSON.stringify(next, null, 2))
     renameSync(file(dir, tmpName), file(dir, 'manifest.json'))
   } catch {
-    rmSync(file(dir, tmpName), { force: true })
+    tryRemove(file(dir, tmpName))
     throw new ClientError('the manifest could not be updated')
   }
   try { const d = openSync(dir, 'r'); try { fsyncSync(d) } finally { closeSync(d) } } catch { /* best effort on this platform */ }
@@ -226,7 +232,7 @@ export function validateIssue(res, { contractId, scopes = DEFAULT_SCOPES, now = 
   return { grantId: g.id, token, scopes: [...g.scopes], expiresAt: g.expires_at }
 }
 
-// ── Revocation: every live grant on the run's deal, read back ───────────────
+// ── Revocation: only the run's own grant, read back ────────────────────────
 
 const safe = e => (e instanceof ClientError ? e.message : 'request failed')
 
@@ -237,27 +243,60 @@ async function listGrants(tf, token, contractId) {
 }
 
 /**
- * Revoke every live grant on `contractId` and read the list back. The deal was
- * created by this run, so every grant on it is the run's. Never throws:
- * returns { revoked: [ids], problems: [fixed text] }; empty problems = verified.
+ * The run's grant when no issue response named it. Provable only if the run's
+ * deal has ever held exactly one grant (live or revoked) and that one is what
+ * the run asked for: owner_account, the default scopes, the exact requested
+ * expiry (the server stores it to the millisecond), created no earlier than the
+ * issue was sent. Returns { id } | { none: true } | { problem: fixed text };
+ * anything short of proof is a problem, never a guess.
  */
-export async function revokeRunGrants(tf, token, contractId) {
+export function provenRunGrant(grants, { contractId, expiresAt, sentAt }) {
+  if (grants.length === 0) return { none: true }
+  const manual = 'reconcile manually in the owner UI; nothing was revoked'
+  if (grants.length !== 1) return { problem: `${grants.length} grants on the run's deal and no recorded grant id: ${manual}` }
+  const [g] = grants
+  const want = Date.parse(expiresAt ?? '')
+  const proven = Number.isFinite(want) && typeof g.id === 'string' && UUID.test(g.id) && g.contract_id === contractId
+    && g.issuer_kind === 'owner_account' && Array.isArray(g.scopes) && g.scopes.length === DEFAULT_SCOPES.length
+    && DEFAULT_SCOPES.every(x => g.scopes.includes(x)) && Date.parse(g.expires_at ?? '') === want
+    && Date.parse(g.created_at ?? '') >= Date.parse(sentAt ?? '') - SKEW_MS
+  return proven ? { id: g.id } : { problem: `the one grant on the run's deal does not match the run's issue request: ${manual}` }
+}
+
+/**
+ * Revoke one grant (scoped to the run's deal by the server: id and contract_id
+ * must both match) and read it back. Never throws: { revoked, problems }.
+ */
+async function revokeGrant(tf, token, contractId, id) {
   const problems = [], revoked = []
-  let grants
-  try { grants = await listGrants(tf, token, contractId) } catch (e) { return { revoked, problems: [safe(e)] } }
-  for (const g of grants.filter(x => x.revoked_at === null)) {
-    try {
-      const r = await tf.invoke('manage-entry-agent-credential', { ownerToken: token,
-        body: { action: 'revoke', contract_id: contractId, id: g.id } })
-      if (r?.status !== 200) problems.push(`revoke ${g.id} answered ${r?.status ?? 'nothing'} ${word(r?.reason)}`)
-      else revoked.push(g.id)
-    } catch (e) { problems.push(`revoke ${g.id}: ${safe(e)}`) }
-  }
   try {
-    const live = (await listGrants(tf, token, contractId)).filter(x => typeof x.revoked_at !== 'string').map(x => x.id)
-    if (live.length) problems.push(`still live after revoke: ${live.join(', ')}`)
+    const r = await tf.invoke('manage-entry-agent-credential', { ownerToken: token,
+      body: { action: 'revoke', contract_id: contractId, id } })
+    if (r?.status !== 200) problems.push(`revoke ${id} answered ${r?.status ?? 'nothing'} ${word(r?.reason)}`)
+    else revoked.push(id)
+  } catch (e) { problems.push(`revoke ${id}: ${safe(e)}`) }
+  try {
+    const row = (await listGrants(tf, token, contractId)).find(x => x.id === id)
+    if (!row) problems.push(`revoke readback: ${id} is not listed`)
+    else if (typeof row.revoked_at !== 'string') problems.push(`still live after revoke: ${id}`)
   } catch (e) { problems.push(`revoke readback: ${safe(e)}`) }
   return { revoked, problems }
+}
+
+/**
+ * Recover the run's grant after its issue was sent. A known grant id: revoke
+ * exactly that grant. None (the answer was lost, or its record could not be
+ * written): revoke only a grant provenRunGrant proves is the run's. No other
+ * grant is ever revoked. Never throws: { revoked, problems }; empty problems =
+ * verified.
+ */
+export async function recoverRunGrant(tf, token, { contractId, grantId = null, issue = null }) {
+  if (grantId) return revokeGrant(tf, token, contractId, grantId)
+  let grants
+  try { grants = await listGrants(tf, token, contractId) } catch (e) { return { revoked: [], problems: [safe(e)] } }
+  const p = provenRunGrant(grants, { contractId, expiresAt: issue?.expires_at, sentAt: issue?.at })
+  if (p.problem) return { revoked: [], problems: [p.problem] }
+  return p.none ? { revoked: [], problems: [] } : revokeGrant(tf, token, contractId, p.id)
 }
 
 // ── The run ─────────────────────────────────────────────────────────────────
@@ -306,22 +345,25 @@ export async function runBootstrap({ run, dir, deps }) {
   phase(dir, 'created', { contract_id: contract.id })
   say(`created deal ${contract.id}`)
 
-  let issueSent = false
+  // What recovery needs is also held in memory, so a manifest that cannot be
+  // written cannot stop the run's own cleanup.
+  let issue = null, knownGrantId = null
   try {
     writeExclusive(dir, 'invite.json', JSON.stringify({ run, invite_token: contract.invite_token }))
     const issuedAt = now()
-    phase(dir, 'issue_sent')
-    issueSent = true
+    const body = issueBody(contract.id, { now: issuedAt })
+    const sent = phase(dir, 'issue_sent', { expires_at: body.expires_at })
+    issue = sent.phases.issue_sent
     let issued
     try {
-      issued = await tf.invoke('manage-entry-agent-credential', { ownerToken: owner.token, body: issueBody(contract.id, { now: issuedAt }) })
+      issued = await tf.invoke('manage-entry-agent-credential', { ownerToken: owner.token, body })
     } catch {
       phase(dir, 'issue_unknown')
       throw new ClientError('issue: no answer')
     }
     // Durable before anything else can fail: the id is what makes this grant recoverable.
-    const grantId = issuedGrantId(issued)
-    if (grantId) phase(dir, 'issue_received', { grant_id: grantId, status: issued?.status ?? null })
+    knownGrantId = issuedGrantId(issued)
+    if (knownGrantId) phase(dir, 'issue_received', { grant_id: knownGrantId, status: issued?.status ?? null })
     if (issued?.status === 503) {
       phase(dir, 'issue_refused', { status: 503, error: word(issued.reason) })
       throw new ClientError(`issue answered 503 ${word(issued.reason)}: issuance is off on this project; no fallback`)
@@ -345,8 +387,11 @@ export async function runBootstrap({ run, dir, deps }) {
     say(`BOOTSTRAP READY: ${dir} (grant, agent.json, invite.json)`)
   } catch (e) {
     const reason = safe(e)
+    // Grant recovery first; secret removal never throws and runs after it.
+    const auto = issue
+      ? await recoverRunGrant(tf, owner.token, { contractId: contract.id, grantId: knownGrantId, issue })
+      : { revoked: [], problems: [] }
     const left = removeSecrets(dir)
-    const auto = issueSent ? await revokeRunGrants(tf, owner.token, contract.id) : { revoked: [], problems: [] }
     if (left.length) auto.problems.push(`could not remove: ${left.join(', ')}`)
     try { phase(dir, 'failed', { reason, auto_revoked: auto.revoked, problems: auto.problems }) } catch { auto.problems.push('the manifest could not be updated') }
     throw new ClientError(auto.problems.length
@@ -356,20 +401,25 @@ export async function runBootstrap({ run, dir, deps }) {
 }
 
 /**
- * Revoke a run from any phase: every live grant on its deal, read back, and
- * both secret files removed whatever happens. Returns { revoked, problems }.
+ * Revoke a run from any phase: its recorded grant (or, with none recorded, only
+ * a grant proven to be the run's), read back, and both secret files removed
+ * whatever happens. Before an issue was sent no grant can exist, so nothing
+ * remote is touched. Returns { revoked, problems }.
  */
 export async function runRevoke({ run, dir, deps }) {
   const { tf, say = () => {} } = deps
   const m = readManifest(dir)
   if (m.run !== run) throw new ClientError('the manifest in this dir is for another run')
   const contractId = m.phases?.created?.contract_id ?? null
+  const issue = m.phases?.issue_sent ?? null
+  const grantId = [m.phases?.issued?.grant_id, m.phases?.issue_received?.grant_id]
+    .find(id => typeof id === 'string' && UUID.test(id)) ?? null
   let result = { revoked: [], problems: [] }
-  if (contractId) {
+  if (contractId && issue) {
     say(FIXTURE_BANNER)
     let owner = null
     try { owner = await tf.ownerSession() } catch (e) { result.problems.push(`owner session: ${safe(e)}`) }
-    if (owner) result = await revokeRunGrants(tf, owner.token, contractId)
+    if (owner) result = await recoverRunGrant(tf, owner.token, { contractId, grantId, issue })
   }
   const left = removeSecrets(dir)
   if (left.length) result.problems.push(`could not remove: ${left.join(', ')}`)

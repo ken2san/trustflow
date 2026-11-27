@@ -80,10 +80,10 @@ export const ACTIONS = Object.freeze(['read', 'performance.asserted'])
  * Run the agent from a channel dir. `client` = { read, append } is injectable
  * so the flow can be tested offline. Returns the reporter's failures.
  */
-export async function runAgent({ dir, env = process.env, client = { read: delegatedRead, append: delegatedAppend } }) {
+export async function runAgent({ dir: given, env = process.env, client = { read: delegatedRead, append: delegatedAppend } }) {
   assertGrantOnly(env)
-  if (!dir) throw new ClientError('TF_CHANNEL_DIR is not set')
-  assertPrivateDir(dir)
+  if (!given) throw new ClientError('TF_CHANNEL_DIR is not set')
+  const dir = assertPrivateDir(given)
   const cfg = readAgentConfig(dir)
   const actions = ACTIONS.filter(a => cfg.scopes.includes(a))
   if (!actions.length) throw new ClientError(`the grant allows none of this bot's actions (${ACTIONS.join(', ')}); nothing to do is not a pass`)

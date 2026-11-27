@@ -17,6 +17,7 @@
 // (scripts/lib/delegatedTrial.mjs re-exports the grant-file and word helpers).
 
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { E2E_ORIGIN, isPinned } from './pinnedFetch.mjs'
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -63,16 +64,19 @@ export function readGrantFile(file, { envName = 'TF_DELEGATED_GRANT_FILE' } = {}
 
 /**
  * A directory that holds credentials: a real directory (not a symlink), owned
- * by this user, mode exactly 0700. Returns the path; throws fixed text.
+ * by this user, mode exactly 0700. Returns the resolved path; throws fixed
+ * text. Resolved first: lstat of "link/" (trailing slash) follows the link.
  */
 export function assertPrivateDir(dir) {
+  if (typeof dir !== 'string' || !dir) throw new ClientError('the channel dir does not exist')
+  const resolved = path.resolve(dir)
   let st
-  try { st = lstatSync(dir) } catch { throw new ClientError('the channel dir does not exist') }
+  try { st = lstatSync(resolved) } catch { throw new ClientError('the channel dir does not exist') }
   if (st.isSymbolicLink()) throw new ClientError('the channel dir is a symlink')
   if (!st.isDirectory()) throw new ClientError('the channel dir is not a directory')
   if (st.uid !== process.getuid()) throw new ClientError('the channel dir is not owned by this user')
   if ((st.mode & 0o7777) !== 0o700) throw new ClientError('the channel dir mode must be exactly 0700')
-  return dir
+  return resolved
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, rmSync, symlinkSync, existsSync, realpathSync,
+  mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, rmSync, symlinkSync, existsSync, realpathSync, unlinkSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -9,7 +9,7 @@ import {
   ClientError, assertPrivateDir, delegatedAppend, delegatedRead, delegatedRequest, readGrantFile,
 } from '../../scripts/lib/delegatedClient.mjs'
 import {
-  DEFAULT_SCOPES, DEFAULT_TTL_MS, canonicalChannelDir, issueBody, parseArgs, phase, prepareChannelDir,
+  DEFAULT_SCOPES, DEFAULT_TTL_MS, canonicalChannelDir, issueBody, parseArgs, phase, prepareChannelDir, provenRunGrant,
   runBootstrap, runRevoke, validateIssue, writeExclusive,
 } from '../../scripts/agents/bootstrap.mjs'
 import { assertGrantOnly, assertedKey, readAgentConfig, runAgent } from '../../scripts/agents/owner-delegate-agent.mjs'
@@ -56,7 +56,8 @@ function stubTf({ issue = 'ok', revokeFails = false, listFails = false } = {}) {
         return { status: 200, data: { status: 'revoked' } }
       }
       if (issue === 'disabled') return { status: 503, data: null, reason: 'issuance_disabled' }
-      const row = { id: GID, contract_id: CID, issuer_kind: 'owner_account', scopes: [...body.scopes], expires_at: body.expires_at, revoked_at: null }
+      const row = { id: GID, contract_id: CID, issuer_kind: 'owner_account', scopes: [...body.scopes],
+        created_at: new Date().toISOString(), expires_at: body.expires_at, revoked_at: null }
       grants.push(row)
       if (issue === 'throw') throw new TypeError('network failure')
       const g = { status: 'issued', ...row, scopes: issue === 'broader' ? [...body.scopes, 'payment.reported'] : row.scopes }
@@ -65,6 +66,10 @@ function stubTf({ issue = 'ok', revokeFails = false, listFails = false } = {}) {
   }
 }
 const deps = (tf, extra = {}) => ({ tf, publishableKey: async () => PUB, ...extra })
+const OTHER = '33333333-3333-4333-8333-333333333333'
+/** A grant on the same deal the run did not issue (e.g. one the owner made later in the UI). */
+const unrelated = (over = {}) => ({ id: OTHER, contract_id: CID, issuer_kind: 'owner_account', scopes: [...DEFAULT_SCOPES],
+  created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 3600_000).toISOString(), revoked_at: null, ...over })
 
 describe('delegated client', () => {
   let calls, original
@@ -186,6 +191,14 @@ describe('bootstrap: channel dir containment and privacy', () => {
     mkdirSync(path.join(r, 'src', 'chan'))
     expect(thrown(() => canonicalChannelDir(path.join(root, 'alias', 'chan'), { repoRoot: r, isIgnored: () => false }))?.message)
       .toBe('the channel dir is inside the repository and not git-ignored')
+    // A repo-local name that merely starts with `..` is inside, so it must be git-ignored.
+    expect(thrown(() => canonicalChannelDir(path.join(r, '..chan'), { repoRoot: r, isIgnored: () => false }))?.message)
+      .toBe('the channel dir is inside the repository and not git-ignored')
+    mkdirSync(path.join(r, '..chan'))
+    expect(thrown(() => canonicalChannelDir(path.join(r, '..chan'), { repoRoot: r, isIgnored: () => false }))?.message)
+      .toBe('the channel dir is inside the repository and not git-ignored')
+    expect(canonicalChannelDir(path.join(root, 'sibling'), { repoRoot: r, isIgnored: () => false }).canonical)
+      .toBe(path.join(root, 'sibling'))
     mkdirSync(path.join(root, 'outside'))
     symlinkSync(path.join(root, 'outside'), path.join(r, 'out'))
     expect(canonicalChannelDir(path.join(r, 'out', 'chan'), { repoRoot: r, isIgnored: () => false }).canonical)
@@ -198,6 +211,11 @@ describe('bootstrap: channel dir containment and privacy', () => {
     symlinkSync(path.join(root, 'real'), path.join(root, 'link'))
     const opts = { repoRoot: r, isIgnored: () => false }
     expect(thrown(() => prepareChannelDir(path.join(root, 'link'), opts))?.message).toBe('the channel dir is a symlink')
+    // lstat("link/") follows the link; the trailing slash must not hide it.
+    for (const p of [`${path.join(root, 'link')}/`, `${path.join(root, 'link')}//`, `${path.join(root, 'link')}/.`]) {
+      expect(thrown(() => assertPrivateDir(p))?.message, p).toBe('the channel dir is a symlink')
+    }
+    expect(assertPrivateDir(`${path.join(root, 'real')}/`)).toBe(path.join(root, 'real'))
     expect(thrown(() => prepareChannelDir(path.join(root, 'no', 'such', 'chan'), opts))?.message).toBe('the channel dir\'s parent does not exist')
     mkdirSync(path.join(root, 'loose'), { mode: 0o755 })
     chmodSync(path.join(root, 'loose'), 0o755)
@@ -318,9 +336,106 @@ describe('bootstrap: the run, against a stub owner client', () => {
   it('--revoke reports a list failure as a problem, still removes both secrets, and refuses another run\'s manifest', async () => {
     await runBootstrap({ run: 'bot-1', dir: d, deps: deps(stubTf()) })
     const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(stubTf({ listFails: true })) })
-    expect(r.problems).toEqual(['grant list answered 500 list_failed'])
+    expect(r.problems).toEqual(['revoke readback: grant list answered 500 list_failed'])
     expect(files()).toEqual(['agent.json'])
     expect((await thrownAsync(runRevoke({ run: 'bot-2', dir: d, deps: deps(stubTf()) })))?.message).toBe('the manifest in this dir is for another run')
+  })
+})
+
+describe('bootstrap: recovery revokes only the run\'s grant, and survives cleanup errors', () => {
+  let d
+  beforeEach(() => { d = tmp('tf-rec-'); chmodSync(d, 0o700) })
+  afterEach(() => { rmSync(d, { recursive: true, force: true }) })
+  const liveIds = tf => tf.live().map(g => g.id).sort()
+  const invokes = tf => tf.calls.filter(c => c.startsWith('manage-entry-agent-credential:'))
+  /** A secret file that rm cannot remove (a non-empty directory: rmSync without recursive throws). */
+  const stuck = name => { mkdirSync(path.join(d, name)); writeFileSync(path.join(d, name, 'x'), 'x') }
+
+  it('a secret that cannot be removed does not stop grant recovery, and the operator is pointed at --revoke', async () => {
+    const tf = stubTf()
+    stuck('grant')
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(e).toBeInstanceOf(ClientError)
+    expect(e.message).toBe('grant already exists in the channel dir. Cleanup incomplete (could not remove: grant): run --revoke bot-1')
+    expect(tf.live()).toHaveLength(0)
+    expect(existsSync(path.join(d, 'invite.json'))).toBe(false)
+    expect(manifest(d).phases.failed).toMatchObject({ auto_revoked: [GID], problems: ['could not remove: grant'] })
+    // --revoke with the same stuck file: still revokes (idempotently), removes what it can, records the phase.
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r).toEqual({ revoked: [GID], problems: ['could not remove: grant'] })
+    expect(manifest(d).phases.revoked).toMatchObject({ revoked: [GID], problems: ['could not remove: grant'] })
+  })
+
+  it('--revoke with a recorded grant revokes that grant only, never another grant on the deal', async () => {
+    const tf = stubTf()
+    await runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) })
+    tf.grants.push(unrelated())
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r).toEqual({ revoked: [GID], problems: [] })
+    expect(liveIds(tf)).toEqual([OTHER])
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toHaveLength(1)
+  })
+
+  it('a failure after issue with a known id revokes that grant only, even with another live grant on the deal', async () => {
+    const tf = stubTf({ issue: 'broader' })
+    tf.grants.push(unrelated())
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(e?.message).toMatch(/Cleaned up: 1 grant\(s\) revoked and read back/)
+    expect(liveIds(tf)).toEqual([OTHER])
+  })
+
+  it('before an issue was sent, --revoke touches nothing remote and only removes local secrets', async () => {
+    const tf = stubTf()
+    writeFileSync(path.join(d, 'invite.json'), 'squatter', { mode: 0o600 })
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(e?.message).toMatch(/^invite\.json already exists in the channel dir\. Cleaned up: 0 grant/)
+    expect(manifest(d).phases.issue_sent).toBeUndefined()
+    expect(invokes(tf)).toEqual([])
+    tf.grants.push(unrelated())
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r).toEqual({ revoked: [], problems: [] })
+    expect(invokes(tf)).toEqual([])
+    expect(liveIds(tf)).toEqual([OTHER])
+    expect(existsSync(path.join(d, 'invite.json'))).toBe(false)
+  })
+
+  it('a lost issue answer with more than one grant on the deal revokes nothing and asks for manual reconciliation', async () => {
+    const tf = stubTf({ issue: 'throw' })
+    tf.grants.push(unrelated())
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(e?.message).toBe('issue: no answer. Cleanup incomplete (2 grants on the run\'s deal and no recorded grant id: '
+      + 'reconcile manually in the owner UI; nothing was revoked): run --revoke bot-1')
+    expect(liveIds(tf)).toEqual([GID, OTHER])
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r.revoked).toEqual([])
+    expect(r.problems[0]).toMatch(/^2 grants on the run's deal and no recorded grant id/)
+    expect(liveIds(tf)).toEqual([GID, OTHER])
+  })
+
+  it('a lost issue answer is recovered by --revoke from the manifest, only when the sole grant matches the request', async () => {
+    const tf = stubTf({ issue: 'throw', revokeFails: true })
+    await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(manifest(d).phases.issue_sent.expires_at).toBe(tf.grants[0].expires_at)
+    expect(manifest(d).phases.issue_received).toBeUndefined()
+    const ok = stubTf(); ok.grants.push(...tf.grants)
+    expect(await runRevoke({ run: 'bot-1', dir: d, deps: deps(ok) })).toEqual({ revoked: [GID], problems: [] })
+    expect(ok.live()).toHaveLength(0)
+  })
+
+  it('proof of the run\'s grant fails closed on any mismatch', () => {
+    const sentAt = new Date().toISOString()
+    const g = unrelated({ id: GID })
+    const want = { contractId: CID, expiresAt: g.expires_at, sentAt }
+    expect(provenRunGrant([g], want)).toEqual({ id: GID })
+    expect(provenRunGrant([], want)).toEqual({ none: true })
+    expect(provenRunGrant([g, unrelated({ revoked_at: sentAt })], want).problem).toMatch(/^2 grants/)
+    for (const over of [{ expires_at: new Date(Date.parse(g.expires_at) + 1).toISOString() }, { scopes: ['read'] },
+      { scopes: ['read', 'performance.asserted', 'payment.reported'] }, { issuer_kind: 'counterpart_account' },
+      { contract_id: OTHER }, { created_at: new Date(Date.now() - 3600_000).toISOString() }, { created_at: undefined }, { id: 'nope' }]) {
+      expect(provenRunGrant([{ ...g, ...over }], want).problem, JSON.stringify(over)).toMatch(/does not match the run's issue request/)
+    }
+    expect(provenRunGrant([g], { ...want, expiresAt: undefined }).problem).toMatch(/does not match/)
   })
 })
 
@@ -371,6 +486,12 @@ describe('delegate bot', () => {
     expect((await thrownAsync(runAgent({ dir: d, env: {}, client: ok })))?.message).toBe('the grant file and agent.json name different grants')
     chmodSync(d, 0o755)
     expect((await thrownAsync(runAgent({ dir: d, env: {}, client: ok })))?.message).toBe('the channel dir mode must be exactly 0700')
+    chmodSync(d, 0o700)
+    const link = `${d}-link`
+    symlinkSync(d, link)
+    try {
+      expect((await thrownAsync(runAgent({ dir: `${link}/`, env: {}, client: ok })))?.message).toBe('the channel dir is a symlink')
+    } finally { unlinkSync(link) }
   })
 
   it('reads a well-formed agent.json and names malformed fields without echoing them', () => {
