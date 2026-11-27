@@ -19,12 +19,13 @@
 // ENTRY_DELEGATED_APPEND once this attempt has taken ownership of it.
 
 import { execFile } from 'node:child_process'
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { E2E_PROJECT_REF } from './e2eGuard.mjs'
-import { E2E_ORIGIN, installPinnedFetch, isPinned } from './pinnedFetch.mjs'
+import { installPinnedFetch } from './pinnedFetch.mjs'
+import { ClientError, GRANT_TOKEN, UUID, delegatedRequest, readGrantFile, word } from './delegatedClient.mjs'
 import { selectPublishableKey } from '../../tests/e2e/publishableKey.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -35,8 +36,8 @@ export const DEAL = '0853c261-035a-4703-b78a-52180e1765e3'
 export const TYPE = 'performance.asserted'
 export const OUT_OF_SCOPE_TYPE = 'payment.acknowledged'
 export const ORIGIN = 'https://project-trustflow.vercel.app'
-export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-export const GRANT_TOKEN = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.[0-9a-f]{64}$/
+// Shared with the delegated bot client (./delegatedClient.mjs).
+export { GRANT_TOKEN, UUID, readGrantFile, word }
 export const ATTEMPT = /^[a-z0-9][a-z0-9-]{2,39}$/
 export const STATE_DIR = path.join(REPO_ROOT, 'tests/e2e/.delegated-trial')
 export const BUDGET = { closed: 0, open: 1 }
@@ -49,13 +50,9 @@ const DB_URL = `postgresql://postgres@db.${E2E_PROJECT_REF}.supabase.co:5432/pos
 const DB_PASSWORD_REF = 'op://Private/Supabase_Kenji/trustflow e2e password DB'
 
 /** An error whose text this module wrote: fixed words, codes and ids only. */
-export class TrialError extends Error {}
-/** A thrown error's text if this module wrote it, otherwise fixed text. */
-export const safeMessage = e => (e instanceof TrialError ? e.message : 'request failed')
-
-/** A response's error field, reduced to something safe to print. */
-export const word = v => (v === null || v === undefined) ? 'none'
-  : (typeof v === 'string' && /^[a-z_]{1,64}$/.test(v) ? v : 'unexpected')
+export class TrialError extends ClientError {}
+/** A thrown error's text if this code (or the shared client) wrote it, otherwise fixed text. */
+export const safeMessage = e => (e instanceof ClientError ? e.message : 'request failed')
 
 // ── Child processes: async, bounded, allowlisted environment, output kept ───
 
@@ -133,31 +130,6 @@ export const E2E_GATE_DB_URL = DB_URL
 
 // ── The grant file ──────────────────────────────────────────────────────────
 
-/** `<grant-uuid>.<64 hex>` from a regular file owned by this user, mode exactly 0600. */
-export function readGrantFile(file) {
-  if (!file) throw new TrialError('TF_DELEGATED_GRANT_FILE is not set')
-  // One open, no symlink followed; every check is on that descriptor.
-  let fd
-  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW) } catch {
-    throw new TrialError('the grant file cannot be opened (missing, unreadable or a symlink)')
-  }
-  let grant
-  try {
-    const st = fstatSync(fd)
-    if (!st.isFile()) throw new TrialError('the grant file is not a regular file')
-    if (st.uid !== process.getuid()) throw new TrialError('the grant file is not owned by this user')
-    if ((st.mode & 0o7777) !== 0o600) throw new TrialError('the grant file mode must be exactly 0600')
-    grant = readFileSync(fd, 'utf8').trim()
-  } catch (e) {
-    throw e instanceof TrialError ? e : new TrialError('the grant file cannot be read')
-  } finally {
-    closeSync(fd)
-  }
-  const m = GRANT_TOKEN.exec(grant)
-  if (!m) throw new TrialError('the grant file does not hold "<uuid>.<64 hex>"')
-  return { grant, grantId: m[1] }
-}
-
 export const fakeGrant = () => `${randomUUID()}.${randomBytes(32).toString('hex')}`
 
 // ── The attempt record ──────────────────────────────────────────────────────
@@ -207,16 +179,8 @@ export const phase = (attempt, name, detail = {}) =>
 // ── Requests ────────────────────────────────────────────────────────────────
 
 /** A delegated log-event call: publishable key as apikey, no Authorization unless `extra` adds one. */
-export async function delegatedPost({ pub, grantHeader, body, extra = [] }) {
-  if (!isPinned()) throw new TrialError('delegatedPost: the pinned fetch is not installed')
-  const headers = new Headers([['Content-Type', 'application/json'], ['apikey', pub], ['Origin', ORIGIN]])
-  if (grantHeader !== null) headers.append('x-trustflow-grant', grantHeader)
-  for (const [k, v] of extra) headers.append(k, v)
-  const r = await fetch(`${E2E_ORIGIN}/functions/v1/log-event`, { method: 'POST', headers, body: JSON.stringify(body) })
-  let json = null
-  try { json = JSON.parse(await r.text()) } catch { /* compared by status only */ }
-  return { status: r.status, error: word(json?.error), json }
-}
+export const delegatedPost = ({ pub, grantHeader, body, extra = [] }) =>
+  delegatedRequest({ fn: 'log-event', pub, grantHeader, body, extra, origin: ORIGIN })
 
 /** Rows holding exactly this idempotency key, anywhere the owner can read. */
 export async function rowsWithKey(tf, token, key) {
