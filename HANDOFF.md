@@ -1,6 +1,6 @@
 # HANDOFF
 
-Last updated: **2026-11-27**, based on pinned local Row 8 candidate `80e0988` (38 local commits ahead of `origin/main`; not pushed; Row 8 live E2E and production NOT done).
+Last updated: **2026-11-27**, based on pinned local Row 8 candidate `37684db` (40 local commits ahead of `origin/main`; not pushed; Row 8 live E2E and production NOT done).
 
 **This file says where the project is**, not what each session did — that is
 what `git log` and `.ada/claude-report-*.md` are for. It was a session log of
@@ -1189,17 +1189,17 @@ Kept as constraints, not stories.
     - Row 7 (delegated bot bootstrap, grant-only owner agent, fail-closed recovery, exact `503 issuance_disabled` terminal refusal): `a19977e` → `4f62aea` → `001e149` → `ec4e10d` → `33f752e` — **Claude GO** (`.ada/claude-review-row7-33f752e.md`).
     - Row 8 delegated two-agent simulator (`--delegated`): `5339af3` — **Antigravity GO** (`.ada/antigravity-report-13.md`) and **Claude A3 GO** on final Row 7 interface (`.ada/row8-release-readiness-update-33f752e.md`).
     - Row 6 offline browser regression harness (`tests/browser/playwright.row6.config.js`, `tests/browser/row6-credentials.spec.js`): `f17be05` (**Claude GO**, `.ada/claude-review-row6-f17be05.md`, network isolation proven behind dead proxy) → `e736886` (flag-off explicitly pinned to `''` against local `.env*`, `ModalDialog` focus/`Escape` dismiss, second-user cross-tab switch) — **6/6 PASS offline in Chromium** (`16.7s`, 0 hosted/third-party calls).
-    - W2b E2E-only zero-write direct `POST /rest/v1/events` denial probe (`scripts/probe-direct-events-insert.mjs`, `tests/unit/directEventsInsertProbe.test.js`): `80e0988` (pending Claude independent review).
-  - **Pinned Row 8 run candidate SHA (`80e0988`, 38 local commits ahead of `origin/main`):**
-    - `make check` **PASS** at `80e0988`: `check:migrations` 57 files OK, `npm test` **54/54 files / 1281/1281 tests**, `vite build` 1.08s.
-    - Offline Row 6 browser gate **PASS** at `80e0988`: `npx playwright test --config tests/browser/playwright.row6.config.js` **6/6 PASS** (`16.7s`, 0 hosted calls).
+    - W2b E2E-only zero-write direct `POST /rest/v1/events` denial probe (`scripts/probe-direct-events-insert.mjs`, `tests/unit/directEventsInsertProbe.test.js`): `80e0988` → `37684db` (fixed Claude HOLD `.ada/claude-review-probe-80e0988.md`: requires `401`/`403` with SQLSTATE `42501`, treats code-less `401`/`403` as `inconclusive`, and prints before/after deal + total `public.events` zero-row readback instructions).
+  - **Pinned Row 8 run candidate SHA (`37684db`, 40 local commits ahead of `origin/main`):**
+    - `make check` **PASS** at `37684db`: `check:migrations` 57 files OK, `npm test` **54/54 files / 1281/1281 tests**, `vite build` 1.04s.
+    - Offline Row 6 browser gate **PASS** (`npx playwright test --config tests/browser/playwright.row6.config.js` **6/6 PASS**, `16.7s`, 0 hosted calls; `src/` and `tests/browser/` unchanged since `80e0988`).
     - Restricted simulator child CLI/auth route (code/config inspection, zero secret reads / zero hosted calls): `delegated-two-agent.mjs:229-232` forwards `PATH` (`/opt/homebrew/bin/supabase`), `HOME`, `TMPDIR`, and optional `SUPABASE_ACCESS_TOKEN` into `bootstrap.mjs`, and `delegatedTrial.mjs:64-82` forwards `PATH`, `HOME`, `TMPDIR`, and `SUPABASE_ACCESS_TOKEN` into `supabase projects api-keys --project-ref yqjtawffpesplqyurlpj -o json`. On macOS without `SUPABASE_ACCESS_TOKEN`, `supabase` CLI resolves its login via `HOME` (`~/.supabase/access-token`) / macOS Keychain (`getuid()`), so no local code blocker exists; operator must export `.env.e2e` vars in the shell before W1 because `operatorEnv` sets `TF_E2E_ENV_FILE=/dev/null`.
   - **W0 read-only hosted preflight (`.ada/row8-w0-preflight.md`, E2E `yqjtawffpesplqyurlpj` only, ~18:31Z):**
     - **Clean baseline:** 57 migrations matching repo through C; `private.v5_write_gate` closed (`open = false`); 0 `ENTRY_*` secrets; 7 revoked grants (0 live); 0 v5 write tickets; contracts **3852**, events **6133**, 1 known delegated row (`1f0fc767…`); 0 `agent bootstrap %` deals; QA earner `5984f56a…` verified.
     - **Function drift (1 item for B1):** `manage-entry-agent-credential` v7, `log-event` v29, `delegated-owner-read` v14 match HEAD; `validate-invite-token` v28 is Row-8-equivalent; **`guest-contract-events` v26 (deployed 11-24 19:53Z) DRIFTS from HEAD** (missing `648653c` blank `recorded_credential` refusal and `dbc21a1`/`47469da`/`0dce5bc` `eventVerifyV5` withheld-input branches).
-    - **Exact next E2E-only B1 deploy + readback step (after OK):** deploy **`guest-contract-events` only** from pinned SHA `80e0988` with Docker local bundling (`supabase functions deploy guest-contract-events --project-ref yqjtawffpesplqyurlpj`), then read back `version` (>26), `status: ACTIVE`, `verify_jwt: true`, and `entrypoint` (`file:///Users/…`); no other function needs a deploy.
+    - **Exact next E2E-only B1 deploy + readback step (after OK):** deploy **`guest-contract-events` only** from pinned SHA `37684db` with Docker local bundling (`supabase functions deploy guest-contract-events --project-ref yqjtawffpesplqyurlpj`), then read back `version` (>26), `status: ACTIVE`, `verify_jwt: true`, and `entrypoint` (`file:///Users/…`); no other function needs a deploy.
   - **Minimal operator approvals needed before W1 (each a separate OK; E2E `yqjtawffpesplqyurlpj` only):**
-    1. **B1:** Approve E2E-only redeploy of `guest-contract-events` from `80e0988` + readback (or explicitly accept v26 as reader of record).
+    1. **B1:** Approve E2E-only redeploy of `guest-contract-events` from `37684db` + readback (or explicitly accept v26 as reader of record).
     2. **A6/A7:** Decide local-checkout vs push for Row 8 (any push auto-deploys Vercel production → requires read-only Vercel prod env check confirming `VITE_OWNER_CREDENTIALS_UI` is absent first).
     3. **A8:** Confirm SQL race proofs (`ee70e95`) + optional rolled-back `TF011` denial suffice (no live races).
     4. **W1 approvals (B2–B5):** B2 `ENTRY_CREDENTIAL_ISSUANCE=on`; B3 `ENTRY_DELEGATED_READ` + `ENTRY_DELEGATED_APPEND` on; B4 open `private.v5_write_gate` (close + read back after W1); B5 simulator budget **`1/1/2`** + fresh `--run <id>` (expected W1 deltas: contracts +1 → 3853, events +2 → 6135, grants +1 → 8 revoked, tickets 0).
