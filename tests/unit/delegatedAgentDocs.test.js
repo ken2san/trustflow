@@ -55,5 +55,12 @@ describe('delegated agent instructions (draft) match the server', () => {
     for (const w of [DELEGATION_REFUSED.error, DELEGATED_UNAVAILABLE.error, 'delegated_read_unavailable']) {
       expect(words, w).toContain(w)
     }
+    // The success answers of both routes, including the read's 200 (the read
+    // route answers 200 with the projection: delegated-owner-read/index.ts).
+    const answers = section('Answers')
+    expect(answers).toMatch(/^\| 200 \| — \| \(read\)/m)
+    expect(answers).toMatch(/^\| 201 \| — \| \(record\)/m)
+    expect(answers).toMatch(/^\| 200 \| — \| \(record\) a replay/m)
+    expect(SERVER).toMatch(/status: 200, headers: \{ \.\.\.cors/)
   })
 })

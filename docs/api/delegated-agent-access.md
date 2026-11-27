@@ -71,8 +71,9 @@ request never falls back to any other kind of access.
 
 | Status | `error` | Meaning |
 |---|---|---|
-| 201 | — | recorded; `event` is the stored row |
-| 200 | — | a replay of the same key and grant; `event` is the original |
+| 200 | — | (read) the deal's owner projection and its receipt |
+| 201 | — | (record) recorded; `event` is the stored row |
+| 200 | — | (record) a replay of the same key and grant; `event` is the original |
 | 403 | `delegation_refused` | refused, and deliberately uniform: an unknown, wrong, expired or revoked grant, the wrong deal, an operation outside the grant, or mixed credentials all look the same |
 | 403 | `wrong_party_for_event_type` | the owner's role on this deal may not record this type |
 | 409 | `wrong_state_for_event_type` | the deal's state does not allow this type now |
