@@ -20,8 +20,9 @@ const sharedViteEnv = {
   ...process.env,
   VITE_SUPABASE_URL: OFFLINE_SUPABASE_URL,
   VITE_SUPABASE_ANON_KEY: OFFLINE_SUPABASE_ANON_KEY,
+  // Explicitly pin to '' so process env overrides any local `.env*` setting.
+  VITE_OWNER_CREDENTIALS_UI: '',
 };
-delete sharedViteEnv.VITE_OWNER_CREDENTIALS_UI;
 
 export default defineConfig({
   testDir: '.',

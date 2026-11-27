@@ -22,6 +22,8 @@ const LAST_EMAIL_KEY = 'tf_last_earner_email';
 
 const OWNER_ID = '44444444-4444-4444-8444-444444444444';
 const OWNER_EMAIL = 'owner-offline@example.invalid';
+const OTHER_OWNER_ID = '66666666-6666-4666-8666-666666666666';
+const OTHER_OWNER_EMAIL = 'other-owner@example.invalid';
 const DEAL_1_ID = '11111111-1111-4111-8111-111111111111';
 const DEAL_2_ID = '22222222-2222-4222-8222-222222222222';
 const GRANT_1_ID = '33333333-3333-4333-8333-333333333333';
@@ -75,19 +77,19 @@ const DEALS = [
   },
 ];
 
-function makeSession({ expiresInSec = 3600 } = {}) {
+function makeSession({ expiresInSec = 3600, userId = OWNER_ID, email = OWNER_EMAIL } = {}) {
   const nowSec = Math.floor(Date.now() / 1000);
   return {
-    access_token: 'offline-owner-access-token',
-    refresh_token: 'offline-owner-refresh-token',
+    access_token: `offline-access-token-${userId}`,
+    refresh_token: `offline-refresh-token-${userId}`,
     token_type: 'bearer',
     expires_in: expiresInSec,
     expires_at: nowSec + expiresInSec,
     user: {
-      id: OWNER_ID,
+      id: userId,
       aud: 'authenticated',
       role: 'authenticated',
-      email: OWNER_EMAIL,
+      email,
       is_anonymous: false,
     },
   };
@@ -138,6 +140,7 @@ async function installOfflineBackend(context, {
   let signedOut = false;
 
   let failRefresh = refreshOutcome === 'fail';
+  let refreshSessionOverride = null;
 
   await context.route(`${SUPABASE_ORIGIN}/**`, async (route) => {
     const req = route.request();
@@ -173,7 +176,7 @@ async function installOfflineBackend(context, {
           error_description: 'Invalid Refresh Token: Refresh Token Not Found',
         }, 400);
       }
-      return fulfillJson(route, makeSession(), 200);
+      return fulfillJson(route, refreshSessionOverride ?? makeSession(), 200);
     }
 
     if (pathname === '/rest/v1/contracts') {
@@ -227,7 +230,12 @@ async function installOfflineBackend(context, {
     return route.abort();
   });
 
-  return { calls, grantsByDeal, setFailRefresh: (v) => { failRefresh = v; } };
+  return {
+    calls,
+    grantsByDeal,
+    setFailRefresh: (v) => { failRefresh = v; },
+    setRefreshSession: (session) => { refreshSessionOverride = session; },
+  };
 }
 
 async function openDeal(page, dealName) {
@@ -280,8 +288,9 @@ test('@flag-on issue one-time reveal, dismiss discards secret, revoke updates li
   await expect(dialog.getByText(TOKEN_1)).toBeVisible();
   await expect(dialog.getByText('Clear your clipboard after pasting.')).toBeVisible();
 
-  // Dismiss via Done discards the secret from the DOM permanently.
-  await dialog.getByRole('button', { name: 'Done' }).click();
+  // Keyboard & focus behavior: focus lands inside the modal dialog and Escape dismisses it.
+  await expect.poll(() => dialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText(TOKEN_1)).toHaveCount(0);
 
@@ -399,5 +408,39 @@ test('@flag-on session refresh failure mid-view clears owner panel and lands on 
   await expect(page.getByRole('region', { name: 'Agent credentials' })).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByText('You are signed out.')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(OWNER_EMAIL)).toBeVisible();
+  expect(calls.unexpected).toEqual([]);
+});
+
+test('@flag-on cross-tab switch to a second verified user immediately clears owner reveal and agreement', async ({ context }) => {
+  await seedOwnerSession(context, { expiresInSec: 3600 });
+  const { calls, setRefreshSession } = await installOfflineBackend(context);
+
+  const tabA = await context.newPage();
+  await openDeal(tabA, 'Row 6 Offline Deal One');
+  const panel = tabA.getByRole('region', { name: 'Agent credentials' });
+  await panel.getByLabel('Read deal & receipt').check();
+  await panel.getByRole('button', { name: 'Issue credential' }).click();
+  await expect(tabA.getByRole('dialog').getByText(TOKEN_1)).toBeVisible();
+
+  // Tab B refreshes into a second verified user session; supabase-js broadcasts
+  // the new session across tabs via BroadcastChannel/localStorage.
+  const tabB = await context.newPage();
+  await tabB.goto('/');
+  await expect(tabB.getByRole('heading', { name: 'Contracts', level: 1 })).toBeVisible({ timeout: 15_000 });
+  setRefreshSession(makeSession({ userId: OTHER_OWNER_ID, email: OTHER_OWNER_EMAIL }));
+  await tabB.evaluate((key) => {
+    const parsed = JSON.parse(localStorage.getItem(key));
+    parsed.expires_at = Math.floor(Date.now() / 1000) - 10;
+    localStorage.setItem(key, JSON.stringify(parsed));
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, STORAGE_KEY);
+
+  // Tab A immediately clears the open reveal modal, unmounts the credential panel,
+  // and clears User A's owner agreement (returning to home without User A's deal).
+  await expect(tabA.getByRole('dialog')).toHaveCount(0, { timeout: 15_000 });
+  await expect(tabA.getByText(TOKEN_1)).toHaveCount(0);
+  await expect(tabA.getByRole('region', { name: 'Agent credentials' })).toHaveCount(0);
+  await expect(tabA.getByRole('heading', { name: 'Contracts', level: 1 })).toBeVisible();
+  await expect(tabA.getByText('Row 6 Offline Deal One')).toHaveCount(0);
   expect(calls.unexpected).toEqual([]);
 });
