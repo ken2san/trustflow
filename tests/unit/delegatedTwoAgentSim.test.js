@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { E2E_ORIGIN } from '../../scripts/lib/pinnedFetch.mjs'
+import { runRevoke } from '../../scripts/agents/bootstrap.mjs'
 import { budgetedOwner, guestFixture, parseRun, privateAttempt, runFixture, verifyGuestTrail } from '../../scripts/simulators/delegated-two-agent.mjs'
 
 const contractId = '11111111-1111-4111-8111-111111111111'
@@ -117,5 +118,37 @@ describe('delegated two-agent simulator', () => {
     await expect(ambiguous.append(op)).rejects.toThrow('missing response')
     await expect(ambiguous.append(op)).rejects.toThrow('owner write budget')
     expect(transport.append).toHaveBeenCalledTimes(1)
+  })
+
+  it('never treats ambiguous bootstrap cleanup (unknown issuance with empty grant list) as success', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'tf-sim-ambig-'))
+    chmodSync(dir, 0o700)
+    try {
+      writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+        run: 'row8-ambig',
+        phases: {
+          created: { contract_id: contractId },
+          issue_sent: { at: new Date().toISOString(), expires_at: new Date(Date.now() + 3600_000).toISOString() },
+          issue_unknown: { at: new Date().toISOString() },
+        },
+      }), { mode: 0o600 })
+      const tf = {
+        ownerSession: async () => ({ token: 'tok', userId: 'u' }),
+        invoke: vi.fn().mockResolvedValue({ status: 200, data: { grants: [] } }),
+      }
+      await expect(runFixture({
+        bootstrap: vi.fn().mockRejectedValue(new Error('operator step failed')),
+        accept: vi.fn(),
+        owner: vi.fn(),
+        read: vi.fn(),
+        stopGuest: vi.fn(),
+        async revoke() {
+          const r = await runRevoke({ run: 'row8-ambig', dir, deps: { tf } })
+          if (r.problems.length) throw new Error('operator step failed')
+        },
+      })).rejects.toThrow('bootstrap failed; revocation unverified')
+      expect(tf.invoke).toHaveBeenCalledTimes(1)
+      expect(tf.invoke.mock.calls[0][1].body.action).toBe('list')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

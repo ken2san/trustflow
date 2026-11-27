@@ -9,8 +9,8 @@ import {
   ClientError, assertPrivateDir, delegatedAppend, delegatedRead, delegatedRequest, readGrantFile,
 } from '../../scripts/lib/delegatedClient.mjs'
 import {
-  DEFAULT_SCOPES, DEFAULT_TTL_MS, canonicalChannelDir, issueBody, parseArgs, phase, prepareChannelDir, provenRunGrant,
-  runBootstrap, runRevoke, validateIssue, writeExclusive,
+  DEFAULT_SCOPES, DEFAULT_TTL_MS, canonicalChannelDir, issueBody, parseArgs, phase, prepareChannelDir,
+  resolveRecordedGrantId, runBootstrap, runRevoke, validateIssue, writeExclusive,
 } from '../../scripts/agents/bootstrap.mjs'
 import { assertGrantOnly, assertedKey, readAgentConfig, runAgent } from '../../scripts/agents/owner-delegate-agent.mjs'
 import { run as runChild } from '../../scripts/lib/delegatedTrial.mjs'
@@ -56,6 +56,12 @@ function stubTf({ issue = 'ok', revokeFails = false, listFails = false } = {}) {
         return { status: 200, data: { status: 'revoked' } }
       }
       if (issue === 'disabled') return { status: 503, data: null, reason: 'issuance_disabled' }
+      if (issue === 'throw_empty') throw new TypeError('network failure before commit')
+      if (issue === 'mismatched_other_id') {
+        const g = { status: 'issued', id: OTHER, contract_id: CID, issuer_kind: 'owner_account',
+          scopes: [...body.scopes, 'payment.reported'], expires_at: body.expires_at }
+        return { status: 201, data: { grant: g, secret: SECRET } }
+      }
       const row = { id: GID, contract_id: CID, issuer_kind: 'owner_account', scopes: [...body.scopes],
         created_at: new Date().toISOString(), expires_at: body.expires_at, revoked_at: null }
       grants.push(row)
@@ -281,19 +287,21 @@ describe('bootstrap: the run, against a stub owner client', () => {
     expect(again?.message).toBe('manifest.json already exists in the channel dir')
   })
 
-  it('a response that fails validation: the grant id is recorded first, the grant revoked and read back, secrets removed', async () => {
+  it('a response that fails validation: observed id is recorded for diagnostics, nothing is auto-revoked, secrets removed', async () => {
     const tf = stubTf({ issue: 'broader' })
     const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
-    expect(e?.message).toBe('issue response differs from the request in: scopes. Cleaned up: 1 grant(s) revoked and read back, secrets removed')
+    expect(e?.message).toBe(`issue response differs from the request in: scopes. Cleanup incomplete (observed grant id ${GID} was never validated against the run's request: reconcile manually in the owner UI; nothing was revoked): run --revoke bot-1`)
     const m = manifest(d)
-    expect(m.phases.issue_received.grant_id).toBe(GID)
+    expect(m.phases.issue_received.observed_grant_id).toBe(GID)
+    expect(m.phases.issued).toBeUndefined()
     expect(Object.keys(m.phases).indexOf('issue_received')).toBeLessThan(Object.keys(m.phases).indexOf('failed'))
-    expect(m.phases.failed).toMatchObject({ auto_revoked: [GID], problems: [] })
-    expect(tf.live()).toHaveLength(0)
+    expect(m.phases.failed).toMatchObject({ auto_revoked: [], problems: [expect.stringContaining('never validated')] })
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(tf.live()).toHaveLength(1)
     expect(files()).toEqual([])
   })
 
-  it('a grant file that cannot be written: revoked, secrets removed', async () => {
+  it('a grant file that cannot be written: validated grant is revoked, secrets removed', async () => {
     const tf = stubTf()
     writeFileSync(path.join(d, 'grant'), 'squatter', { mode: 0o600 })
     const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
@@ -302,12 +310,13 @@ describe('bootstrap: the run, against a stub owner client', () => {
     expect(files()).toEqual([])
   })
 
-  it('an issue whose answer never arrived: the grant the server made is found on the run\'s deal and revoked', async () => {
+  it('an issue whose answer never arrived: does not auto-revoke by inferred match and asks for manual reconciliation', async () => {
     const tf = stubTf({ issue: 'throw' })
     const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
-    expect(e?.message).toBe('issue: no answer. Cleaned up: 1 grant(s) revoked and read back, secrets removed')
+    expect(e?.message).toBe('issue: no answer. Cleanup incomplete (issuance outcome is unknown (1 grant(s) currently listed on the run\'s deal, no validated grant id): reconcile manually in the owner UI; nothing was revoked): run --revoke bot-1')
     expect(manifest(d).phases.issue_unknown).toBeTruthy()
-    expect(tf.live()).toHaveLength(0)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(tf.live()).toHaveLength(1)
   })
 
   it('a failure after issue whose cleanup also fails points the operator at --revoke, which then finishes from that phase', async () => {
@@ -376,12 +385,13 @@ describe('bootstrap: recovery revokes only the run\'s grant, and survives cleanu
     expect(tf.calls.filter(c => c.endsWith(':revoke'))).toHaveLength(1)
   })
 
-  it('a failure after issue with a known id revokes that grant only, even with another live grant on the deal', async () => {
-    const tf = stubTf({ issue: 'broader' })
+  it('a failure after a validated issue revokes that grant only, even with another live grant on the deal', async () => {
+    const tf = stubTf()
     tf.grants.push(unrelated())
-    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
-    expect(e?.message).toMatch(/Cleaned up: 1 grant\(s\) revoked and read back/)
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf, { publishableKey: async () => 'bad-key' }) }))
+    expect(e?.message).toMatch(/^not a publishable key\. Cleaned up: 1 grant\(s\) revoked and read back/)
     expect(liveIds(tf)).toEqual([OTHER])
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toHaveLength(1)
   })
 
   it('before an issue was sent, --revoke touches nothing remote and only removes local secrets', async () => {
@@ -399,43 +409,77 @@ describe('bootstrap: recovery revokes only the run\'s grant, and survives cleanu
     expect(existsSync(path.join(d, 'invite.json'))).toBe(false)
   })
 
-  it('a lost issue answer with more than one grant on the deal revokes nothing and asks for manual reconciliation', async () => {
-    const tf = stubTf({ issue: 'throw' })
-    tf.grants.push(unrelated())
+  it('unknown issuance with empty initial list stays unresolved (even if a delayed grant commits later)', async () => {
+    const tf = stubTf({ issue: 'throw_empty' })
     const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
-    expect(e?.message).toBe('issue: no answer. Cleanup incomplete (2 grants on the run\'s deal and no recorded grant id: '
-      + 'reconcile manually in the owner UI; nothing was revoked): run --revoke bot-1')
-    expect(liveIds(tf)).toEqual([GID, OTHER])
+    expect(e?.message).toMatch(/^issue: no answer\. Cleanup incomplete \(issuance outcome is unknown and 0 grants are currently listed on the run's deal \(a delayed commit may still land\): reconcile manually in the owner UI; nothing was revoked\): run --revoke bot-1$/)
     expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    // First --revoke sees empty list: still unresolved, never verified.
+    const r1 = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r1.revoked).toEqual([])
+    expect(r1.problems[0]).toMatch(/0 grants are currently listed.*delayed commit/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    // Delayed grant now commits on the server; second --revoke still refuses inferred auto-revoke.
+    tf.grants.push(unrelated({ id: GID, expires_at: manifest(d).phases.issue_sent.expires_at }))
+    const r2 = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r2.revoked).toEqual([])
+    expect(r2.problems[0]).toMatch(/1 grant\(s\) currently listed.*no validated grant id/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(liveIds(tf)).toEqual([GID])
+  })
+
+  it('unknown issuance with a sole unrelated grant matching every request field revokes nothing', async () => {
+    const tf = stubTf({ issue: 'throw_empty' })
+    const fixedNow = Date.parse('2026-12-01T00:00:00.000Z')
+    const matchingExpiry = new Date(fixedNow + DEFAULT_TTL_MS).toISOString()
+    tf.grants.push(unrelated({ id: OTHER, expires_at: matchingExpiry, created_at: new Date(fixedNow).toISOString() }))
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf, { now: () => fixedNow }) }))
+    expect(e?.message).toMatch(/Cleanup incomplete \(issuance outcome is unknown \(1 grant\(s\) currently listed on the run's deal, no validated grant id\): reconcile manually/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(liveIds(tf)).toEqual([OTHER])
     const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
     expect(r.revoked).toEqual([])
-    expect(r.problems[0]).toMatch(/^2 grants on the run's deal and no recorded grant id/)
+    expect(r.problems[0]).toMatch(/1 grant\(s\) currently listed/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(liveIds(tf)).toEqual([OTHER])
+  })
+
+  it('mismatched issue response naming another grant on the deal never revokes that grant', async () => {
+    const tf = stubTf({ issue: 'mismatched_other_id' })
+    tf.grants.push(unrelated({ id: OTHER }))
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(e?.message).toMatch(/issue response differs from the request in: scopes\. Cleanup incomplete \(observed grant id/)
+    expect(manifest(d).phases.issue_received.observed_grant_id).toBe(OTHER)
+    expect(manifest(d).phases.issued).toBeUndefined()
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(liveIds(tf)).toEqual([OTHER])
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r.revoked).toEqual([])
+    expect(r.problems[0]).toMatch(/never validated against the run's request/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(liveIds(tf)).toEqual([OTHER])
+  })
+
+  it('conflicting or malformed manifest grant ids fail closed without revoking anything', async () => {
+    const tf = stubTf()
+    await runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) })
+    tf.grants.push(unrelated({ id: OTHER }))
+    // Tamper manifest so issue_received disagrees with issued.
+    const m = manifest(d)
+    m.phases.issue_received.observed_grant_id = OTHER
+    writeFileSync(path.join(d, 'manifest.json'), JSON.stringify(m, null, 2), { mode: 0o600 })
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r.revoked).toEqual([])
+    expect(r.problems[0]).toMatch(/conflicting grant ids in manifest/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
     expect(liveIds(tf)).toEqual([GID, OTHER])
-  })
 
-  it('a lost issue answer is recovered by --revoke from the manifest, only when the sole grant matches the request', async () => {
-    const tf = stubTf({ issue: 'throw', revokeFails: true })
-    await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
-    expect(manifest(d).phases.issue_sent.expires_at).toBe(tf.grants[0].expires_at)
-    expect(manifest(d).phases.issue_received).toBeUndefined()
-    const ok = stubTf(); ok.grants.push(...tf.grants)
-    expect(await runRevoke({ run: 'bot-1', dir: d, deps: deps(ok) })).toEqual({ revoked: [GID], problems: [] })
-    expect(ok.live()).toHaveLength(0)
-  })
-
-  it('proof of the run\'s grant fails closed on any mismatch', () => {
-    const sentAt = new Date().toISOString()
-    const g = unrelated({ id: GID })
-    const want = { contractId: CID, expiresAt: g.expires_at, sentAt }
-    expect(provenRunGrant([g], want)).toEqual({ id: GID })
-    expect(provenRunGrant([], want)).toEqual({ none: true })
-    expect(provenRunGrant([g, unrelated({ revoked_at: sentAt })], want).problem).toMatch(/^2 grants/)
-    for (const over of [{ expires_at: new Date(Date.parse(g.expires_at) + 1).toISOString() }, { scopes: ['read'] },
-      { scopes: ['read', 'performance.asserted', 'payment.reported'] }, { issuer_kind: 'counterpart_account' },
-      { contract_id: OTHER }, { created_at: new Date(Date.now() - 3600_000).toISOString() }, { created_at: undefined }, { id: 'nope' }]) {
-      expect(provenRunGrant([{ ...g, ...over }], want).problem, JSON.stringify(over)).toMatch(/does not match the run's issue request/)
-    }
-    expect(provenRunGrant([g], { ...want, expiresAt: undefined }).problem).toMatch(/does not match/)
+    expect(resolveRecordedGrantId({ phases: { issued: { grant_id: GID }, issue_received: { observed_grant_id: GID } } })).toEqual({ status: 'trusted', id: GID })
+    expect(resolveRecordedGrantId({ phases: { issued: { grant_id: 'NOT-A-UUID' } } }).status).toBe('conflict')
+    expect(resolveRecordedGrantId({ phases: { issue_received: { observed_grant_id: 'NOT-A-UUID' } } }).status).toBe('conflict')
+    expect(resolveRecordedGrantId({ phases: { issue_received: { observed_grant_id: GID, grant_id: OTHER } } }).status).toBe('conflict')
+    expect(resolveRecordedGrantId({ phases: { issue_received: { observed_grant_id: GID } } }).status).toBe('untrusted')
+    expect(resolveRecordedGrantId({ phases: {} })).toEqual({ status: 'none' })
   })
 })
 

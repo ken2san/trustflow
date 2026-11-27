@@ -28,16 +28,18 @@
 //        manifest.json what was done, phase by phase (no secret in it)
 //
 // NO ORPHAN GRANT, NO UNRELATED REVOCATION
-// The grant id is recorded (durably, fsync then rename) the moment an issue
-// response carries one, before the response is validated or any file is
-// written. Any failure after an issue was sent revokes exactly that grant and
-// reads it back. With no id (the answer was lost), only a grant proven to be
-// the run's is revoked: the sole grant ever on the run's fresh deal, matching
-// the recorded request; anything else is left for manual reconciliation. No
-// other grant is ever revoked. Whatever cleanup could not verify, the operator
-// finishes with `--revoke`, which works from any phase. On a failed run, the
-// invite and grant files are removed (after grant recovery, never instead of
-// it); `--revoke` removes them too.
+// Any grant id seen in an issue response is recorded early as an unvalidated
+// diagnostic (`issue_received.observed_grant_id`), never acted on until
+// `validateIssue` proves the 201 response matches the run's request. Only a
+// validated grant id (`issued.grant_id`, consistent with any observed id) is
+// revoked automatically and read back. When issuance has an unknown outcome or
+// failed validation, nothing is revoked by fingerprint/inference and an empty
+// grant list does NOT mark the run verified (a delayed commit may still land):
+// recovery reports incomplete and asks for explicit manual reconciliation in
+// the owner UI. Only pre-issue failures or a terminal server refusal (503
+// `issuance_disabled` with no observed grant id) can complete with 0 grants.
+// On a failed run, the invite and grant files are removed (after grant
+// recovery, never instead of it); `--revoke` removes them too.
 //
 // DETERMINISTIC AND NEVER RETRIED
 // The manifest is created exclusively, so a run id bootstraps at most once.
@@ -242,25 +244,54 @@ async function listGrants(tf, token, contractId) {
   return r.data.grants
 }
 
+const MANUAL_RECONCILE = 'reconcile manually in the owner UI; nothing was revoked'
+
 /**
- * The run's grant when no issue response named it. Provable only if the run's
- * deal has ever held exactly one grant (live or revoked) and that one is what
- * the run asked for: owner_account, the default scopes, the exact requested
- * expiry (the server stores it to the millisecond), created no earlier than the
- * issue was sent. Returns { id } | { none: true } | { problem: fixed text };
- * anything short of proof is a problem, never a guess.
+ * Resolve the run's recorded grant id from its manifest, failing closed on any
+ * malformed id, disagreement between phases, or unvalidated observed id.
+ *
+ * Returns:
+ *   { status: 'trusted', id }        — validated `issued.grant_id`, consistent with any observed id
+ *   { status: 'none' }               — no grant id recorded in either phase
+ *   { status: 'untrusted', problem } — observed id only (never passed validateIssue)
+ *   { status: 'conflict', problem }  — malformed or conflicting ids across phases
  */
-export function provenRunGrant(grants, { contractId, expiresAt, sentAt }) {
-  if (grants.length === 0) return { none: true }
-  const manual = 'reconcile manually in the owner UI; nothing was revoked'
-  if (grants.length !== 1) return { problem: `${grants.length} grants on the run's deal and no recorded grant id: ${manual}` }
-  const [g] = grants
-  const want = Date.parse(expiresAt ?? '')
-  const proven = Number.isFinite(want) && typeof g.id === 'string' && UUID.test(g.id) && g.contract_id === contractId
-    && g.issuer_kind === 'owner_account' && Array.isArray(g.scopes) && g.scopes.length === DEFAULT_SCOPES.length
-    && DEFAULT_SCOPES.every(x => g.scopes.includes(x)) && Date.parse(g.expires_at ?? '') === want
-    && Date.parse(g.created_at ?? '') >= Date.parse(sentAt ?? '') - SKEW_MS
-  return proven ? { id: g.id } : { problem: `the one grant on the run's deal does not match the run's issue request: ${manual}` }
+export function resolveRecordedGrantId(manifest) {
+  const issuedPhase = manifest?.phases?.issued
+  const receivedPhase = manifest?.phases?.issue_received
+  const hasIssued = issuedPhase !== undefined && issuedPhase !== null
+  const issuedId = issuedPhase?.grant_id
+  const observedRaw = [receivedPhase?.observed_grant_id, receivedPhase?.grant_id]
+    .filter(v => v !== undefined && v !== null)
+
+  for (const raw of observedRaw) {
+    if (typeof raw !== 'string' || !UUID.test(raw)) {
+      return { status: 'conflict', problem: `malformed observed grant id in manifest: ${MANUAL_RECONCILE}` }
+    }
+  }
+  const uniqueObserved = [...new Set(observedRaw)]
+  if (uniqueObserved.length > 1) {
+    return { status: 'conflict', problem: `conflicting observed grant ids in manifest: ${MANUAL_RECONCILE}` }
+  }
+
+  if (hasIssued) {
+    if (typeof issuedId !== 'string' || !UUID.test(issuedId)) {
+      return { status: 'conflict', problem: `malformed issued grant id in manifest: ${MANUAL_RECONCILE}` }
+    }
+    if (uniqueObserved.length === 1 && uniqueObserved[0] !== issuedId) {
+      return { status: 'conflict', problem: `conflicting grant ids in manifest (issue_received vs issued): ${MANUAL_RECONCILE}` }
+    }
+    return { status: 'trusted', id: issuedId }
+  }
+
+  if (uniqueObserved.length === 1) {
+    return {
+      status: 'untrusted',
+      problem: `observed grant id ${uniqueObserved[0]} was never validated against the run's request: ${MANUAL_RECONCILE}`,
+    }
+  }
+
+  return { status: 'none' }
 }
 
 /**
@@ -284,19 +315,37 @@ async function revokeGrant(tf, token, contractId, id) {
 }
 
 /**
- * Recover the run's grant after its issue was sent. A known grant id: revoke
- * exactly that grant. None (the answer was lost, or its record could not be
- * written): revoke only a grant provenRunGrant proves is the run's. No other
- * grant is ever revoked. Never throws: { revoked, problems }; empty problems =
- * verified.
+ * Recover the run's grant after an issue request was sent.
+ * - Validated trusted grant id: revoke exactly that id and read it back.
+ * - Unvalidated/conflicting id: revoke nothing and return the recorded problem.
+ * - Unknown issuance (no trusted id, no terminal refusal): never revoke by
+ *   fingerprint/inference and never treat an empty grant list as verified;
+ *   read the list for non-destructive diagnostics only and require manual
+ *   reconciliation.
+ * Never throws: { revoked, problems }; empty problems = verified.
  */
-export async function recoverRunGrant(tf, token, { contractId, grantId = null, issue = null }) {
-  if (grantId) return revokeGrant(tf, token, contractId, grantId)
+export async function recoverRunGrant(tf, token, { contractId, grantId = null, idProblem = null }) {
+  if (idProblem) return { revoked: [], problems: [idProblem] }
+  if (grantId) {
+    if (typeof grantId !== 'string' || !UUID.test(grantId)) {
+      return { revoked: [], problems: [`invalid grant id for recovery: ${MANUAL_RECONCILE}`] }
+    }
+    return revokeGrant(tf, token, contractId, grantId)
+  }
   let grants
-  try { grants = await listGrants(tf, token, contractId) } catch (e) { return { revoked: [], problems: [safe(e)] } }
-  const p = provenRunGrant(grants, { contractId, expiresAt: issue?.expires_at, sentAt: issue?.at })
-  if (p.problem) return { revoked: [], problems: [p.problem] }
-  return p.none ? { revoked: [], problems: [] } : revokeGrant(tf, token, contractId, p.id)
+  try { grants = await listGrants(tf, token, contractId) } catch (e) {
+    return { revoked: [], problems: [`issuance outcome is unknown and grant list failed (${safe(e)}): ${MANUAL_RECONCILE}`] }
+  }
+  if (grants.length === 0) {
+    return {
+      revoked: [],
+      problems: [`issuance outcome is unknown and 0 grants are currently listed on the run's deal (a delayed commit may still land): ${MANUAL_RECONCILE}`],
+    }
+  }
+  return {
+    revoked: [],
+    problems: [`issuance outcome is unknown (${grants.length} grant(s) currently listed on the run's deal, no validated grant id): ${MANUAL_RECONCILE}`],
+  }
 }
 
 // ── The run ─────────────────────────────────────────────────────────────────
@@ -346,8 +395,9 @@ export async function runBootstrap({ run, dir, deps }) {
   say(`created deal ${contract.id}`)
 
   // What recovery needs is also held in memory, so a manifest that cannot be
-  // written cannot stop the run's own cleanup.
-  let issue = null, knownGrantId = null
+  // written cannot stop the run's own cleanup. `observedGrantId` is diagnostic
+  // only; `trustedGrantId` is set strictly after `validateIssue` succeeds.
+  let issue = null, observedGrantId = null, trustedGrantId = null, issueRefused = false
   try {
     writeExclusive(dir, 'invite.json', JSON.stringify({ run, invite_token: contract.invite_token }))
     const issuedAt = now()
@@ -361,16 +411,19 @@ export async function runBootstrap({ run, dir, deps }) {
       phase(dir, 'issue_unknown')
       throw new ClientError('issue: no answer')
     }
-    // Durable before anything else can fail: the id is what makes this grant recoverable.
-    knownGrantId = issuedGrantId(issued)
-    if (knownGrantId) phase(dir, 'issue_received', { grant_id: knownGrantId, status: issued?.status ?? null })
+    // Persist any observed UUID early for operator diagnostics only; do NOT
+    // treat it as trusted for automatic revocation until validateIssue passes.
+    observedGrantId = issuedGrantId(issued)
+    if (observedGrantId) phase(dir, 'issue_received', { observed_grant_id: observedGrantId, status: issued?.status ?? null })
     if (issued?.status === 503) {
       phase(dir, 'issue_refused', { status: 503, error: word(issued.reason) })
+      if (!observedGrantId) issueRefused = true
       throw new ClientError(`issue answered 503 ${word(issued.reason)}: issuance is off on this project; no fallback`)
     }
     const grant = validateIssue(issued, { contractId: contract.id, now: issuedAt })
-    writeExclusive(dir, 'grant', grant.token)
+    trustedGrantId = grant.grantId
     phase(dir, 'issued', { grant_id: grant.grantId, scopes: grant.scopes, expires_at: grant.expiresAt })
+    writeExclusive(dir, 'grant', grant.token)
     say(`issued grant ${grant.grantId} (${grant.scopes.join(', ')}; until ${grant.expiresAt})`)
 
     const listedRow = (await listGrants(tf, owner.token, contract.id)).find(g => g.id === grant.grantId)
@@ -388,9 +441,17 @@ export async function runBootstrap({ run, dir, deps }) {
   } catch (e) {
     const reason = safe(e)
     // Grant recovery first; secret removal never throws and runs after it.
-    const auto = issue
-      ? await recoverRunGrant(tf, owner.token, { contractId: contract.id, grantId: knownGrantId, issue })
-      : { revoked: [], problems: [] }
+    let auto
+    if (!issue || (issueRefused && !observedGrantId && !trustedGrantId)) {
+      auto = { revoked: [], problems: [] }
+    } else if (!trustedGrantId && observedGrantId) {
+      auto = await recoverRunGrant(tf, owner.token, {
+        contractId: contract.id,
+        idProblem: `observed grant id ${observedGrantId} was never validated against the run's request: ${MANUAL_RECONCILE}`,
+      })
+    } else {
+      auto = await recoverRunGrant(tf, owner.token, { contractId: contract.id, grantId: trustedGrantId })
+    }
     const left = removeSecrets(dir)
     if (left.length) auto.problems.push(`could not remove: ${left.join(', ')}`)
     try { phase(dir, 'failed', { reason, auto_revoked: auto.revoked, problems: auto.problems }) } catch { auto.problems.push('the manifest could not be updated') }
@@ -401,10 +462,12 @@ export async function runBootstrap({ run, dir, deps }) {
 }
 
 /**
- * Revoke a run from any phase: its recorded grant (or, with none recorded, only
- * a grant proven to be the run's), read back, and both secret files removed
- * whatever happens. Before an issue was sent no grant can exist, so nothing
- * remote is touched. Returns { revoked, problems }.
+ * Revoke a run from any phase: only a validated, non-conflicting recorded
+ * grant id is revoked automatically and read back. Before an issue was sent
+ * (or after a terminal 503 refusal with no observed grant id) nothing remote
+ * is touched. Any unresolved issuance, unvalidated observed id, or conflicting
+ * manifest id revokes nothing and reports a problem for manual reconciliation.
+ * Both secret files are removed whatever happens. Returns { revoked, problems }.
  */
 export async function runRevoke({ run, dir, deps }) {
   const { tf, say = () => {} } = deps
@@ -412,14 +475,25 @@ export async function runRevoke({ run, dir, deps }) {
   if (m.run !== run) throw new ClientError('the manifest in this dir is for another run')
   const contractId = m.phases?.created?.contract_id ?? null
   const issue = m.phases?.issue_sent ?? null
-  const grantId = [m.phases?.issued?.grant_id, m.phases?.issue_received?.grant_id]
-    .find(id => typeof id === 'string' && UUID.test(id)) ?? null
+  const issueRefused = Boolean(m.phases?.issue_refused)
+  const recorded = resolveRecordedGrantId(m)
   let result = { revoked: [], problems: [] }
   if (contractId && issue) {
-    say(FIXTURE_BANNER)
-    let owner = null
-    try { owner = await tf.ownerSession() } catch (e) { result.problems.push(`owner session: ${safe(e)}`) }
-    if (owner) result = await recoverRunGrant(tf, owner.token, { contractId, grantId, issue })
+    if (recorded.status === 'conflict' || recorded.status === 'untrusted') {
+      result = { revoked: [], problems: [recorded.problem] }
+    } else if (issueRefused && recorded.status === 'none') {
+      result = { revoked: [], problems: [] }
+    } else {
+      say(FIXTURE_BANNER)
+      let owner = null
+      try { owner = await tf.ownerSession() } catch (e) { result.problems.push(`owner session: ${safe(e)}`) }
+      if (owner) {
+        result = await recoverRunGrant(tf, owner.token, {
+          contractId,
+          grantId: recorded.status === 'trusted' ? recorded.id : null,
+        })
+      }
+    }
   }
   const left = removeSecrets(dir)
   if (left.length) result.problems.push(`could not remove: ${left.join(', ')}`)
