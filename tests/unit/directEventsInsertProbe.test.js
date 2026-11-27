@@ -36,10 +36,14 @@ describe('W2b direct POST /rest/v1/events probe', () => {
     })).toThrow('sb_publishable_')
   })
 
-  it('classifies 42501 and 401/403 as pass, and stops on 2xx, TF triggers, constraint codes, or inconclusive responses', () => {
-    expect(classifyEventsInsertRefusal(403, { code: '42501' })).toMatchObject({ outcome: 'db_refused', pass: true, stop: false })
-    expect(classifyEventsInsertRefusal(401, { message: 'Unauthorized' })).toMatchObject({ outcome: 'http_refused', pass: true, stop: false })
-    expect(classifyEventsInsertRefusal(403, { message: 'Forbidden' })).toMatchObject({ outcome: 'http_refused', pass: true, stop: false })
+  it('passes only on 401/403 with SQLSTATE 42501, and stops on code-less 401/403, 2xx, TF triggers, constraint codes, or inconclusive responses', () => {
+    expect(classifyEventsInsertRefusal(401, { code: '42501' })).toMatchObject({ outcome: 'db_refused', pass: true, stop: false, code: '42501' })
+    expect(classifyEventsInsertRefusal(403, { code: '42501' })).toMatchObject({ outcome: 'db_refused', pass: true, stop: false, code: '42501' })
+
+    // Code-less 401/403 (e.g. invalid/wrong-project apikey at gateway) and non-401/403 42501 must fail closed.
+    expect(classifyEventsInsertRefusal(401, { message: 'Invalid API key' })).toMatchObject({ outcome: 'inconclusive', pass: false, stop: true })
+    expect(classifyEventsInsertRefusal(403, { message: 'Forbidden' })).toMatchObject({ outcome: 'inconclusive', pass: false, stop: true })
+    expect(classifyEventsInsertRefusal(500, { code: '42501' })).toMatchObject({ outcome: 'inconclusive', pass: false, stop: true })
 
     // Trigger or constraint refusal proves privileges did NOT refuse -> FAIL + STOP.
     for (const code of ['TF001', 'TF011', '23514', '23502', '23503', '23505']) {

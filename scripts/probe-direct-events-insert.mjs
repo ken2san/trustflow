@@ -42,11 +42,11 @@ export function parseProbeArgs(args, env = process.env) {
 /**
  * Classify one `POST /rest/v1/events` refusal probe response.
  *
- *   db_refused        42501 on non-2xx: DB privilege refusal           PASS
- *   http_refused      401/403 without trigger/constraint code          PASS (HTTP boundary; DB ACL not shown)
- *   privilege_bypass  TF### trigger or 235xx constraint reached        FAIL + STOP (privileges did not refuse)
- *   reached_2xx       2xx response                                     FAIL + STOP (write may have landed)
- *   inconclusive      any other non-2xx or transport error             FAIL + STOP
+ *   db_refused        401/403 with SQLSTATE 42501: DB privilege refusal PASS
+ *   privilege_bypass  TF### trigger or 235xx constraint reached         FAIL + STOP (privileges did not refuse)
+ *   reached_2xx       2xx response                                      FAIL + STOP (write may have landed)
+ *   inconclusive      code-less 401/403 (e.g. gateway invalid apikey),
+ *                     any other status/code, or transport error         FAIL + STOP
  */
 export function classifyEventsInsertRefusal(status, body) {
   const obj = body !== null && typeof body === 'object' && !Array.isArray(body) ? body : {}
@@ -59,8 +59,8 @@ export function classifyEventsInsertRefusal(status, body) {
   if (status >= 200 && status < 300) {
     return { outcome: 'reached_2xx', pass: false, stop: true, code, detail: `unexpected HTTP ${status}` }
   }
-  if (code === '42501') {
-    return { outcome: 'db_refused', pass: true, stop: false, code, detail: 'database privilege refusal (42501)' }
+  if ((status === 401 || status === 403) && code === '42501') {
+    return { outcome: 'db_refused', pass: true, stop: false, code, detail: `database privilege refusal (HTTP ${status}, 42501)` }
   }
   if (/^TF\d{3}$/.test(code) || BYPASS_SQLSTATES.has(code)) {
     return {
@@ -71,21 +71,12 @@ export function classifyEventsInsertRefusal(status, body) {
       detail: `privileges did not refuse; reached trigger/constraint (${code})`,
     }
   }
-  if (status === 401 || status === 403) {
-    return {
-      outcome: 'http_refused',
-      pass: true,
-      stop: false,
-      code,
-      detail: `refused at HTTP/gateway boundary (HTTP ${status}); DB ACL not separately shown`,
-    }
-  }
   return {
     outcome: 'inconclusive',
     pass: false,
     stop: true,
     code,
-    detail: `HTTP ${status}${code ? ` (${code})` : ''}`,
+    detail: `HTTP ${status}${code ? ` (${code})` : ' (no 42501 SQLSTATE; ambiguous gateway/HTTP error)'}`,
   }
 }
 
@@ -139,7 +130,7 @@ async function main() {
   installPinnedFetch()
   const { status, classification } = await runDirectInsertProbe({ dealId, pub })
   console.log(`W2b direct POST /rest/v1/events probe on ${dealId}: ${classification.outcome} (HTTP ${status ?? 'none'}) — ${classification.detail}`)
-  console.log(`Zero-row readback required: verify owner-session event count on ${dealId} is unchanged (2) via \`node scripts/verify-chain.mjs ${dealId}\`.`)
+  console.log(`Zero-row readback required: compare deal ${dealId} event count (e.g. \`node scripts/verify-chain.mjs ${dealId}\`) and total \`public.events\` count before and after the probe; both must be unchanged.`)
   if (!classification.pass || classification.stop) process.exitCode = 1
 }
 
