@@ -415,10 +415,10 @@ export async function runBootstrap({ run, dir, deps }) {
     // treat it as trusted for automatic revocation until validateIssue passes.
     observedGrantId = issuedGrantId(issued)
     if (observedGrantId) phase(dir, 'issue_received', { observed_grant_id: observedGrantId, status: issued?.status ?? null })
-    if (issued?.status === 503) {
-      phase(dir, 'issue_refused', { status: 503, error: word(issued.reason) })
+    if (issued?.status === 503 && issued.reason === 'issuance_disabled') {
+      phase(dir, 'issue_refused', { status: 503, error: 'issuance_disabled' })
       if (!observedGrantId) issueRefused = true
-      throw new ClientError(`issue answered 503 ${word(issued.reason)}: issuance is off on this project; no fallback`)
+      throw new ClientError('issue answered 503 issuance_disabled: issuance is off on this project; no fallback')
     }
     const grant = validateIssue(issued, { contractId: contract.id, now: issuedAt })
     trustedGrantId = grant.grantId
@@ -475,7 +475,8 @@ export async function runRevoke({ run, dir, deps }) {
   if (m.run !== run) throw new ClientError('the manifest in this dir is for another run')
   const contractId = m.phases?.created?.contract_id ?? null
   const issue = m.phases?.issue_sent ?? null
-  const issueRefused = Boolean(m.phases?.issue_refused)
+  const issueRefused = m.phases?.issue_refused?.status === 503
+    && m.phases?.issue_refused?.error === 'issuance_disabled'
   const recorded = resolveRecordedGrantId(m)
   let result = { revoked: [], problems: [] }
   if (contractId && issue) {

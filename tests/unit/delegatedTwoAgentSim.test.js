@@ -149,6 +149,27 @@ describe('delegated two-agent simulator', () => {
       })).rejects.toThrow('bootstrap failed; revocation unverified')
       expect(tf.invoke).toHaveBeenCalledTimes(1)
       expect(tf.invoke.mock.calls[0][1].body.action).toBe('list')
+
+      // Gateway 503 (http_503) persisted as issue_refused must also remain unverified.
+      writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+        run: 'row8-ambig',
+        phases: {
+          created: { contract_id: contractId },
+          issue_sent: { at: new Date().toISOString(), expires_at: new Date(Date.now() + 3600_000).toISOString() },
+          issue_refused: { status: 503, error: 'http_503' },
+        },
+      }), { mode: 0o600 })
+      await expect(runFixture({
+        bootstrap: vi.fn().mockRejectedValue(new Error('operator step failed')),
+        accept: vi.fn(),
+        owner: vi.fn(),
+        read: vi.fn(),
+        stopGuest: vi.fn(),
+        async revoke() {
+          const r = await runRevoke({ run: 'row8-ambig', dir, deps: { tf } })
+          if (r.problems.length) throw new Error('operator step failed')
+        },
+      })).rejects.toThrow('bootstrap failed; revocation unverified')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

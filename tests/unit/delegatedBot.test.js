@@ -66,6 +66,7 @@ function stubTf({ issue = 'ok', revokeFails = false, listFails = false } = {}) {
         created_at: new Date().toISOString(), expires_at: body.expires_at, revoked_at: null }
       grants.push(row)
       if (issue === 'throw') throw new TypeError('network failure')
+      if (issue === 'gateway_503') return { status: 503, data: null, reason: 'http_503' }
       const g = { status: 'issued', ...row, scopes: issue === 'broader' ? [...body.scopes, 'payment.reported'] : row.scopes }
       return { status: 201, data: { grant: g, secret: SECRET } }
     },
@@ -333,13 +334,44 @@ describe('bootstrap: the run, against a stub owner client', () => {
     expect(manifest(d).phases.revoked).toMatchObject({ contract_id: CID, revoked: [GID], problems: [] })
   })
 
-  it('issuance off (503): stops with no fallback, no grant, and the invite removed', async () => {
+  it('issuance off (503 issuance_disabled): stops with no fallback, no grant, and --revoke stays clean with no remote call', async () => {
     const tf = stubTf({ issue: 'disabled' })
     const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
     expect(e?.message).toBe('issue answered 503 issuance_disabled: issuance is off on this project; no fallback. Cleaned up: 0 grant(s) revoked and read back, secrets removed')
     expect(tf.calls.some(c => /sql|rpc\/issue/i.test(c))).toBe(false)
     expect(manifest(d).phases.issue_refused).toMatchObject({ status: 503, error: 'issuance_disabled' })
     expect(files()).toEqual([])
+    const r = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r).toEqual({ revoked: [], problems: [] })
+    expect(tf.calls.filter(c => c.endsWith(':revoke') || c.endsWith(':list'))).toEqual([])
+  })
+
+  it('gateway/platform 503 (http_503) after grant creation stays unresolved in bootstrap and --revoke, including persisted manifests', async () => {
+    const tf = stubTf({ issue: 'gateway_503' })
+    const e = await thrownAsync(runBootstrap({ run: 'bot-1', dir: d, deps: deps(tf) }))
+    expect(e?.message).toBe('issue answered 503 unexpected. Cleanup incomplete (issuance outcome is unknown (1 grant(s) currently listed on the run\'s deal, no validated grant id): reconcile manually in the owner UI; nothing was revoked): run --revoke bot-1')
+    expect(manifest(d).phases.issue_refused).toBeUndefined()
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(tf.live()).toHaveLength(1)
+    expect(files()).toEqual([])
+
+    // --revoke also stays unresolved and makes no revoke call.
+    const r1 = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+    expect(r1.revoked).toEqual([])
+    expect(r1.problems[0]).toMatch(/issuance outcome is unknown \(1 grant\(s\) currently listed/)
+    expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    expect(tf.live()).toHaveLength(1)
+
+    // Persisted manifest with non-issuance_disabled or malformed issue_refused must also fail closed.
+    for (const badRefusal of [{ status: 503, error: 'http_503' }, { status: 503, error: 'unexpected' }, { status: 500, error: 'issuance_disabled' }, {}]) {
+      const m = manifest(d)
+      m.phases.issue_refused = badRefusal
+      writeFileSync(path.join(d, 'manifest.json'), JSON.stringify(m, null, 2), { mode: 0o600 })
+      const r2 = await runRevoke({ run: 'bot-1', dir: d, deps: deps(tf) })
+      expect(r2.revoked, JSON.stringify(badRefusal)).toEqual([])
+      expect(r2.problems.length, JSON.stringify(badRefusal)).toBeGreaterThan(0)
+      expect(tf.calls.filter(c => c.endsWith(':revoke'))).toEqual([])
+    }
   })
 
   it('--revoke reports a list failure as a problem, still removes both secrets, and refuses another run\'s manifest', async () => {
