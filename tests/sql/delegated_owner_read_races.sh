@@ -5,7 +5,7 @@
 #
 # Fixture: the same fail-closed schema-only restore as
 # tests/sql/events_v5_authority.sh (owners and ACLs kept, only the 7 reviewed
-# platform event triggers left out), then the migrations up to the row 5 read.
+# platform event triggers left out), then the row 5 read and migration C.
 # Every wait is observed (pg_blocking_pids), never slept for.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -41,13 +41,15 @@ awk '!($4 == "EVENT" && $5 == "TRIGGER")' "$work/toc.full" > "$work/toc.list"
 docker cp "$work/toc.list" "$container:$dump.list"
 echo 'fixture: restoring'
 docker exec "$container" pg_restore -U supabase_admin -d "$db" --exit-on-error -L "$dump.list" "$dump"
-echo 'fixture: applying migrations to head, row 4 and the row 5 read'
+echo 'fixture: applying migrations through the row 5 read and migration C'
 for m in 20261118214020_entry_agent_credentials 20261120090000_create_entry_contract \
          20261120180000_close_contract_client_insert 20261122130000_events_v5_authority_columns \
          20261124120000_entry_agent_resolver 20261124130000_delegated_owner_append \
-         20261124231214_delegated_owner_read; do
+         20261124231214_delegated_owner_read 20261125214511_drop_v5_check; do
   psql_pg -1 -f - < "supabase/migrations/$m.sql" > /dev/null
 done
+[[ "$(psql_pg <<< "select (not exists (select from pg_constraint where conrelid = 'public.events'::regclass and conname = 'events_v5_writes_disabled')) and ((select open from private.v5_write_gate where id) is false)")" == t ]] || { echo 'FAIL post-C catalog or closed gate' >&2; exit 1; }
+echo "PASS $db: 20261125214511_drop_v5_check applied; CHECK absent; gate closed"
 
 owner=11111111-1111-4111-8111-111111111111
 c1=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1

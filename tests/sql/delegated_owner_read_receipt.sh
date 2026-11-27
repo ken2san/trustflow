@@ -6,7 +6,7 @@
 #
 # Fixture: the same fail-closed schema-only restore as
 # tests/sql/events_v5_authority.sh (owners and ACLs kept, only the 7 reviewed
-# platform event triggers left out), then the migrations up to the row 5 read.
+# platform event triggers left out), then the row 5 read and migration C.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 container="${TF_FIXTURE_CONTAINER:-trustflow-localdb}"
@@ -43,14 +43,15 @@ awk '!($4 == "EVENT" && $5 == "TRIGGER")' "$work/toc.full" > "$work/toc.list"
 docker cp "$work/toc.list" "$container:$dump.list"
 echo 'fixture: restoring'
 docker exec "$container" pg_restore -U supabase_admin -d "$db" --exit-on-error -L "$dump.list" "$dump"
-echo 'fixture: applying migrations to head, row 4 and the row 5 read'
+echo 'fixture: applying migrations through the row 5 read and migration C'
 for m in 20261118214020_entry_agent_credentials 20261120090000_create_entry_contract \
          20261120180000_close_contract_client_insert 20261122130000_events_v5_authority_columns \
          20261124120000_entry_agent_resolver 20261124130000_delegated_owner_append \
-         20261124231214_delegated_owner_read; do
+         20261124231214_delegated_owner_read 20261125214511_drop_v5_check; do
   psql_pg -1 -f - < "supabase/migrations/$m.sql" > /dev/null
 done
-echo 'PASS the row 5 migration applies with its self-test (TF941-TF942)'
+[[ "$(q "select (not exists (select from pg_constraint where conrelid = 'public.events'::regclass and conname = 'events_v5_writes_disabled')) and ((select open from private.v5_write_gate where id) is false)")" == t ]] || { echo 'FAIL post-C catalog or closed gate' >&2; exit 1; }
+echo "PASS $db: 20261125214511_drop_v5_check applied; CHECK absent; gate closed"
 
 owner=11111111-1111-4111-8111-111111111111
 cD=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab1   # draft: owner rows, then a writer-built v5 row
@@ -80,7 +81,6 @@ insert into public.entry_agent_credentials (id, contract_id, issuer_id, issuer_k
   ('cccccccc-0000-4000-8000-0000000000f1', '$cS', '$owner', 'owner_account', $(h 6), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
   ('cccccccc-0000-4000-8000-0000000000b1', '$cV', '$owner', 'owner_account', $(h 7), array['read'], clock_timestamp(), clock_timestamp() + interval '1 day', null),
   ('cccccccc-0000-4000-8000-0000000000b2', '$cV', '$owner', 'owner_account', $(h 8), array['payment.acknowledged'], clock_timestamp(), clock_timestamp() + interval '1 day', null);
-alter table public.events drop constraint events_v5_writes_disabled;
 SQL
 
 fx() { deno run --no-lock --quiet tests/sql/owner_read_receipt_fixture.ts "$@"; }

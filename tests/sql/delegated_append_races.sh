@@ -6,8 +6,7 @@
 #
 # Fixture: the same fail-closed schema-only restore as
 # tests/sql/events_v5_authority.sh (owners and ACLs kept, only the 7 reviewed
-# platform event triggers left out), then the migrations up to today's head and
-# the resolver migration. No event is written: the resolver only reads.
+# platform event triggers left out), then the resolver, writer and migration C.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 container="${TF_FIXTURE_CONTAINER:-trustflow-localdb}"
@@ -42,19 +41,20 @@ awk '!($4 == "EVENT" && $5 == "TRIGGER")' "$work/toc.full" > "$work/toc.list"
 docker cp "$work/toc.list" "$container:$dump.list"
 echo 'fixture: restoring'
 docker exec "$container" pg_restore -U supabase_admin -d "$db" --exit-on-error -L "$dump.list" "$dump"
-echo 'fixture: applying migrations to head, the resolver and the writer'
+echo 'fixture: applying migrations through the writer and migration C'
 for m in 20261118214020_entry_agent_credentials 20261120090000_create_entry_contract \
          20261120180000_close_contract_client_insert 20261122130000_events_v5_authority_columns \
-         20261124120000_entry_agent_resolver 20261124130000_delegated_owner_append; do
+         20261124120000_entry_agent_resolver 20261124130000_delegated_owner_append \
+         20261125214511_drop_v5_check; do
   psql_pg -1 -f - < "supabase/migrations/$m.sql" > /dev/null
 done
-echo 'PASS both migrations apply with their self-tests (TF921-TF923, TF931-TF934)'
+[[ "$(psql_pg <<< "select (not exists (select from pg_constraint where conrelid = 'public.events'::regclass and conname = 'events_v5_writes_disabled')) and ((select open from private.v5_write_gate where id) is false)")" == t ]] || { echo 'FAIL post-C catalog or closed gate' >&2; exit 1; }
+echo "PASS $db: 20261125214511_drop_v5_check applied; CHECK absent; gate closed"
 
 owner=11111111-1111-4111-8111-111111111111
 c1=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1   # performed_by creator: the owner performs
 c5=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5   # a guest deal, for the guest-writer race
 psql_pg > /dev/null <<SQL
-alter table public.events drop constraint events_v5_writes_disabled;
 update private.v5_write_gate set open = true;
 insert into auth.users (id, email, is_anonymous, email_confirmed_at) values
   ('$owner', 'races-owner@example.test', false, clock_timestamp());
